@@ -374,6 +374,14 @@ function processEmbed(app: any, span: HTMLElement, sourcePath: string, component
       const view = content.createDiv("markdown-preview-view markdown-rendered");
       renderMarkdownInto(app, part, view, file.path, component, { depth: depth + 1, displayMode: true });
     });
+  } else if (app.embedRegistry?.embedByExtension?.[file.extension]) {
+    // A registered embed (storyboards…) draws itself.
+    span.addClass("file-embed");
+    const c = app.embedRegistry.embedByExtension[file.extension]({ app, containerEl: span, sourcePath, linktext: src }, file, subpath);
+    if (c) {
+      component.addChild?.(c);
+      c.loadFile?.();
+    }
   } else {
     span.addClass("file-embed");
     const t = span.createDiv("file-embed-title");

@@ -7,6 +7,7 @@ mod pictogrep;
 mod pinterest;
 mod process;
 mod shared;
+mod storyboard;
 mod update;
 
 use ateliet_core::{metadata, render, search, vault};
@@ -116,6 +117,15 @@ fn forget_vault(path: String) {
 #[tauri::command]
 async fn pick_folder(app: tauri::AppHandle) -> Option<String> {
     app.dialog().file().blocking_pick_folder().and_then(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Files chosen in the system dialog (absolute paths), filtered by extension.
+#[tauri::command]
+async fn pick_files(app: tauri::AppHandle, name: String, extensions: Vec<String>, multiple: bool) -> Vec<String> {
+    let exts: Vec<&str> = extensions.iter().map(|s| s.as_str()).collect();
+    let dialog = app.dialog().file().add_filter(&name, &exts);
+    let paths = if multiple { dialog.blocking_pick_files().unwrap_or_default() } else { dialog.blocking_pick_file().into_iter().collect() };
+    paths.into_iter().filter_map(|p| p.into_path().ok()).map(|p| p.to_string_lossy().into_owned()).collect()
 }
 
 #[tauri::command]
@@ -306,7 +316,19 @@ async fn fs_write_bytes(request: tauri::ipc::Request<'_>) -> Res<Option<vault::S
     };
     let p = PathBuf::from(&path);
     ensure_parent(&p);
-    fs::write(&p, data).map_err(e2s)?;
+    if request.headers().contains_key("x-atomic") {
+        // Written beside the target and renamed over it: a crash mid-write
+        // leaves the previous version intact (large files like storyboards).
+        let name = p.file_name().ok_or("bad path")?.to_string_lossy().into_owned();
+        let tmp = p.with_file_name(format!(".{name}.{}.tmp", std::process::id()));
+        fs::write(&tmp, data).map_err(e2s)?;
+        if let Err(e) = fs::rename(&tmp, &p) {
+            let _ = fs::remove_file(&tmp);
+            return Err(e2s(e));
+        }
+    } else {
+        fs::write(&p, data).map_err(e2s)?;
+    }
     Ok(vault::stat(&p))
 }
 
@@ -720,6 +742,7 @@ fn main() {
             known_vaults,
             forget_vault,
             pick_folder,
+            pick_files,
             create_vault,
             open_vault,
             open_launcher,
@@ -772,6 +795,9 @@ fn main() {
             shared::shared_import_bytes,
             shared::plugin_list,
             shared::plugin_call,
+            storyboard::clip_import,
+            storyboard::pictogrep_boards,
+            storyboard::pictogrep_board_save,
             shared::pinterest_start,
             shared::pinterest_status,
             shared::pinterest_cancel,

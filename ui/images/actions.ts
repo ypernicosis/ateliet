@@ -156,6 +156,8 @@ export function imageMenu(host: ImagesHost, items: ImageItem[], extra?: (menu: M
       });
     }
   }
+  // Other parts of Ateliet add their own actions (the storyboard: "Add to references").
+  for (const hook of (app.imageMenuHooks || []) as ((m: Menu, items: ImageItem[]) => void)[]) hook(menu, items);
   menu.addSeparator();
   if (one) {
     menu.addItem((i) => i.setTitle("Find similar pictures").setIcon("sparkles").setDisabled(!one.indexed).onClick(() => host.openLibrary({ similarTo: one.key, similarName: one.name, search: "" })));

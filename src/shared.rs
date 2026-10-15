@@ -60,7 +60,7 @@ fn media_sig(path: &str) -> String {
     h.finalize()[..16].iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn shared_of(g: &Gallery) -> Res<Home> {
+pub(crate) fn shared_of(g: &Gallery) -> Res<Home> {
     g.lib.lock().unwrap().shared.clone().ok_or_else(|| "no shared picture library is in use (Settings → Images)".to_string())
 }
 

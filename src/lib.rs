@@ -7,6 +7,7 @@
 //! - `search`   — full text search over the vault
 //! - `images`   — the image library: scan, index, vector and name search
 //! - `clip`     — CLIP tokenizer, preprocessing and ONNX inference
+//! - `clipstudio` — Clip Studio Paint `.clip` files: layers as pictures
 
 pub mod metadata;
 pub mod render;
@@ -16,3 +17,4 @@ pub mod text;
 pub mod vault;
 pub mod clip;
 pub mod images;
+pub mod clipstudio;
