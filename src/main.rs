@@ -3,7 +3,10 @@
 //! Ateliet desktop shell: Tauri glue around `ateliet_core`.
 
 mod gallery;
+mod pictogrep;
+mod pinterest;
 mod process;
+mod shared;
 mod update;
 
 use ateliet_core::{metadata, render, search, vault};
@@ -704,8 +707,14 @@ fn main() {
         .manage(AppState::default())
         .manage(process::Procs::default())
         .manage(gallery::Galleries::default())
+        .manage(std::sync::Arc::new(pinterest::Downloads::default()))
         .register_asynchronous_uri_scheme_protocol("ateliet", |_ctx, req, responder| {
             std::thread::spawn(move || responder.respond(serve(req)));
+        })
+        // Pictogrep plugins: their own origin, so a plugin can reach nothing
+        // but its files, the SDK and the pictures handed to it.
+        .register_asynchronous_uri_scheme_protocol("pgplugin", |_ctx, req, responder| {
+            std::thread::spawn(move || responder.respond(shared::serve_plugin(req)));
         })
         .invoke_handler(tauri::generate_handler![
             known_vaults,
@@ -758,6 +767,17 @@ fn main() {
             gallery::images_reindex,
             gallery::images_query,
             gallery::images_folders,
+            shared::shared_info,
+            shared::shared_collection,
+            shared::shared_import_bytes,
+            shared::plugin_list,
+            shared::plugin_call,
+            shared::pinterest_start,
+            shared::pinterest_status,
+            shared::pinterest_cancel,
+            shared::pinterest_followed,
+            shared::pinterest_forget,
+            shared::pinterest_check,
         ])
         .setup(|app| {
             // `ateliet <vault-path>` opens that vault; otherwise reopen the last one.
@@ -768,6 +788,7 @@ fn main() {
                 remember_vault(t);
             }
             open_window(app.handle(), target.as_deref()).map_err(Box::<dyn std::error::Error>::from)?;
+            shared::start_sync_loop(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

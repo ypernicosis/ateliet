@@ -22,6 +22,9 @@
 │   clip.rs      CLIP: tokenizer BPE, pré-processamento, inferência ONNX (ort)                   │
 │ src/process.rs child_process para plugins (spawn/exec, stdout em eventos)                      │
 │ src/gallery.rs indexador em segundo plano por janela, download do modelo, comandos images_*    │
+│ src/pictogrep.rs pasta do Pictogrep: estado, coleções (symlinks), importação, vetores, plugins │
+│ src/pinterest.rs importação do Pinterest: gallery-dl ou leitor nativo, quadros seguidos         │
+│ src/shared.rs  comandos da biblioteca compartilhada, protocolo pgplugin://, mediador de plugins │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -67,6 +70,14 @@ A ordem de tentativa é a mesma do Obsidian:
 - **Miniaturas**: `ateliet://…/__thumb?path=…&w=…`, com cache em disco cujo nome inclui mtime e tamanho (mudou, invalida).
 - **Modos**: `App.layoutFile` aponta para o layout do modo atual. A troca salva as notas abertas e o layout do modo que sai, depois carrega o do outro.
 - **Modelo**: `Xenova/clip-vit-base-patch32` (q8) numa revisão fixa, baixado para `<dados do app>/ateliet/models/`. `ATELIET_CLIP_DIR` aponta para outra pasta com `tokenizer.json`, `text_model.onnx` e `vision_model.onnx`. Os testes de `clip.rs` rodam contra arquivos reais quando `ATELIET_CLIP_TEST_DIR` está definido.
+
+## Biblioteca compartilhada (`src/pictogrep.rs`, `src/shared.rs`, `src/pinterest.rs`)
+
+- **Formato**: o mesmo do Pictogrep 0.11. As imagens importadas ficam em `library/` (nome "seguro" + sufixo numérico, como em `safeImageName`/`uniqueFile`). As coleções são diretórios em `collections/` com um symlink por imagem (ou `images.json` onde não há symlinks). Os nomes seguem `collectionName`, com os acentos convertidos antes. O id de imagem dado aos plugins é o SHA-256 do caminho absoluto limpo, igual ao do Pictogrep, para que o armazenamento dos plugins sirva aos dois.
+- **Concorrência**: o Ateliet testa a trava `flock` do Pictogrep (`<cache>/pictogrep/locks/<sha256(home)[:16]>.lock`). Com o Pictogrep aberto, não escreve `library-state.json` e chama `POST /api/app/index {"mode":"incremental"}` na porta 8765. Com ele fechado, atualiza o arquivo de forma atômica.
+- **Vetores**: registros `PGE1`/`PGE2` de `embeddings-v1.bin` (CRC conferido) são usados quando o caminho e o mtime batem, ou quando o digest do conteúdo é o mesmo. O Ateliet só lê esse arquivo.
+- **Plugins**: validados como em `loadPlugins` (id/entry/version, `0.0.0` ignorado, entry sem `..`, permissões fora da lista descartadas). São servidos em `pgplugin://localhost/plugin/<id>/…` com a CSP do Pictogrep. O SDK fica em `/assets/plugin-sdk.js` (`src/plugin-sdk.js`). As mídias saem em `/media?p=&s=`, assinadas com uma chave gerada a cada execução. As chamadas passam por `plugin_call`, que confere a permissão no Rust. `ui.openExternal` (só https) é feito pela página que hospeda o plugin.
+- **Pinterest**: `gallery-dl` com os argumentos do Pictogrep (grupo de processos próprio, para o cancelamento matar tudo) ou o leitor nativo (`BoardResource`/`BoardFeedResource`/`PinResource` com `X-Pinterest-PWS-Handler`). O histórico de download fica em `data/web-archives/<sha256(url)[:16]>.sqlite3` (`.native` no leitor nativo), compartilhado com o Pictogrep. A importação calcula digests para pular duplicatas, liga as imagens à coleção e avisa a biblioteca.
 
 ## Depuração
 

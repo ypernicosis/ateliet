@@ -26,12 +26,33 @@ pub fn is_image(path: &str) -> bool {
     EXTENSIONS.contains(&ext.as_str())
 }
 
+/// Where a picture comes from: the vault, a folder the user added, or the
+/// shared picture library (the Pictogrep data folder).
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Origin {
+    #[default]
+    Vault,
+    External,
+    Shared,
+}
+
 /// A folder the library reads pictures from.
 #[derive(Clone, Debug)]
 pub struct Source {
     pub root: PathBuf,
     /// Outside the vault: keys are absolute paths.
     pub external: bool,
+    pub origin: Origin,
+}
+
+impl Source {
+    pub fn vault(root: PathBuf) -> Self {
+        Source { root, external: false, origin: Origin::Vault }
+    }
+    pub fn outside(root: PathBuf, origin: Origin) -> Self {
+        Source { root, external: true, origin }
+    }
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -48,6 +69,7 @@ pub struct ImageEntry {
     pub width: u32,
     pub height: u32,
     pub external: bool,
+    pub origin: Origin,
 }
 
 // ── scanning ──────────────────────────────────────────────────────────────
@@ -60,9 +82,10 @@ pub struct Found {
     pub mtime: i64,
     pub size: u64,
     pub external: bool,
+    pub origin: Origin,
 }
 
-fn mtime_ms(m: &fs::Metadata) -> i64 {
+pub fn mtime_ms(m: &fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
@@ -99,7 +122,7 @@ pub fn describe(source: &Source, abs: &Path) -> Option<Found> {
     } else {
         key.rsplit_once('/').map(|(f, _)| f.to_string()).unwrap_or_default()
     };
-    Some(Found { key, abs: abs.to_path_buf(), folder, mtime: mtime_ms(&meta), size: meta.len(), external: source.external })
+    Some(Found { key, abs: abs.to_path_buf(), folder, mtime: mtime_ms(&meta), size: meta.len(), external: source.external, origin: source.origin })
 }
 
 /// Every picture under the sources. Dot-folders (`.obsidian`, `.trash`,
@@ -332,6 +355,7 @@ impl Index {
                     width: r.width,
                     height: r.height,
                     external: f.external,
+                    origin: f.origin,
                 }
             })
             .collect()
@@ -462,7 +486,7 @@ mod tests {
     use super::*;
 
     fn entry(key: &str) -> ImageEntry {
-        ImageEntry { key: key.into(), abs: format!("/v/{key}"), name: key.into(), folder: String::new(), mtime: 1, size: 1, width: 1, height: 1, external: false }
+        ImageEntry { key: key.into(), abs: format!("/v/{key}"), name: key.into(), folder: String::new(), mtime: 1, size: 1, width: 1, height: 1, external: false, origin: Origin::Vault }
     }
 
     #[test]
@@ -538,7 +562,7 @@ mod tests {
         img.save(dir.join("Anexos/a.png")).unwrap();
         img.save(dir.join(".obsidian/hidden.png")).unwrap();
         fs::write(dir.join("note.md"), "x").unwrap();
-        let found = scan(&[Source { root: dir.clone(), external: false }]);
+        let found = scan(&[Source::vault(dir.clone())]);
         assert_eq!(found.iter().map(|f| f.key.as_str()).collect::<Vec<_>>(), vec!["Anexos/a.png"]);
         let mut idx = Index::new("m", 2);
         let entries = idx.update_from_scan(&found);

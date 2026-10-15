@@ -13,6 +13,8 @@ import { ImagesHost } from "./actions.ts";
 import { COLLECTIONS_VIEW, ImageCollectionsView } from "./collections.ts";
 import { ImageLibraryView, LIBRARY_VIEW } from "./library.ts";
 import { ImageSearchView, InsertImageModal, PANEL_VIEW } from "./panel.ts";
+import { PLUGIN_VIEW, SharedPluginView } from "./plugins.ts";
+import { PinterestModal, describeJob, renderFollowed } from "./pinterest.ts";
 import { MarkdownView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Notice, Setting } from "../obsidian/ui.ts";
@@ -53,6 +55,7 @@ export class ImagesPlugin implements ImagesHost {
       r.registerView(LIBRARY_VIEW, (leaf: any) => new ImageLibraryView(leaf, this));
       r.registerView(COLLECTIONS_VIEW, (leaf: any) => new ImageCollectionsView(leaf, this));
       r.registerView(PANEL_VIEW, (leaf: any) => new ImageSearchView(leaf, this));
+      r.registerView(PLUGIN_VIEW, (leaf: any) => new SharedPluginView(leaf));
       this.viewsRegistered = true;
     }
     this.registerCommands();
@@ -63,6 +66,12 @@ export class ImagesPlugin implements ImagesHost {
 
     this.unlisten.push(await listen("images-progress", (s: LibraryStatus) => this.onStatus(s)));
     this.unlisten.push(await listen("images-changed", () => app.workspace.trigger("images:changed")));
+    this.unlisten.push(
+      await listen("pinterest-progress", (job: any) => {
+        app.workspace.trigger("pinterest:progress", job);
+        this.onDownload(job);
+      }),
+    );
     this.unlisten.push(
       await listen("images-model", (m: any) => {
         if (this.status) this.onStatus({ ...this.status, model: m });
@@ -81,7 +90,7 @@ export class ImagesPlugin implements ImagesHost {
     app.workspace.onLayoutReady(() => this.afterLayout());
 
     try {
-      const st = await api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto);
+      const st = await api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto, this.settings.shared);
       this.onStatus(st);
     } catch (e) {
       console.error("images", e);
@@ -122,12 +131,24 @@ export class ImagesPlugin implements ImagesHost {
     }, 300);
   }
 
+  private downloadText = "";
+
+  /** Pinterest downloads in the status bar, and a notice when one ends. */
+  private onDownload(job: any) {
+    this.downloadText = job.state === "running" ? describeJob(job) : "";
+    if ((job.state === "done" || job.state === "error" || job.state === "cancelled") && !job.automatic) new Notice(describeJob(job));
+    if (this.status) this.onStatus(this.status);
+  }
+
   private onStatus(s: LibraryStatus) {
     this.status = s;
     this.app.workspace.trigger("images:status", s);
     const el = this.statusEl;
     if (!el) return;
-    if (s.model.downloading) {
+    if (this.downloadText) {
+      el.setText(this.downloadText);
+      el.show();
+    } else if (s.model.downloading) {
       const pct = s.model.total ? Math.round((s.model.received / s.model.total) * 100) : 0;
       el.setText(`Downloading image model ${pct}%`);
       el.show();
@@ -147,8 +168,8 @@ export class ImagesPlugin implements ImagesHost {
     const before = this.settings;
     this.settings = { ...this.settings, ...patch };
     await this.saveSettings();
-    if (JSON.stringify(before.external) !== JSON.stringify(this.settings.external) || before.auto !== this.settings.auto) {
-      await api.configure(this.settings.external, this.settings.auto).catch(() => {});
+    if (JSON.stringify(before.external) !== JSON.stringify(this.settings.external) || before.auto !== this.settings.auto || before.shared !== this.settings.shared) {
+      await api.configure(this.settings.external, this.settings.auto, this.settings.shared).catch(() => {});
     }
     this.app.workspace.trigger("images:settings");
     if (patch.tile || patch.showNames !== undefined) this.app.workspace.getLeavesOfType(LIBRARY_VIEW).forEach((l: any) => l.view.reload?.());
@@ -269,7 +290,7 @@ export class ImagesPlugin implements ImagesHost {
     const ws = this.app.workspace;
     let leaf = newLeaf ? null : ws.getLeavesOfType(LIBRARY_VIEW).find((l: any) => l.getRoot() === ws.rootSplit) || ws.getLeavesOfType(LIBRARY_VIEW)[0];
     if (!leaf) leaf = ws.getLeaf("tab");
-    const base = { search: "", folder: null, recursive: true, similarTo: null, similarName: "" };
+    const base = { search: "", folder: null, recursive: true, similarTo: null, similarName: "", collection: null };
     await leaf.setViewState({ type: LIBRARY_VIEW, state: { ...base, ...state }, active: true });
     ws.revealLeaf(leaf);
   }
@@ -289,6 +310,18 @@ export class ImagesPlugin implements ImagesHost {
       return;
     }
     await ws.getLeaf(newLeaf ? "tab" : false).openFile(file);
+  }
+
+  async openPlugin(id: string, newLeaf = false) {
+    const ws = this.app.workspace;
+    let leaf = newLeaf ? null : ws.getLeavesOfType(PLUGIN_VIEW).find((l: any) => l.view.plugin?.id === id);
+    if (!leaf) leaf = ws.getLeaf("tab");
+    await leaf.setViewState({ type: PLUGIN_VIEW, state: { id }, active: true });
+    ws.revealLeaf(leaf);
+  }
+
+  openPinterest(initial: { url?: string; collection?: string } = {}) {
+    new PinterestModal(this.app, this, initial).open();
   }
 
   openSettings() {
@@ -318,6 +351,7 @@ export class ImagesPlugin implements ImagesHost {
         return true;
       },
     });
+    c({ id: "images:pinterest", name: "Import from Pinterest…", icon: "download", callback: () => this.openPinterest() });
     c({ id: "images:download-model", name: "Turn on search by description (downloads the image model)", icon: "download", callback: () => api.downloadModel() });
   }
 
@@ -332,7 +366,7 @@ export class ImagesPlugin implements ImagesHost {
 
   private itemForFile(file: TFile): ImageItem {
     const folder = file.parent && !file.parent.isRoot() ? file.parent.path : "";
-    return { key: file.path, abs: this.app.vault.adapter.getFullPath(file.path), name: file.name, folder, mtime: file.stat.mtime, size: file.stat.size, width: 0, height: 0, external: false, indexed: true };
+    return { key: file.path, abs: this.app.vault.adapter.getFullPath(file.path), name: file.name, folder, mtime: file.stat.mtime, size: file.stat.size, width: 0, height: 0, external: false, origin: "vault", indexed: true };
   }
 
   /** Pictures dragged from an image view into a note. */
@@ -385,6 +419,37 @@ export function imagesSettingsTab(app: any) {
         .setName("Analyse every picture again")
         .setDesc("Only needed if search results look wrong after the model changed.")
         .addButton((b) => b.setButtonText("Start").onClick(() => api.reindex()));
+
+      new Setting(el).setName("Shared library (Pictogrep)").setHeading();
+      const sharedDesc = s.shared === "" ? "Off: image mode shows only the vault and the folders below." : st?.shared ? `In use: ${st.shared}${st.sharedRunning ? " (Pictogrep is open)" : ""}. Pictures, collections, followed boards and plugins are the same in both apps.` : s.shared === "auto" ? "Pictogrep's folder was not found on this computer. Choose it below if it is somewhere else." : `Folder not found: ${s.shared}`;
+      new Setting(el)
+        .setName("Pictogrep folder")
+        .setDesc(sharedDesc)
+        .addDropdown((d) =>
+          d
+            .addOptions({ auto: "Find automatically", custom: "Choose a folder…", off: "Do not share" })
+            .setValue(s.shared === "auto" ? "auto" : s.shared === "" ? "off" : "custom")
+            .onChange(async (v) => {
+              if (v === "auto") await plugin.updateSettings({ shared: "auto" });
+              else if (v === "off") await plugin.updateSettings({ shared: "" });
+              else {
+                const path: string | null = await invoke("pick_folder");
+                if (path) await plugin.updateSettings({ shared: path });
+              }
+              setTimeout(render, 800);
+            }),
+        );
+      new Setting(el)
+        .setName("Pictures added to \"All pictures\" go to")
+        .setDesc("Dropping or pasting into a collection or a folder always saves there.")
+        .addDropdown((d) => d.addOptions({ shared: "The shared library", vault: "The vault" }).setValue(s.importTarget).onChange((v) => plugin.updateSettings({ importTarget: v as any })));
+      new Setting(el).setName("Pinterest").setHeading();
+      new Setting(el).setName("Import a board").addButton((b) => b.setButtonText("Import from Pinterest…").onClick(() => plugin.openPinterest()));
+      if (!st?.shared) {
+        new Setting(el).setName("Vault folder for Pinterest imports").setDesc("Used when no shared library is in use.").addText((t) => t.setValue(s.pinterestFolder).onChange((v) => plugin.updateSettings({ pinterestFolder: v.trim() || "Pinterest" })));
+      }
+      el.createDiv({ cls: "setting-item-heading-sub", text: "Followed boards" });
+      renderFollowed(el.createDiv("pinterest-followed"));
 
       new Setting(el).setName("Library").setHeading();
       new Setting(el)

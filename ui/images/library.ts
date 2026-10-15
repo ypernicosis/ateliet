@@ -21,6 +21,12 @@ export interface LibraryState {
   sort: "random" | "recent" | "oldest" | "name";
   similarTo: string | null;
   similarName: string;
+  /** A collection of the shared library ("__shared__": all of it, "__unsorted__": in none). */
+  collection: string | null;
+}
+
+function collectionLabel(c: string): string {
+  return c === "__shared__" ? "Shared library" : c === "__unsorted__" ? "Not in a collection" : c;
 }
 
 const SORTS: [LibraryState["sort"], string][] = [
@@ -31,7 +37,7 @@ const SORTS: [LibraryState["sort"], string][] = [
 ];
 
 export class ImageLibraryView extends ItemView {
-  state: LibraryState = { search: "", folder: null, recursive: true, sort: "random", similarTo: null, similarName: "" };
+  state: LibraryState = { search: "", folder: null, recursive: true, sort: "random", similarTo: null, similarName: "", collection: null };
   private seed = 0;
   private total = 0;
   private mode: ImagePage["mode"] = "browse";
@@ -60,6 +66,7 @@ export class ImageLibraryView extends ItemView {
   getDisplayText() {
     if (this.state.similarTo) return `Similar to ${this.state.similarName || "picture"}`;
     if (this.state.search) return this.state.search;
+    if (this.state.collection) return collectionLabel(this.state.collection);
     if (this.state.folder !== null) return folderName(this.app, this.state.folder);
     return "Pictures";
   }
@@ -101,6 +108,9 @@ export class ImageLibraryView extends ItemView {
     this.sortEl = tb.createDiv({ cls: "clickable-icon image-sort", attr: { "aria-label": "Order" } });
     setIcon(this.sortEl, "arrow-up-down");
     this.sortEl.addEventListener("click", (e) => this.sortMenu(e));
+    const pin = tb.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Import from Pinterest" } });
+    setIcon(pin, "download");
+    pin.addEventListener("click", () => this.host.openPinterest(this.state.collection && !this.state.collection.startsWith("__") ? { collection: this.state.collection } : {}));
     const tiles = tb.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Preview size" } });
     setIcon(tiles, "layout-grid");
     tiles.addEventListener("click", (e) => this.tileMenu(e));
@@ -111,7 +121,18 @@ export class ImageLibraryView extends ItemView {
       tileWidth: () => TILE_WIDTH[this.host.settings.tile as keyof typeof TILE_WIDTH] || 220,
       showNames: () => this.host.settings.showNames,
       onOpen: (_item, index) => this.viewer.open(this.grid.items, index),
-      onMenu: (e, items) => imageMenu(this.host, items).showAtMouseEvent(e),
+      onMenu: (e, items) =>
+        imageMenu(this.host, items, (menu) => {
+          const c = this.state.collection;
+          if (c && !c.startsWith("__")) {
+            menu.addItem((i) =>
+              i.setTitle(`Remove from ${c}`).setIcon("minus-circle").onClick(async () => {
+                await api.sharedCollection("remove", c, { paths: items.map((it) => it.abs) });
+                this.reload();
+              }),
+            );
+          }
+        }).showAtMouseEvent(e),
     });
     this.scrollEl.addEventListener("scroll", () => {
       if (this.scrollEl.scrollTop + this.scrollEl.clientHeight > this.scrollEl.scrollHeight - 1200) this.loadMore();
@@ -144,7 +165,7 @@ export class ImageLibraryView extends ItemView {
 
   private query(offset: number, count = PAGE): ImageQuery {
     const s = this.state;
-    return { search: s.search, folder: s.folder, recursive: s.recursive, sort: s.sort, seed: this.seed, offset, count, similarTo: s.similarTo };
+    return { search: s.search, folder: s.folder, recursive: s.recursive, sort: s.sort, seed: this.seed, offset, count, similarTo: s.similarTo, collection: s.collection };
   }
 
   /** New query from the top. */
@@ -152,6 +173,7 @@ export class ImageLibraryView extends ItemView {
     const gen = ++this.generation;
     if (this.state.sort === "random") this.seed = 0;
     this.renderChips();
+    this.app.workspace.trigger("images:library-state");
     this.viewer?.close();
     this.loading = true;
     try {
@@ -214,6 +236,7 @@ export class ImageLibraryView extends ItemView {
       setIcon(x, "x");
       x.addEventListener("click", clear);
     };
+    if (this.state.collection) chip("library", collectionLabel(this.state.collection), () => this.setState({ collection: null }, {}));
     if (this.state.folder !== null) {
       chip("folder", folderName(this.app, this.state.folder) + (this.state.recursive ? "" : " (only this folder)"), () => this.setState({ folder: null }, {}));
     }
@@ -262,7 +285,7 @@ export class ImageLibraryView extends ItemView {
     for (const [id, label] of SORTS) {
       menu.addItem((i) => i.setTitle(label).setChecked(this.state.sort === id).onClick(() => this.setState({ sort: id }, {})));
     }
-    if (this.state.folder !== null) {
+    if (this.state.folder !== null || (this.state.collection && !this.state.collection.startsWith("__"))) {
       menu.addSeparator();
       menu.addItem((i) => i.setTitle("Include subfolders").setChecked(this.state.recursive).onClick(() => this.setState({ recursive: !this.state.recursive }, {})));
     }
@@ -328,7 +351,22 @@ export class ImageLibraryView extends ItemView {
     }
   }
 
+  /** The shared collection dropped pictures join, or "" for the library itself; null when they go to the vault. */
+  private sharedDestination(): string | null {
+    const st = this.host.status;
+    if (!st?.shared) return null;
+    const c = this.state.collection;
+    if (c) return c.startsWith("__") ? "" : c;
+    if (this.state.folder !== null) return null;
+    return this.host.settings.importTarget === "shared" ? "" : null;
+  }
+
   private async save(name: string, data: ArrayBuffer) {
+    const shared = this.sharedDestination();
+    if (shared !== null) {
+      await api.sharedImport(name, data, shared);
+      return;
+    }
     const dest = this.destination();
     const app = this.app;
     let path: string;

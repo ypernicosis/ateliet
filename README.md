@@ -89,6 +89,19 @@ Cada modo guarda seu próprio layout (`.obsidian/ateliet/workspace.json` e `work
 
 **Trazer imagens.** Arrastar arquivos do sistema ou imagens de um navegador para a biblioteca, ou colar uma imagem ou um link de imagem, salva tudo na pasta aberta (ou na pasta configurada). Pastas fora do vault podem entrar na biblioteca (Settings → Images). Elas ficam onde estão e só são copiadas para o vault quando a imagem é usada numa nota. Arrastar imagens para uma coleção move os arquivos, e os links nas notas são atualizados.
 
+## Biblioteca compartilhada com o Pictogrep
+
+Com o Pictogrep instalado, o modo imagens usa **a mesma pasta** que ele (Settings → Images → Shared library): o Ateliet encontra a pasta sozinho, pelo Pictogrep em execução ou pelos locais padrão (`~/.local/share/pictogrep`, `PICTOGREP_HOME`), ou você escolhe uma. A partir daí:
+
+- **Imagens e coleções são as mesmas nos dois apps.** As coleções do Pictogrep aparecem no painel esquerdo do modo imagens. Arrastar imagens para uma coleção, criar, renomear ou apagar coleções e importar imagens grava no formato do Pictogrep: arquivos em `library/` e um link por imagem em `collections/<nome>/`. Uma imagem do vault arrastada para uma coleção é copiada para a biblioteca.
+- **Os dois nunca escrevem o mesmo arquivo ao mesmo tempo.** Com o Pictogrep aberto, o Ateliet só grava os arquivos e pede a ele, pela API local, que releia a biblioteca. Com ele fechado, o Ateliet atualiza `data/library-state.json`.
+- **O que o Pictogrep já analisou não é analisado de novo.** Os vetores de `data/embeddings-v1.bin` usam o mesmo modelo e são reaproveitados.
+- **Plugins do Pictogrep** (`plugins/<id>/plugin.json`) aparecem em "Plugins" e abrem numa aba, isolados como no Pictogrep: iframe só com scripts, sem rede, numa origem própria (`pgplugin://`), com a mesma API (`window.pictogrep`, versão 0) e as permissões do manifesto conferidas a cada chamada. Eles enxergam a biblioteca compartilhada, e o armazenamento deles (`data/plugins/<id>.json`) é o mesmo nos dois apps.
+
+### Importar do Pinterest
+
+"Import from Pinterest…" (na barra da biblioteca, no menu de uma coleção ou na paleta de comandos) baixa um quadro, um pin ou um link pin.it. As opções são as do Pictogrep: uma coleção nova com o nome do quadro, uma coleção existente ou direto na biblioteca, com duplicatas exatas puladas ou só adicionadas à coleção. Usa o `gallery-dl` quando ele está instalado (nos mesmos lugares em que o Pictogrep procura, mais `/opt/homebrew/bin`). Sem ele, lê o quadro pelas APIs públicas do próprio Pinterest. **Seguir** um quadro grava em `data/web-sources.json`, a mesma lista do Pictogrep, e os pins novos são buscados uma vez por dia por quem estiver aberto (o Ateliet não faz a verificação automática enquanto o Pictogrep estiver aberto). Sem biblioteca compartilhada, as imagens vão para uma pasta do vault (`Pinterest/` por padrão).
+
 ## Usando o mesmo vault no Obsidian e no Ateliet
 
 | O quê | Onde fica | Compartilhado? |
@@ -103,6 +116,7 @@ Cada modo guarda seu próprio layout (`.obsidian/ateliet/workspace.json` e `work
 | Favoritos, notas diárias, templates, tipos de propriedade | `bookmarks.json`, `daily-notes.json`, `templates.json`, `types.json` | sim |
 | Layout de abas | `.obsidian/ateliet/workspace.json` | **não**: o Ateliet só *lê* o `workspace.json` do Obsidian na primeira abertura |
 | Biblioteca de imagens (layout do modo imagens, ajustes, índice da busca) | `.obsidian/ateliet/workspace-images.json`, `images.json`, `images/index.bin` | **não**: só o Ateliet usa |
+| Biblioteca compartilhada, coleções, quadros seguidos, dados de plugins | pasta do Pictogrep (`library/`, `collections/`, `data/`) | sim, com o **Pictogrep** |
 
 Mudanças feitas por um app aparecem ao vivo no outro: o watcher em Rust detecta e o vault concilia criação, edição, remoção e renomeação. Quando o Obsidian altera o `data.json` de um plugin, o Ateliet chama `onExternalSettingsChange()` nesse plugin.
 

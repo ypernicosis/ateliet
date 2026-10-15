@@ -7,7 +7,8 @@
 //! and analyses new or edited pictures a few at a time in its own thread.
 
 use ateliet_core::clip::{self, Clip};
-use ateliet_core::images::{self, ImageEntry, Index, Source};
+use crate::pictogrep::{self, Home, SharedVector};
+use ateliet_core::images::{self, ImageEntry, Index, Origin, Source};
 use notify::Watcher;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -89,7 +90,7 @@ impl Model {
     }
 
     /// The loaded model, loading it on first use. `None` until downloaded.
-    fn get(&self) -> Option<Arc<Clip>> {
+    pub(crate) fn get(&self) -> Option<Arc<Clip>> {
         let mut slot = self.clip.lock().unwrap();
         if let Some(c) = slot.as_ref() {
             return Some(c.clone());
@@ -112,7 +113,7 @@ impl Model {
         }
     }
 
-    fn text_vector(&self, clip: &Clip, query: &str) -> Res<Vec<f32>> {
+    pub(crate) fn text_vector(&self, clip: &Clip, query: &str) -> Res<Vec<f32>> {
         let key = query.trim().to_lowercase();
         if let Some(v) = self.queries.lock().unwrap().get(&key) {
             return Ok(v.clone());
@@ -185,11 +186,13 @@ impl Model {
 // ── one vault's library ───────────────────────────────────────────────────
 
 #[derive(Default)]
-struct Library {
-    sources: Vec<Source>,
-    entries: Vec<ImageEntry>,
-    by_key: HashMap<String, usize>,
-    index: Index,
+pub(crate) struct Library {
+    pub(crate) sources: Vec<Source>,
+    /// The shared picture library (Pictogrep's folder), when one is in use.
+    pub(crate) shared: Option<Home>,
+    pub(crate) entries: Vec<ImageEntry>,
+    pub(crate) by_key: HashMap<String, usize>,
+    pub(crate) index: Index,
     dirty: bool,
     failed: HashSet<String>,
     scanned: bool,
@@ -214,18 +217,21 @@ impl Library {
 }
 
 pub struct Gallery {
-    label: String,
-    vault: PathBuf,
+    pub(crate) label: String,
+    pub(crate) vault: PathBuf,
     index_path: PathBuf,
-    app: AppHandle,
-    lib: Mutex<Library>,
+    pub(crate) app: AppHandle,
+    pub(crate) lib: Mutex<Library>,
     wake: Condvar,
     stop: AtomicBool,
-    model: Arc<Model>,
+    pub(crate) model: Arc<Model>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Vectors Pictogrep already computed, by path and by content digest.
+    shared_vectors: Mutex<(HashMap<PathBuf, SharedVector>, HashMap<[u8; 32], PathBuf>)>,
 }
 
 #[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Status {
     total: usize,
     indexed: usize,
@@ -234,6 +240,9 @@ pub struct Status {
     scanned: bool,
     auto: bool,
     model: ModelStatus,
+    /// The shared library folder in use, if any, and whether Pictogrep is open.
+    shared: Option<String>,
+    shared_running: bool,
 }
 
 impl Gallery {
@@ -247,6 +256,8 @@ impl Gallery {
             scanned: lib.scanned,
             auto: lib.auto,
             model: self.model.status(),
+            shared: lib.shared.as_ref().map(|h| h.root.to_string_lossy().into_owned()),
+            shared_running: lib.shared.as_ref().is_some_and(pictogrep::is_running),
         }
     }
 
@@ -254,24 +265,40 @@ impl Gallery {
         let _ = self.app.emit_to(self.label.as_str(), "images-progress", self.status());
     }
 
-    fn emit_changed(&self) {
+    pub(crate) fn emit_changed(&self) {
         let _ = self.app.emit_to(self.label.as_str(), "images-changed", ());
     }
 
-    fn sources_for(&self, external: &[String]) -> Vec<Source> {
-        let mut s = vec![Source { root: self.vault.clone(), external: false }];
-        for e in external {
-            let p = PathBuf::from(e);
-            if p.is_dir() && !p.starts_with(&self.vault) {
-                s.push(Source { root: p, external: true });
+    fn sources_for(&self, external: &[String], shared: Option<&Home>) -> Vec<Source> {
+        let mut s = vec![Source::vault(self.vault.clone())];
+        let add = |p: PathBuf, origin: Origin, s: &mut Vec<Source>| {
+            if p.is_dir() && !p.starts_with(&self.vault) && !s.iter().any(|x| x.root == p) {
+                s.push(Source::outside(p, origin));
             }
+        };
+        if let Some(home) = shared {
+            let _ = fs::create_dir_all(home.library());
+            for root in pictogrep::source_roots(home) {
+                add(root, Origin::Shared, &mut s);
+            }
+        }
+        for e in external {
+            add(PathBuf::from(e), Origin::External, &mut s);
         }
         s
     }
 
+    /// Loads the vectors Pictogrep already computed (same model).
+    fn load_shared_vectors(&self) {
+        let home = self.lib.lock().unwrap().shared.clone();
+        let vectors = home.map(|h| pictogrep::read_vectors(&h, 512)).unwrap_or_default();
+        let by_digest = vectors.iter().filter_map(|(p, v)| v.digest.map(|d| (d, p.clone()))).collect();
+        *self.shared_vectors.lock().unwrap() = (vectors, by_digest);
+    }
+
     /// Full scan (in the calling thread). Cheap after the first time: only new
     /// or edited files have their headers read.
-    fn rescan(&self) {
+    pub(crate) fn rescan(&self) {
         let sources = self.lib.lock().unwrap().sources.clone();
         let found = pool().install(|| images::scan(&sources));
         {
@@ -288,7 +315,7 @@ impl Gallery {
 
     /// Updates the given absolute paths; anything that is not a plain picture
     /// file (a folder rename, say) falls back to a full rescan.
-    fn refresh(&self, paths: Vec<PathBuf>) {
+    pub(crate) fn refresh(&self, paths: Vec<PathBuf>) {
         let mut full = false;
         let mut changed = false;
         {
@@ -358,7 +385,16 @@ impl Gallery {
     }
 
     fn watch_external(self: &Arc<Self>) {
-        let roots: Vec<PathBuf> = self.lib.lock().unwrap().sources.iter().filter(|s| s.external).map(|s| s.root.clone()).collect();
+        let (mut roots, collections): (Vec<PathBuf>, Option<PathBuf>) = {
+            let lib = self.lib.lock().unwrap();
+            (lib.sources.iter().filter(|s| s.external).map(|s| s.root.clone()).collect(), lib.shared.as_ref().map(|h| h.collections()))
+        };
+        // Collections change by links appearing and disappearing; the
+        // collection list has to follow them.
+        if let Some(c) = &collections {
+            let _ = fs::create_dir_all(c);
+            roots.push(c.clone());
+        }
         if roots.is_empty() {
             *self.watcher.lock().unwrap() = None;
             return;
@@ -389,7 +425,13 @@ impl Gallery {
                 if g.stop.load(Ordering::Relaxed) {
                     break;
                 }
-                g.refresh(batch.into_iter().collect());
+                let (in_collections, files): (Vec<PathBuf>, Vec<PathBuf>) = batch.into_iter().partition(|p| collections.as_ref().is_some_and(|c| p.starts_with(c)));
+                if !files.is_empty() {
+                    g.refresh(files);
+                }
+                if !in_collections.is_empty() {
+                    g.emit_changed();
+                }
             }
         });
     }
@@ -456,11 +498,26 @@ impl Gallery {
             let mut lib = self.lib.lock().unwrap();
             let live: HashSet<&str> = lib.entries.iter().map(|e| e.key.as_str()).collect();
             let orphans = lib.index.orphans_by_digest(&live);
+            let shared = self.shared_vectors.lock().unwrap();
             for (e, d) in batch.into_iter().zip(digests) {
                 let Some(d) = d else {
                     lib.failed.insert(e.key.clone());
                     continue;
                 };
+                // Analysed by Pictogrep already (same model): same file and
+                // same mtime, or the same content anywhere in its library.
+                let path = pictogrep::clean(Path::new(&e.abs));
+                let reuse = shared.0.get(&path).filter(|v| v.mtime == e.mtime && v.vector.len() == 512).or_else(|| shared.1.get(&d).and_then(|p| shared.0.get(p)).filter(|v| v.vector.len() == 512));
+                if let Some(v) = reuse {
+                    let mut vector = v.vector.clone();
+                    images::normalize(&mut vector);
+                    if let Some(rec) = lib.index.records.get_mut(&e.key) {
+                        rec.digest = Some(d);
+                        rec.vector = Some(vector);
+                        lib.dirty = true;
+                    }
+                    continue;
+                }
                 if let Some(old) = orphans.get(&d) {
                     if let Some(old_rec) = lib.index.records.remove(old) {
                         if let Some(rec) = lib.index.records.get_mut(&e.key) {
@@ -473,6 +530,7 @@ impl Gallery {
                 }
                 todo.push((e, d));
             }
+            drop(shared);
         }
         if todo.is_empty() {
             return;
@@ -534,11 +592,16 @@ impl Gallery {
 #[derive(Default)]
 pub struct Galleries {
     map: Mutex<HashMap<String, Arc<Gallery>>>,
-    model: Arc<Model>,
+    pub(crate) model: Arc<Model>,
 }
 
 impl Galleries {
-    fn get(&self, label: &str) -> Res<Arc<Gallery>> {
+    /// Any open library (for background work that is not tied to a window).
+    pub(crate) fn any(&self) -> Option<Arc<Gallery>> {
+        self.map.lock().unwrap().values().next().cloned()
+    }
+
+    pub(crate) fn get(&self, label: &str) -> Res<Arc<Gallery>> {
         self.map.lock().unwrap().get(label).cloned().ok_or_else(|| "image library not open".to_string())
     }
 
@@ -551,8 +614,17 @@ impl Galleries {
     }
 }
 
+/// "auto": find Pictogrep's folder; "": no shared library; else that folder.
+fn resolve_shared(setting: &str) -> Option<Home> {
+    match setting.trim() {
+        "" => None,
+        "auto" => pictogrep::detect(),
+        path => Some(Home::new(PathBuf::from(path))).filter(|h| h.root.is_dir()),
+    }
+}
+
 #[tauri::command]
-pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries>, vault: String, config_dir: String, external: Vec<String>, auto: bool) -> Res<Status> {
+pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries>, vault: String, config_dir: String, external: Vec<String>, auto: bool, shared: String) -> Res<Status> {
     state.close(window.label());
     let root = PathBuf::from(&vault);
     let index_path = root.join(&config_dir).join("ateliet").join("images").join("index.bin");
@@ -566,16 +638,21 @@ pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries
         stop: AtomicBool::new(false),
         model: state.model.clone(),
         watcher: Mutex::new(None),
+        shared_vectors: Mutex::new((HashMap::new(), HashMap::new())),
     });
+    let shared = resolve_shared(&shared);
+    crate::shared::set_home(shared.clone());
     {
         let mut lib = gallery.lib.lock().unwrap();
         lib.index = Index::load(&index_path, clip::MODEL_KEY, 512);
-        lib.sources = gallery.sources_for(&external);
+        lib.sources = gallery.sources_for(&external, shared.as_ref());
+        lib.shared = shared;
         lib.auto = auto;
     }
     state.map.lock().unwrap().insert(window.label().to_string(), gallery.clone());
     let g = gallery.clone();
     std::thread::spawn(move || {
+        g.load_shared_vectors();
         g.rescan();
         g.watch_external();
         g.work();
@@ -584,19 +661,26 @@ pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries
 }
 
 #[tauri::command]
-pub fn images_configure(window: tauri::Window, state: State<Galleries>, external: Vec<String>, auto: bool) -> Res<()> {
+pub fn images_configure(window: tauri::Window, state: State<Galleries>, external: Vec<String>, auto: bool, shared: String) -> Res<()> {
     let g = state.get(window.label())?;
-    let rescan = {
+    let shared = resolve_shared(&shared);
+    crate::shared::set_home(shared.clone());
+    let (rescan, shared_changed) = {
         let mut lib = g.lib.lock().unwrap();
         lib.auto = auto;
-        let sources = g.sources_for(&external);
+        let sources = g.sources_for(&external, shared.as_ref());
         let changed = sources.iter().map(|s| &s.root).ne(lib.sources.iter().map(|s| &s.root));
+        let shared_changed = lib.shared != shared;
         lib.sources = sources;
-        changed
+        lib.shared = shared;
+        (changed || shared_changed, shared_changed)
     };
     g.wake.notify_all();
     if rescan {
         std::thread::spawn(move || {
+            if shared_changed {
+                g.load_shared_vectors();
+            }
             g.rescan();
             g.watch_external();
         });
@@ -670,6 +754,10 @@ pub struct Query {
     similar_to: Option<String>,
     #[serde(default)]
     keys: Option<Vec<String>>,
+    /// A collection of the shared library, or "__unsorted__" for the shared
+    /// pictures that are in no collection.
+    #[serde(default)]
+    collection: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -731,6 +819,25 @@ fn run_query(g: &Gallery, model: &Model, q: Query) -> Res<Page> {
         (None, Some(folder)) => (0..lib.entries.len()).filter(|&i| in_folder(&lib.entries[i], folder, q.recursive)).collect(),
         (None, None) => (0..lib.entries.len()).collect(),
     };
+    if q.collection.as_deref() == Some("__shared__") {
+        candidates.retain(|&i| lib.entries[i].origin == Origin::Shared);
+    } else if let (Some(name), Some(home)) = (&q.collection, &lib.shared) {
+        let members: HashSet<String> = if name == "__unsorted__" {
+            pictogrep::collection_names(home).iter().flat_map(|c| pictogrep::collection_images(home, c)).map(|p| p.to_string_lossy().into_owned()).collect()
+        } else {
+            let mut names = vec![name.clone()];
+            if q.recursive {
+                names.extend(pictogrep::collection_names(home).into_iter().filter(|c| c.starts_with(&format!("{name}/"))));
+            }
+            names.iter().flat_map(|c| pictogrep::collection_images(home, c)).map(|p| p.to_string_lossy().into_owned()).collect()
+        };
+        let unsorted = name == "__unsorted__";
+        candidates.retain(|&i| {
+            let e = &lib.entries[i];
+            let member = members.contains(&pictogrep::clean(Path::new(&e.abs)).to_string_lossy().into_owned());
+            if unsorted { e.origin == Origin::Shared && !member } else { member }
+        });
+    }
     let words = images::query_words(&search);
     let mut seed = q.seed;
     let (mode, ranked): (&'static str, Vec<(usize, Option<f32>)>) = if let Some(key) = &q.similar_to {

@@ -2,16 +2,46 @@
 // pictures (directly or below) are listed, each with a cover and a count.
 // Pictures dragged onto a folder move into it; every folder can have a note.
 
-import { FolderInfo, ImageItem, api, ensureInVault, thumbnailUrl, vaultFile } from "./api.ts";
+import { FolderInfo, ImageItem, SharedInfo, api, ensureInVault, thumbnailUrl, vaultFile } from "./api.ts";
 import { ImagesHost } from "./actions.ts";
 import { ItemView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
-import { Menu, Notice } from "../obsidian/ui.ts";
+import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
 import { TFile, TFolder } from "../obsidian/vault.ts";
 import { debounce } from "../obsidian/util.ts";
-import { invoke } from "../tauri.ts";
+import { fileUrl, invoke } from "../tauri.ts";
+
+const thumbnailUrlOriginal = (it: ImageItem) => fileUrl(it.abs);
 
 export const COLLECTIONS_VIEW = "image-collections";
+
+/** Asks for a name; resolves to null when cancelled. */
+export function askName(app: any, title: string, value = ""): Promise<string | null> {
+  return new Promise((resolve) => {
+    const m = new Modal(app);
+    let result: string | null = null;
+    m.setTitle(title);
+    new Setting(m.contentEl).addText((t) => {
+      t.setValue(value).onChange((v) => (value = v));
+      t.inputEl.style.width = "100%";
+      t.inputEl.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          result = value.trim() || null;
+          m.close();
+        }
+      });
+      setTimeout(() => t.inputEl.select(), 0);
+    });
+    const buttons = m.modalEl.createDiv("modal-button-container");
+    buttons.createEl("button", { text: "OK", cls: "mod-cta" }).addEventListener("click", () => {
+      result = value.trim() || null;
+      m.close();
+    });
+    buttons.createEl("button", { text: "Cancel" }).addEventListener("click", () => m.close());
+    m.onClose = () => resolve(result);
+    m.open();
+  });
+}
 
 interface Node {
   key: string;
@@ -102,33 +132,45 @@ export class ImageCollectionsView extends ItemView {
     this.listEl = this.contentEl.createDiv("image-collections-list");
     this.registerEvent(this.app.workspace.on("images:changed" as any, () => this.update()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.markActive()));
+    this.registerEvent(this.app.workspace.on("images:library-state" as any, () => this.markActive()));
     this.render();
   }
 
   private update = debounce(() => this.render(), 600, true);
 
-  private current(): string | null | undefined {
+  /** The row key of what the library shows. */
+  private current(): string | undefined {
     const leaf = this.app.workspace.getLeavesOfType("image-library")[0];
-    return leaf ? (leaf.view as any).state?.folder : undefined;
+    const st = leaf ? (leaf.view as any).state : null;
+    if (!st) return undefined;
+    if (st.collection) return "shared:" + st.collection;
+    return st.folder === null ? "__all__" : st.folder;
   }
 
   private markActive() {
     const cur = this.current();
-    this.listEl.querySelectorAll(".image-collection").forEach((el: any) => el.toggleClass("is-active", el.dataset.key === (cur === null ? "__all__" : cur)));
+    this.listEl.querySelectorAll(".image-collection").forEach((el: any) => el.toggleClass("is-active", el.dataset.key === cur));
   }
 
+  private renderGen = 0;
+
   async render() {
+    // Fetch first, draw once: overlapping renders must not both append.
+    const gen = ++this.renderGen;
     let folders: FolderInfo[] = [];
     try {
       folders = await api.folders();
     } catch {
       return;
     }
+    const info = await api.sharedInfo().catch(() => null);
+    if (gen !== this.renderGen) return;
     const top = this.listEl.scrollTop;
     this.listEl.empty();
     const total = folders.reduce((n, f) => n + f.count, 0);
     const all = this.row(this.listEl, { key: "__all__", name: "All pictures", own: total, total, cover: "", latest: 0, children: new Map(), external: false }, 0, "images");
-    all.addEventListener("click", () => this.host.openLibrary({ folder: null, search: "", similarTo: null }));
+    all.addEventListener("click", () => this.host.openLibrary({ folder: null, collection: null, search: "", similarTo: null }));
+    if (info?.home) this.renderShared(info);
 
     const vaultFolders = folders.filter((f) => !f.external);
     // Empty folders too, so a new folder can receive pictures.
@@ -153,6 +195,101 @@ export class ImageCollectionsView extends ItemView {
     }
     this.listEl.scrollTop = top;
     this.markActive();
+  }
+
+  // ── the shared library (Pictogrep's collections and plugins) ───────────
+
+  private renderShared(info: SharedInfo) {
+    const head = this.listEl.createDiv("image-collections-section");
+    head.setText("Shared library");
+    if (info.running) head.createSpan({ cls: "image-collections-badge", text: "Pictogrep open" });
+    const node = (key: string, name: string, count: number, cover: string): Node => ({ key, name, own: count, total: count, cover, latest: 0, children: new Map(), external: true });
+    const all = this.row(this.listEl, node("shared:__shared__", "All shared pictures", info.total || 0, ""), 0, "library");
+    all.addEventListener("click", () => this.host.openLibrary({ collection: "__shared__", folder: null, search: "", similarTo: null }));
+    all.addEventListener("contextmenu", (e) => this.sharedMenu(e, null));
+    this.dropShared(all, null);
+    if (info.unsorted) {
+      const u = this.row(this.listEl, node("shared:__unsorted__", "Not in a collection", info.unsorted, ""), 0, "inbox");
+      u.addEventListener("click", () => this.host.openLibrary({ collection: "__unsorted__", folder: null, search: "", similarTo: null }));
+    }
+    // Collections nest with "/" in their names.
+    const byName = new Map((info.collections || []).map((c) => [c.name, c]));
+    const kids = (parent: string) => (info.collections || []).map((c) => c.name).filter((n) => (parent ? n.startsWith(parent + "/") && !n.slice(parent.length + 1).includes("/") : !n.includes("/")));
+    const draw = (name: string, depth: number) => {
+      const c = byName.get(name)!;
+      const n = node("shared:" + name, name.split("/").pop()!, c.count, c.cover);
+      for (const k of kids(name)) n.children.set(k, node(k, k, 0, ""));
+      const el = this.row(this.listEl, n, depth, "folder");
+      el.addEventListener("click", () => this.host.openLibrary({ collection: name, folder: null, recursive: true, search: "", similarTo: null }));
+      el.addEventListener("contextmenu", (e) => this.sharedMenu(e, name));
+      this.dropShared(el, name);
+      if (!this.collapsed.has(n.key)) for (const k of kids(name)) draw(k, depth + 1);
+    };
+    for (const name of kids("")) draw(name, 1);
+    const plugins = info.plugins || [];
+    if (plugins.length) {
+      this.section("Plugins");
+      for (const p of plugins) {
+        const el = this.listEl.createDiv({ cls: "image-collection tree-item-self is-clickable", attr: { "data-key": "plugin:" + p.id } });
+        el.style.paddingInlineStart = "8px";
+        el.createDiv("image-collection-toggle");
+        setIcon(el.createDiv("image-collection-cover"), "puzzle");
+        el.createDiv({ cls: "image-collection-name", text: p.name });
+        el.createDiv({ cls: "image-collection-count", text: p.version });
+        el.addEventListener("click", (e) => this.host.openPlugin(p.id, e.metaKey || e.ctrlKey));
+      }
+    }
+  }
+
+  /** Pictures dropped on a shared collection join it (copied into the library if needed). */
+  private dropShared(el: HTMLElement, name: string | null) {
+    el.addEventListener("dragover", (e) => {
+      if (!e.dataTransfer?.types.includes("text/x-ateliet-images")) return;
+      e.preventDefault();
+      el.addClass("is-being-dragged-over");
+    });
+    el.addEventListener("dragleave", () => el.removeClass("is-being-dragged-over"));
+    el.addEventListener("drop", async (e) => {
+      el.removeClass("is-being-dragged-over");
+      const raw = e.dataTransfer?.getData("text/x-ateliet-images");
+      if (!raw) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const items: ImageItem[] = JSON.parse(raw);
+      try {
+        if (name) {
+          const r = await api.sharedCollection("add", name, { paths: items.map((i) => i.abs) });
+          new Notice(`${r.added} ${r.added === 1 ? "picture" : "pictures"} added to ${name}.`);
+        } else {
+          for (const it of items.filter((i) => i.origin !== "shared")) await api.sharedImport(it.name, await (await fetch(thumbnailUrlOriginal(it))).arrayBuffer());
+          new Notice("Copied into the shared library.");
+        }
+      } catch (err) {
+        new Notice(String(err));
+      }
+    });
+  }
+
+  private sharedMenu(e: MouseEvent, name: string | null) {
+    const menu = new Menu();
+    menu.addItem((i) => i.setTitle("New collection…").setIcon("folder-plus").onClick(async () => {
+      const n = await askName(this.app, "New collection", name ? name + "/" : "");
+      if (n) await api.sharedCollection("create", n).catch((err) => new Notice(String(err)));
+    }));
+    menu.addItem((i) => i.setTitle("Import from Pinterest…").setIcon("download").onClick(() => this.host.openPinterest(name ? { collection: name } : {})));
+    if (name) {
+      menu.addItem((i) => i.setTitle("Open in new tab").setIcon("images").onClick(() => this.host.openLibrary({ collection: name, folder: null, recursive: true, search: "", similarTo: null }, true)));
+      menu.addItem((i) => i.setTitle("Rename…").setIcon("pencil").onClick(async () => {
+        const n = await askName(this.app, "Rename collection", name);
+        if (n && n !== name) await api.sharedCollection("rename", name, { into: n }).catch((err) => new Notice(String(err)));
+      }));
+      menu.addSeparator();
+      menu.addItem((i) => i.setTitle("Delete collection").setIcon("trash-2").setWarning(true).onClick(async () => {
+        // Only the collection goes away; its pictures stay in the library.
+        await api.sharedCollection("delete", name).catch((err) => new Notice(String(err)));
+      }));
+    }
+    menu.showAtMouseEvent(e);
   }
 
   private section(text: string) {
