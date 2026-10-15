@@ -102,12 +102,33 @@ impl Home {
     }
 }
 
+/// Where Ateliet notes the folder a running Pictogrep reported, so the
+/// library is still found after Pictogrep closes.
+fn remembered_path() -> Option<PathBuf> {
+    Some(dirs::config_dir()?.join("ateliet").join("pictogrep-home.txt"))
+}
+
+fn remembered() -> Option<PathBuf> {
+    let text = fs::read_to_string(remembered_path()?).ok()?;
+    let p = text.trim();
+    (!p.is_empty()).then(|| PathBuf::from(p))
+}
+
+fn remember(home: &Home) {
+    let Some(path) = remembered_path() else { return };
+    if remembered().as_deref() != Some(home.root.as_path()) {
+        let _ = write_atomic(&path, format!("{}\n", home.root.display()).as_bytes());
+    }
+}
+
 /// The folders Pictogrep could be using on this machine, most likely first.
 fn candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(p) = std::env::var("PICTOGREP_HOME") {
         out.push(PathBuf::from(p));
     }
+    // The folder a running Pictogrep reported last time (it may be anywhere).
+    out.extend(remembered());
     if let Ok(p) = std::env::var("XDG_DATA_HOME") {
         out.push(PathBuf::from(p).join("pictogrep"));
     }
@@ -126,6 +147,7 @@ fn candidates() -> Vec<PathBuf> {
 /// otherwise the first known location that holds a Pictogrep library.
 pub fn detect() -> Option<Home> {
     if let Some(home) = running_instance().map(|(_, h)| h) {
+        remember(&home);
         return Some(home);
     }
     candidates().into_iter().map(Home::new).find(|h| h.looks_valid())
@@ -525,6 +547,29 @@ pub fn read_vectors(home: &Home, dims: usize) -> HashMap<PathBuf, SharedVector> 
     out
 }
 
+/// Writes vectors in Pictogrep's PGE2 record format.
+fn write_vectors(path: &Path, vectors: &HashMap<PathBuf, SharedVector>) -> std::io::Result<()> {
+    let mut out = Vec::new();
+    let mut keys: Vec<&PathBuf> = vectors.keys().collect();
+    keys.sort();
+    for p in keys {
+        let v = &vectors[p];
+        let name = p.to_string_lossy();
+        let start = out.len();
+        out.extend_from_slice(b"PGE2");
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(v.mtime as u64).to_le_bytes());
+        out.extend_from_slice(&v.digest.unwrap_or([0; 32]));
+        out.extend_from_slice(name.as_bytes());
+        for f in &v.vector {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        let c = crc32(&out[start..]);
+        out.extend_from_slice(&c.to_le_bytes());
+    }
+    write_atomic(path, &out)
+}
+
 fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
     for &b in data {
@@ -534,6 +579,276 @@ fn crc32(data: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+// ── a copy of the whole library ───────────────────────────────────────────
+
+/// How far a copy is.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct CopyProgress {
+    pub files: u64,
+    #[serde(rename = "totalFiles")]
+    pub total_files: u64,
+    pub bytes: u64,
+    #[serde(rename = "totalBytes")]
+    pub total_bytes: u64,
+}
+
+/// What a library holds, before copying it.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct CopyPlan {
+    pub files: u64,
+    pub bytes: u64,
+    pub pictures: u64,
+    pub collections: u64,
+    pub plugins: u64,
+    pub embeddings: bool,
+    pub storyboards: u64,
+}
+
+enum Entry {
+    Dir,
+    File(u64),
+    Link(PathBuf),
+}
+
+/// Every entry under `root` (relative paths, parents before children).
+/// Symbolic links are listed, never followed.
+fn walk(root: &Path) -> std::io::Result<Vec<(PathBuf, Entry)>> {
+    let mut out = Vec::new();
+    let mut stack = vec![PathBuf::new()];
+    while let Some(rel) = stack.pop() {
+        let mut names: Vec<_> = fs::read_dir(root.join(&rel))?.filter_map(Result::ok).collect();
+        names.sort_by_key(|e| e.file_name());
+        for e in names {
+            let name = e.file_name();
+            let lossy = name.to_string_lossy();
+            // Half-written files from an atomic write in progress, and Finder litter.
+            if lossy.ends_with(".tmp") || lossy == ".DS_Store" {
+                continue;
+            }
+            let r = rel.join(&name);
+            let meta = fs::symlink_metadata(e.path())?;
+            if meta.file_type().is_symlink() {
+                out.push((r, Entry::Link(fs::read_link(e.path())?)));
+            } else if meta.is_dir() {
+                out.push((r.clone(), Entry::Dir));
+                stack.push(r);
+            } else if meta.is_file() {
+                out.push((r, Entry::File(meta.len())));
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn copy_plan(from: &Home) -> Result<CopyPlan, String> {
+    if !from.looks_valid() {
+        return Err(format!("{} is not a Pictogrep library", from.root.display()));
+    }
+    let entries = walk(&from.root).map_err(|e| e.to_string())?;
+    let mut plan = CopyPlan { embeddings: from.data().join("embeddings-v1.bin").is_file(), ..Default::default() };
+    for (rel, e) in &entries {
+        let top = rel.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
+        match e {
+            Entry::File(n) => {
+                plan.files += 1;
+                plan.bytes += n;
+                let name = rel.to_string_lossy();
+                if top == "library" && is_image_name(&name) {
+                    plan.pictures += 1;
+                }
+                if top == "storyboards" && name.ends_with(".png") && rel.components().count() == 2 {
+                    plan.storyboards += 1;
+                }
+            }
+            Entry::Dir if rel.components().count() == 2 && top == "plugins" => plan.plugins += 1,
+            _ => {}
+        }
+    }
+    plan.collections = collection_names(from).len() as u64;
+    Ok(plan)
+}
+
+/// The spellings of a folder that can appear inside files that point into it.
+fn root_spellings(root: &Path) -> Vec<String> {
+    let mut out = vec![root.to_string_lossy().into_owned()];
+    if let Ok(c) = fs::canonicalize(root) {
+        let c = c.to_string_lossy().into_owned();
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Replaces `from` with `to` where it is a whole path prefix (followed by a
+/// separator, a quote or the end), so `/a/pictogrep-old` is left alone.
+fn replace_prefix(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find(from) {
+        let after = &rest[i + from.len()..];
+        let whole = after.is_empty() || after.starts_with(['/', '\\', '"']);
+        out.push_str(&rest[..i]);
+        out.push_str(if whole { to } else { from });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// JSON files point at pictures by absolute path: those paths move with the copy.
+fn rewrite_json(text: &str, from: &[String], to: &Path) -> String {
+    let to_raw = to.to_string_lossy().into_owned();
+    let esc = |s: &str| serde_json::to_string(s).map(|q| q[1..q.len() - 1].to_string()).unwrap_or_else(|_| s.to_string());
+    let mut out = text.to_string();
+    for f in from {
+        out = replace_prefix(&out, &esc(f), &esc(&to_raw));
+        if esc(f) != *f {
+            out = replace_prefix(&out, f, &to_raw);
+        }
+    }
+    out
+}
+
+fn moved(p: &Path, from: &[String], to: &Path) -> Option<PathBuf> {
+    from.iter().find_map(|f| p.strip_prefix(f).ok()).map(|rel| to.join(rel))
+}
+
+#[cfg(unix)]
+fn make_link(target: &Path, at: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, at)
+}
+
+#[cfg(windows)]
+fn make_link(target: &Path, at: &Path) -> std::io::Result<()> {
+    if target.is_dir() {
+        std::os::windows::fs::symlink_dir(target, at)
+    } else {
+        std::os::windows::fs::symlink_file(target, at)
+    }
+}
+
+fn keep_mtime(src: &Path, dst: &Path) {
+    if let Ok(t) = fs::metadata(src).and_then(|m| m.modified()) {
+        if let Ok(f) = fs::File::options().write(true).open(dst) {
+            let _ = f.set_modified(t);
+        }
+    }
+}
+
+/// Copies a whole Pictogrep library into `to` (which must be new or empty),
+/// so it can be used without Pictogrep: pictures, collections, the library
+/// state, analysed pictures, followed boards, plugins and their data,
+/// storyboards. Paths that pointed into the old folder (collection links,
+/// JSON state, the vectors) point into the copy. Files keep their dates, so
+/// nothing is analysed again. The copy is made next to `to` and renamed into
+/// place at the end; a failed or cancelled copy leaves nothing behind.
+/// On APFS, Btrfs and XFS the copies share blocks until changed.
+pub fn copy_home(from: &Home, to: &Path, cancel: &std::sync::atomic::AtomicBool, mut progress: impl FnMut(&CopyProgress)) -> Result<Home, String> {
+    use std::sync::atomic::Ordering;
+    if !from.looks_valid() {
+        return Err(format!("{} is not a Pictogrep library", from.root.display()));
+    }
+    let to = clean(to);
+    let src_canon = fs::canonicalize(&from.root).unwrap_or_else(|_| from.root.clone());
+    let to_canon = to.parent().and_then(|p| fs::canonicalize(p).ok()).map(|p| p.join(to.file_name().unwrap_or_default())).unwrap_or_else(|| to.clone());
+    if to_canon.starts_with(&src_canon) || src_canon.starts_with(&to_canon) {
+        return Err("The copy has to go outside Pictogrep's folder (and not around it).".into());
+    }
+    if to.exists() && fs::read_dir(&to).map(|mut d| d.next().is_some()).unwrap_or(true) {
+        return Err(format!("{} is not empty. Choose a new or empty folder.", to.display()));
+    }
+    let entries = walk(&from.root).map_err(|e| format!("Could not read {}: {e}", from.root.display()))?;
+    let mut p = CopyProgress::default();
+    for (_, e) in &entries {
+        if let Entry::File(n) = e {
+            p.total_files += 1;
+            p.total_bytes += n;
+        }
+    }
+    let part = PathBuf::from(format!("{}.copying", to.display()));
+    let _ = fs::remove_dir_all(&part);
+    fs::create_dir_all(&part).map_err(|e| format!("Could not create {}: {e}", part.display()))?;
+    let from_roots = root_spellings(&from.root);
+    let vectors_rel = Path::new("data").join("embeddings-v1.bin");
+    let result = (|| -> Result<(), String> {
+        let mut last = std::time::Instant::now();
+        for (rel, e) in &entries {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".into());
+            }
+            let src = from.root.join(rel);
+            let dst = part.join(rel);
+            match e {
+                Entry::Dir => fs::create_dir_all(&dst).map_err(|e| e.to_string())?,
+                Entry::Link(target) => {
+                    // Links into the old folder point at the same file in the copy (its final place).
+                    let target = if target.is_absolute() { moved(&clean(target), &from_roots, &to).unwrap_or_else(|| target.clone()) } else { target.clone() };
+                    make_link(&target, &dst).map_err(|e| format!("{}: {e}", rel.display()))?;
+                }
+                Entry::File(n) => {
+                    let name = rel.to_string_lossy();
+                    if name.ends_with(".json") {
+                        let text = fs::read_to_string(&src).map_err(|e| format!("{}: {e}", rel.display()))?;
+                        fs::write(&dst, rewrite_json(&text, &from_roots, &to)).map_err(|e| format!("{}: {e}", rel.display()))?;
+                    } else if *rel == vectors_rel {
+                        let mut done = false;
+                        for dims in [512, 768, 1024] {
+                            let found = read_vectors(from, dims);
+                            if !found.is_empty() {
+                                let moved_vecs: HashMap<PathBuf, SharedVector> = found.into_iter().map(|(k, v)| (moved(&k, &from_roots, &to).unwrap_or(k), v)).collect();
+                                write_vectors(&dst, &moved_vecs).map_err(|e| format!("{}: {e}", rel.display()))?;
+                                done = true;
+                                break;
+                            }
+                        }
+                        if !done {
+                            fs::copy(&src, &dst).map_err(|e| format!("{}: {e}", rel.display()))?;
+                        }
+                    } else {
+                        fs::copy(&src, &dst).map_err(|e| format!("{}: {e}", rel.display()))?;
+                    }
+                    keep_mtime(&src, &dst);
+                    p.files += 1;
+                    p.bytes += n;
+                    if last.elapsed() > Duration::from_millis(150) {
+                        progress(&p);
+                        last = std::time::Instant::now();
+                    }
+                }
+            }
+        }
+        // Where this copy came from (Pictogrep ignores the file).
+        let note = json!({ "copiedFrom": from.root, "copiedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) });
+        write_atomic(&part.join("data").join("ateliet-copy.json"), (serde_json::to_string_pretty(&note).unwrap_or_default() + "\n").as_bytes()).map_err(|e| e.to_string())?;
+        if to.exists() {
+            fs::remove_dir(&to).map_err(|e| e.to_string())?;
+        }
+        fs::rename(&part, &to).map_err(|e| format!("Could not move the copy into {}: {e}", to.display()))?;
+        Ok(())
+    })();
+    if let Err(e) = result {
+        let _ = fs::remove_dir_all(&part);
+        return Err(e);
+    }
+    progress(&p);
+    Ok(Home::new(to))
+}
+
+/// Where a library was copied from, if it is a copy made by Ateliet.
+pub fn copied_from(home: &Home) -> Option<String> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(home.data().join("ateliet-copy.json")).ok()?).ok()?;
+    v["copiedFrom"].as_str().map(String::from)
+}
+
+/// Where Ateliet keeps a library of its own by default.
+pub fn own_library_dir() -> PathBuf {
+    dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")).join("ateliet").join("library")
 }
 
 // ── plugins ───────────────────────────────────────────────────────────────
@@ -696,6 +1011,51 @@ mod tests {
         assert_eq!((r.mtime, r.digest, r.vector.clone()), (1234, Some([9; 32]), vec![0.0, 1.0, 2.0]));
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
         let _ = fs::remove_dir_all(&home.root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copies_a_library_with_links_state_and_vectors_moved() {
+        use std::sync::atomic::AtomicBool;
+        let home = temp_home("copy");
+        let pic = home.library().join("cat.png");
+        image::DynamicImage::new_rgb8(4, 4).save(&pic).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        fs::File::options().write(true).open(&pic).unwrap().set_modified(old).unwrap();
+        link(&home, "gatos", &pic).unwrap();
+        library_changed(&home, &[pic.clone()]);
+        fs::write(home.data().join("other.json"), format!("{{\"a\":\"{}-old/x\",\"b\":\"{}\"}}", home.root.display(), pic.display())).unwrap();
+        let mut vecs = HashMap::new();
+        vecs.insert(clean(&pic), SharedVector { mtime: 1_600_000_000, digest: Some([7; 32]), vector: vec![0.5; 512] });
+        write_vectors(&home.data().join("embeddings-v1.bin"), &vecs).unwrap();
+        fs::write(home.data().join("half.json.tmp"), "x").unwrap();
+        let plan = copy_plan(&home).unwrap();
+        assert_eq!((plan.pictures, plan.collections, plan.embeddings), (1, 1, true));
+
+        let dest = std::env::temp_dir().join(format!("ateliet-pg-copy-dest-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dest);
+        assert!(copy_home(&home, &home.root.join("inside"), &AtomicBool::new(false), |_| {}).is_err());
+        let copy = copy_home(&home, &dest, &AtomicBool::new(false), |_| {}).unwrap();
+        let new_pic = copy.library().join("cat.png");
+        assert_eq!(collection_images(&copy, "gatos"), vec![clean(&new_pic)]);
+        assert_eq!(read_state(&copy)["images"][0].as_str().unwrap(), new_pic.to_string_lossy());
+        let other = fs::read_to_string(copy.data().join("other.json")).unwrap();
+        assert!(other.contains(&format!("{}-old/x", home.root.display())) && other.contains(&*new_pic.to_string_lossy()));
+        assert_eq!(fs::metadata(&new_pic).unwrap().modified().unwrap(), old);
+        let v = read_vectors(&copy, 512);
+        assert_eq!(v[&clean(&new_pic)].digest, Some([7; 32]));
+        assert!(!copy.data().join("half.json.tmp").exists());
+        assert_eq!(copied_from(&copy).as_deref(), Some(&*home.root.to_string_lossy()));
+        // The original is untouched, and a second copy into a full folder is refused.
+        assert_eq!(collection_images(&home, "gatos"), vec![clean(&pic)]);
+        assert!(copy_home(&home, &dest, &AtomicBool::new(false), |_| {}).is_err());
+        let _ = fs::remove_dir_all(&home.root);
+        let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn prefix_replacement_respects_path_boundaries() {
+        assert_eq!(replace_prefix("\"/a/pg/x\" \"/a/pg-old\" \"/a/pg\"", "/a/pg", "/b"), "\"/b/x\" \"/a/pg-old\" \"/b\"");
     }
 
     #[test]

@@ -1454,3 +1454,11 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .sb-kind-blurb { font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.35; }
 .sb-kind-warning { white-space: normal; margin-top: 8px; }
 @media (max-width: 640px) { .sb-kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+/* Copying Pictogrep's library into Ateliet */
+.copy-library-modal { width: min(620px, 92vw); }
+.copy-library-modal p { margin-top: 0; color: var(--text-muted); }
+.copy-library-summary { margin: 4px 0 6px; font-weight: 500; }
+.copy-library-progress { height: 6px; border-radius: 3px; background: var(--background-modifier-border); overflow: hidden; margin: 12px 0 6px; }
+.copy-library-fill { height: 100%; width: 0; background: var(--interactive-accent); transition: width 0.15s; }
+.copy-library-status { min-height: 1.4em; }

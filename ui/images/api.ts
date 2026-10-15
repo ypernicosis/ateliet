@@ -88,6 +88,8 @@ export interface SharedInfo {
   home: string | null;
   library?: string;
   running?: boolean;
+  /** Set when the library is a copy Ateliet made: the Pictogrep folder it came from. */
+  copiedFrom?: string | null;
   total?: number;
   unsorted?: number;
   collections?: SharedCollection[];

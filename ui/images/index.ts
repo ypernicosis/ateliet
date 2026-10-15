@@ -15,6 +15,7 @@ import { ImageLibraryView, LIBRARY_VIEW } from "./library.ts";
 import { ImageSearchView, InsertImageModal, PANEL_VIEW } from "./panel.ts";
 import { PLUGIN_VIEW, SharedPluginView } from "./plugins.ts";
 import { PinterestModal, describeJob, renderFollowed } from "./pinterest.ts";
+import { CopyLibraryModal } from "./copylibrary.ts";
 import { MarkdownView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Notice, Setting } from "../obsidian/ui.ts";
@@ -439,6 +440,15 @@ export function imagesSettingsTab(app: any) {
               setTimeout(render, 800);
             }),
         );
+      const own = new Setting(el)
+        .setName("A library of Ateliet's own")
+        .setDesc("Copy everything from Pictogrep's folder (pictures, collections, search data, followed boards, plugins, storyboards) into a folder of Ateliet's own and use it, so Ateliet does not depend on Pictogrep at all.")
+        .addButton((b) => b.setButtonText("Copy library…").onClick(() => new CopyLibraryModal(app, plugin).open()));
+      if (st?.shared) {
+        api.sharedInfo().then((info) => {
+          if (info.copiedFrom) own.setDesc(`In use: Ateliet's own copy, made from ${info.copiedFrom}. Pictogrep keeps its own folder; the two are separate.`);
+        }).catch(() => {});
+      }
       new Setting(el)
         .setName("Pictures added to \"All pictures\" go to")
         .setDesc("Dropping or pasting into a collection or a folder always saves there.")
