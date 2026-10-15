@@ -38,9 +38,11 @@ export async function readBytes(path: string): Promise<ArrayBuffer> {
   return new Uint8Array(r).buffer;
 }
 
-export function writeBytes(path: string, data: ArrayBuffer | Uint8Array): Promise<any> {
+export function writeBytes(path: string, data: ArrayBuffer | Uint8Array, atomic = false): Promise<any> {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  return invoke("fs_write_bytes", bytes, { headers: { "x-path": encodeURIComponent(path) } });
+  const headers: Record<string, string> = { "x-path": encodeURIComponent(path) };
+  if (atomic) headers["x-atomic"] = "1";
+  return invoke("fs_write_bytes", bytes, { headers });
 }
 
 /** Synchronous fs access (for the Node `fs` shim) via sync XHR to the protocol. */

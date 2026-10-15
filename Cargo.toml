@@ -47,6 +47,8 @@ ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "
 sha2 = "0.10"
 unicode-normalization = "0.1"
 url = "2"
+flate2 = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -11,7 +11,7 @@ export interface LivePreviewHost {
   renderMarkdown?(markdown: string, el: HTMLElement): void;
   /** render the note's properties into `el`; returns false if properties are shown as source */
   renderProperties?(el: HTMLElement): boolean;
-  resolveEmbed(linktext: string): { url: string; kind: "image" | "audio" | "video" | "pdf" | "note" | "other" } | null;
+  resolveEmbed(linktext: string): { url: string; kind: "image" | "audio" | "video" | "pdf" | "note" | "other"; render?: (el: HTMLElement) => void } | null;
   isLinkResolved(linktext: string): boolean;
 }
 
@@ -166,7 +166,7 @@ class HrWidget extends WidgetType {
 }
 
 class EmbedWidget extends WidgetType {
-  constructor(readonly url: string, readonly kind: string, readonly alt: string) {
+  constructor(readonly url: string, readonly kind: string, readonly alt: string, readonly render?: (el: HTMLElement) => void) {
     super();
   }
   eq(o: EmbedWidget) {
@@ -175,6 +175,11 @@ class EmbedWidget extends WidgetType {
   toDOM() {
     const span = document.createElement("span");
     span.className = "internal-embed media-embed image-embed is-loaded";
+    if (this.render) {
+      span.className = "internal-embed file-embed is-loaded";
+      this.render(span);
+      return span;
+    }
     if (this.kind === "image") {
       const img = document.createElement("img");
       img.src = this.url;
@@ -308,8 +313,8 @@ function buildLivePreview(view: EditorView): DecorationSet {
             const alias = pipe === -1 ? "" : inner.slice(pipe + 1);
             if (isEmbed && host && !touched(node.from, node.to)) {
               const r = host.resolveEmbed(target);
-              if (r && (r.kind === "image" || r.kind === "audio" || r.kind === "video")) {
-                deco.push(Decoration.replace({ widget: new EmbedWidget(r.url, r.kind, alias) }).range(node.from, node.to));
+              if (r && (r.kind === "image" || r.kind === "audio" || r.kind === "video" || r.render)) {
+                deco.push(Decoration.replace({ widget: new EmbedWidget(r.render ? r.url.replace(/\?\d+$/, "") : r.url, r.kind, alias, r.render) }).range(node.from, node.to));
                 return false;
               }
             }

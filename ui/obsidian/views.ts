@@ -800,7 +800,17 @@ export function liveHost(app: any, sourcePath: () => string, owner?: Component) 
     openLink: (linktext: string, evt: MouseEvent) => app.workspace.openLinkText(linktext, sourcePath(), (window as any).Keymap?.isModEvent?.(evt) || false),
     resolveEmbed: (linktext: string) => {
       const f = app.metadataCache.getFirstLinkpathDest(linktext.split("#")[0], sourcePath());
-      return f ? { url: app.vault.getResourcePath(f), kind: embedKind(f.extension) } : null;
+      if (!f) return null;
+      // Extensions with a registered embed (storyboards…) draw themselves.
+      const creator = f.extension !== "md" ? app.embedRegistry?.embedByExtension?.[f.extension] : null;
+      const render = creator
+        ? (el: HTMLElement) => {
+            const c = creator({ app, containerEl: el, sourcePath: sourcePath(), linktext }, f, "");
+            c?.load?.();
+            c?.loadFile?.();
+          }
+        : undefined;
+      return { url: app.vault.getResourcePath(f), kind: embedKind(f.extension), render };
     },
     isLinkResolved: (linktext: string) => {
       const p = linktext.split("#")[0];
