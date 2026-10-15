@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "strict": false,
+    "noImplicitAny": false
+  },
+  "imports": {
+    "@codemirror/autocomplete": "npm:@codemirror/autocomplete@^6.18.0",
+    "@codemirror/collab": "npm:@codemirror/collab@^6.1.1",
+    "@codemirror/commands": "npm:@codemirror/commands@^6.7.0",
+    "@codemirror/lang-markdown": "npm:@codemirror/lang-markdown@^6.3.0",
+    "@codemirror/language": "npm:@codemirror/language@^6.10.0",
+    "@codemirror/language-data": "npm:@codemirror/language-data@^6.5.1",
+    "@codemirror/lint": "npm:@codemirror/lint@^6.8.0",
+    "@codemirror/search": "npm:@codemirror/search@^6.5.0",
+    "@codemirror/state": "npm:@codemirror/state@^6.4.0",
+    "@codemirror/view": "npm:@codemirror/view@^6.34.0",
+    "@lezer/common": "npm:@lezer/common@^1.2.0",
+    "@lezer/highlight": "npm:@lezer/highlight@^1.2.0",
+    "@lezer/lr": "npm:@lezer/lr@^1.4.0",
+    "@lezer/markdown": "npm:@lezer/markdown@^1.3.0",
+    "js-yaml": "npm:js-yaml@^4.1.0",
+    "lucide": "npm:lucide@^0.460.0",
+    "moment": "npm:moment@^2.30.1",
+    "buffer": "npm:buffer@^6.0.3",
+    "@codemirror/legacy-modes/mode/javascript": "npm:@codemirror/legacy-modes@^6.4.0/mode/javascript"
+  }
+}
