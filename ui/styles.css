@@ -59,6 +59,7 @@ body {
   --ribbon-padding: var(--size-4-1) var(--size-4-1) var(--size-4-3);
   --tab-font-size: var(--font-ui-small);
   --tab-radius: var(--radius-m);
+  --tab-radius-active: 6px 6px 0 0;
   --tab-max-width: 220px;
   --tab-width: 200px;
   --file-line-width: 720px;
@@ -536,20 +537,22 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
 /* tabs */
 .workspace-tabs { display: flex; flex-direction: column; min-width: 0; min-height: 0; position: relative; }
 .workspace-tab-header-container {
-  display: flex; align-items: flex-end; height: var(--header-height); flex: 0 0 var(--header-height);
-  background-color: var(--tab-container-background); border-bottom: 1px solid var(--tab-outline-color);
+  display: flex; height: var(--header-height); flex: 0 0 var(--header-height);
+  background-color: var(--tab-container-background); border-bottom: var(--tab-outline-width) solid var(--tab-outline-color);
   padding: 0 var(--size-4-2); padding-left: calc(var(--size-4-2) + var(--frame-left-space)); gap: 2px; position: relative;
 }
-.workspace-tab-header-container-inner { display: flex; align-items: flex-end; flex: 0 1 auto; min-width: 0; overflow: hidden; gap: 2px; height: 100%; padding-top: 6px; }
+/* As in Obsidian: the tabs fill the row below a 6px gap and overlap the bottom border, and the side
+   padding leaves room for what themes draw around a tab (outlines, shadows, negative margins). */
+.workspace-tab-header-container-inner { display: flex; flex: 0 1 auto; min-width: 0; overflow: hidden; gap: 2px; margin: 6px -8px calc(var(--tab-outline-width) * -1); padding: 1px 8px 0; }
 .workspace-tab-header-spacer { flex: 1 1 auto; height: 100%; }
 .workspace-tab-header-new-tab, .workspace-tab-header-tab-list { display: flex; align-items: center; height: 100%; padding-bottom: 2px; }
 .workspace-tab-header {
-  display: flex; align-items: center; height: calc(var(--header-height) - 8px); flex: 0 1 var(--tab-width); max-width: var(--tab-max-width); min-width: 48px;
-  color: var(--tab-text-color); border-radius: var(--tab-radius) var(--tab-radius) 0 0; font-size: var(--tab-font-size); position: relative;
+  display: flex; align-items: center; flex: 0 1 var(--tab-width); max-width: var(--tab-max-width); min-width: 48px;
+  color: var(--tab-text-color); border-radius: var(--tab-radius-active); font-size: var(--tab-font-size); position: relative;
 }
 .workspace-tab-header-inner { display: flex; align-items: center; gap: var(--size-2-3); padding: 0 var(--size-2-3) 0 var(--size-4-2); width: 100%; height: 100%; min-width: 0; border-radius: var(--radius-s); margin: 0 2px 3px; height: calc(100% - 4px); }
 .workspace-tab-header:not(.is-active):hover .workspace-tab-header-inner { background-color: var(--background-modifier-hover); }
-.workspace-tab-header.is-active { background-color: var(--tab-background-active); color: var(--tab-text-color-active); box-shadow: 0 0 0 1px var(--tab-outline-color); clip-path: inset(-2px -2px 0 -2px); }
+.workspace-tab-header.is-active { background-color: var(--tab-background-active); color: var(--tab-text-color-active); box-shadow: 0 0 0 var(--tab-outline-width) var(--tab-outline-color); }
 .workspace-tabs.mod-active .workspace-tab-header.is-active { color: var(--tab-text-color-focused-active-current); }
 .workspace-tab-header-inner-icon { display: flex; --icon-size: var(--icon-s); opacity: 0.8; }
 .workspace-split.mod-root .workspace-tab-header-inner-icon { display: none; }
@@ -566,8 +569,8 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
 
 /* sidedock tabs: icons only */
 .mod-sidedock .workspace-tab-header-container { padding-left: var(--size-4-2); }
-.mod-sidedock .workspace-tab-header { flex: 0 0 auto; min-width: 0; height: calc(var(--header-height) - 10px); border-radius: var(--radius-s); background: transparent; box-shadow: none; clip-path: none; }
-.mod-sidedock .workspace-tab-header-container-inner { padding-bottom: 5px; align-items: center; padding-top: 0; }
+.mod-sidedock .workspace-tab-header { flex: 0 0 auto; min-width: 0; height: calc(var(--header-height) - 10px); border-radius: var(--radius-s); background: transparent; box-shadow: none; }
+.mod-sidedock .workspace-tab-header-container-inner { margin: 0; padding: 0 0 5px; align-items: center; }
 .mod-sidedock .workspace-tab-header-inner { padding: 0 6px; margin: 0; height: 100%; }
 .mod-sidedock .workspace-tab-header-inner-title, .mod-sidedock .workspace-tab-header-inner-close-button, .mod-sidedock .workspace-tab-header-new-tab, .mod-sidedock .workspace-tab-header-tab-list { display: none; }
 .mod-sidedock .workspace-tab-header.is-active { background-color: var(--background-modifier-hover); color: var(--text-normal); }

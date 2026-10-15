@@ -38,6 +38,9 @@ fn command(dir: &Path, prog: &str, args: &[&str]) -> Command {
         .env("PATH", augmented_path())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        // The log is plain text: no colours from deno, cargo or git.
+        .env("NO_COLOR", "1")
+        .env("CARGO_TERM_COLOR", "never")
         .stdin(Stdio::null());
     c
 }
@@ -93,6 +96,40 @@ fn emit(app: &AppHandle, kind: &str, text: &str) {
     let _ = app.emit("update-progress", json!({ "kind": kind, "text": text }));
 }
 
+/// What a terminal would show of a line: ANSI escape sequences removed, and
+/// only the text after the last carriage return (progress redraws).
+fn plain(line: &str) -> String {
+    let line = line.rsplit('\r').find(|s| !s.is_empty()).unwrap_or("");
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            // CSI: parameters and intermediates up to a final byte in @..~
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if ('@'..='~').contains(&c) {
+                        break;
+                    }
+                }
+            }
+            // OSC (hyperlinks, titles): up to BEL or ESC \
+            Some(']') => {
+                while let Some(c) = chars.next() {
+                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Runs one build step, streaming its output to the windows.
 fn run(app: &AppHandle, dir: &Path, step: &str, prog: &str, args: &[&str]) -> Result<(), String> {
     emit(app, "step", step);
@@ -102,11 +139,12 @@ fn run(app: &AppHandle, dir: &Path, step: &str, prog: &str, args: &[&str]) -> Re
     let a = app.clone();
     let out_thread = std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            emit(&a, "log", &line);
+            emit(&a, "log", &plain(&line));
         }
     });
     let mut tail: Vec<String> = Vec::new();
     for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let line = plain(&line);
         emit(app, "log", &line);
         tail.push(line);
         if tail.len() > 12 {
@@ -202,6 +240,15 @@ mod tests {
     fn sh(dir: &Path, script: &str) {
         let ok = Command::new("sh").arg("-c").arg(script).current_dir(dir).status().unwrap().success();
         assert!(ok, "{script}");
+    }
+
+    #[test]
+    fn plain_drops_escapes_and_progress_redraws() {
+        assert_eq!(plain("\x1b[0m\x1b[36mdist/chunk.js\x1b[0m  \x1b[38;5;245m84.79KB\x1b[0m"), "dist/chunk.js  84.79KB");
+        assert_eq!(plain("\x1b[1m\x1b[32m   Compiling\x1b[0m ateliet v0.1.0"), "   Compiling ateliet v0.1.0");
+        assert_eq!(plain("\x1b]8;;https://a.b\x1b\\link\x1b]8;;\x07 end"), "link end");
+        assert_eq!(plain("Building 1/9\rBuilding 9/9\r"), "Building 9/9");
+        assert_eq!(plain("plain é"), "plain é");
     }
 
     #[test]
