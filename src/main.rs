@@ -32,9 +32,19 @@ fn e2s<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
+fn serve_pool() -> &'static rayon::ThreadPool {
+    static POOL: std::sync::OnceLock<rayon::ThreadPool> = std::sync::OnceLock::new();
+    POOL.get_or_init(|| {
+        let n = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).clamp(4, 12);
+        rayon::ThreadPoolBuilder::new().num_threads(n).thread_name(|i| format!("ateliet-serve-{i}")).build().expect("thread pool")
+    })
+}
+
 #[derive(Default)]
 struct AppState {
     watchers: Mutex<HashMap<String, notify::RecommendedWatcher>>,
+    /// The listing `vault_init` just made, so `vault_metadata_all` need not walk the vault again.
+    listings: Mutex<HashMap<String, Vec<vault::Entry>>>,
 }
 
 // ── configuration ─────────────────────────────────────────────────────────
@@ -181,13 +191,14 @@ struct VaultInfo {
 }
 
 #[tauri::command]
-fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<AppState>, path: String) -> Res<VaultInfo> {
+async fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<'_, AppState>, path: String) -> Res<VaultInfo> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("Vault not found: {path}"));
     }
     remember_vault(&path);
-    let files = vault::list(&root);
+    let files = { let r = root.clone(); tauri::async_runtime::spawn_blocking(move || vault::list(&r)).await.map_err(e2s)? };
+    state.listings.lock().unwrap().insert(path.clone(), files.clone());
 
     // File watcher → batched "vault-fs" events with vault-relative paths.
     let (tx, rx) = mpsc::channel::<PathBuf>();
@@ -235,19 +246,101 @@ fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<AppStat
     Ok(VaultInfo { path, name, files })
 }
 
-/// Parse every markdown file of the vault in parallel.
+/// Changes whenever the parser might: a new build starts from scratch.
+fn meta_cache_version() -> String {
+    format!("ateliet-metadata 2 {} {}", env!("CARGO_PKG_VERSION"), env!("ATELIET_GIT_COMMIT"))
+}
+
+/// One cached note: date, size and its metadata as JSON text (kept as text,
+/// never parsed again on the Rust side).
+struct MetaCacheEntry {
+    mtime: u64,
+    size: u64,
+    meta: String,
+}
+
+/// The cache file: a version line, then one line per note:
+/// `<path as a JSON string>\t<mtime>\t<size>\t<metadata JSON>`.
+fn read_meta_cache(path: &Path) -> HashMap<String, MetaCacheEntry> {
+    let mut out = HashMap::new();
+    let Ok(text) = fs::read_to_string(path) else { return out };
+    let mut lines = text.split('\n');
+    if lines.next() != Some(meta_cache_version().as_str()) {
+        return out;
+    }
+    for line in lines {
+        let mut parts = line.splitn(4, '\t');
+        let (Some(p), Some(m), Some(sz), Some(meta)) = (parts.next(), parts.next(), parts.next(), parts.next()) else { continue };
+        let (Ok(p), Ok(mtime), Ok(size)) = (serde_json::from_str::<String>(p), m.parse(), sz.parse()) else { continue };
+        out.insert(p, MetaCacheEntry { mtime, size, meta: meta.to_string() });
+    }
+    out
+}
+
+fn write_meta_cache(path: &Path, cache: &HashMap<String, MetaCacheEntry>) {
+    let mut text = meta_cache_version();
+    for (p, e) in cache {
+        text.push('\n');
+        text.push_str(&serde_json::to_string(p).unwrap_or_default());
+        text.push_str(&format!("\t{}\t{}\t", e.mtime, e.size));
+        text.push_str(&e.meta);
+    }
+    if let Some(dir) = path.parent() {
+        let _ = fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("tmp");
+    if fs::write(&tmp, text).is_ok() {
+        let _ = fs::rename(&tmp, path);
+    }
+}
+
+/// The metadata of every markdown file of the vault, as one JSON object
+/// (path → {meta, mtime, size}) sent as raw bytes. Notes unchanged since the
+/// last launch (same size and date) come from a cache in the config folder,
+/// like Obsidian's own, without being parsed again; only new or edited ones
+/// are read, in parallel. The cache is written back in the background.
 #[tauri::command]
-async fn vault_metadata_all(path: String) -> Res<Value> {
+async fn vault_metadata_all(state: State<'_, AppState>, path: String, config_dir: Option<String>) -> Res<Response> {
     let root = PathBuf::from(&path);
-    let files: Vec<vault::Entry> = vault::list(&root).into_iter().filter(|e| !e.folder && e.path.to_lowercase().ends_with(".md")).collect();
-    let pairs: Vec<(String, Value)> = files
-        .par_iter()
-        .filter_map(|e| {
-            let text = fs::read_to_string(root.join(&e.path)).ok()?;
-            Some((e.path.clone(), json!({ "meta": metadata::parse(&text), "mtime": e.mtime, "size": e.size })))
-        })
-        .collect();
-    Ok(Value::Object(pairs.into_iter().collect()))
+    let listing = state.listings.lock().unwrap().remove(&path);
+    tauri::async_runtime::spawn_blocking(move || {
+        let files: Vec<vault::Entry> = listing.unwrap_or_else(|| vault::list(&root)).into_iter().filter(|e| !e.folder && e.path.to_lowercase().ends_with(".md")).collect();
+        let cache_path = config_dir.filter(|d| !d.is_empty() && !d.contains("..")).map(|d| root.join(d).join("ateliet").join("metadata-cache.txt"));
+        let mut cache = cache_path.as_deref().map(read_meta_cache).unwrap_or_default();
+        let stale: Vec<&vault::Entry> = files.iter().filter(|e| cache.get(&e.path).is_none_or(|c| c.mtime != e.mtime || c.size != e.size)).collect();
+        let parsed: Vec<(String, MetaCacheEntry)> = stale
+            .par_iter()
+            .filter_map(|e| {
+                let text = fs::read_to_string(root.join(&e.path)).ok()?;
+                let meta = serde_json::to_string(&metadata::parse(&text)).ok()?;
+                Some((e.path.clone(), MetaCacheEntry { mtime: e.mtime, size: e.size, meta }))
+            })
+            .collect();
+        let mut changed = !parsed.is_empty();
+        cache.extend(parsed);
+        let live: HashSet<&str> = files.iter().map(|e| e.path.as_str()).collect();
+        let before = cache.len();
+        cache.retain(|p, _| live.contains(p.as_str()));
+        changed |= cache.len() != before;
+        let mut out = String::with_capacity(cache.values().map(|e| e.meta.len() + 64).sum::<usize>() + 2);
+        out.push('{');
+        for (i, (p, e)) in cache.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
+            }
+            out.push_str(&serde_json::to_string(p).unwrap_or_default());
+            out.push_str(&format!(":{{\"mtime\":{},\"size\":{},\"meta\":", e.mtime, e.size));
+            out.push_str(&e.meta);
+            out.push('}');
+        }
+        out.push('}');
+        if let (true, Some(cp)) = (changed, cache_path) {
+            std::thread::spawn(move || write_meta_cache(&cp, &cache));
+        }
+        Ok(Response::new(out.into_bytes()))
+    })
+    .await
+    .map_err(e2s)?
 }
 
 #[tauri::command]
@@ -731,7 +824,8 @@ fn main() {
         .manage(gallery::Galleries::default())
         .manage(std::sync::Arc::new(pinterest::Downloads::default()))
         .register_asynchronous_uri_scheme_protocol("ateliet", |_ctx, req, responder| {
-            std::thread::spawn(move || responder.respond(serve(req)));
+            // A bounded pool: a wall of 100 previews must not start 100 decoders at once.
+            serve_pool().spawn(move || responder.respond(serve(req)));
         })
         // Pictogrep plugins: their own origin, so a plugin can reach nothing
         // but its files, the SDK and the pictures handed to it.

@@ -93,12 +93,11 @@ export class ImagesPlugin implements ImagesHost {
     this.notes = new NotesDock(app, this);
     app.workspace.onLayoutReady(() => this.afterLayout());
 
-    try {
-      const st = await api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto, this.settings.shared);
-      this.onStatus(st);
-    } catch (e) {
-      console.error("images", e);
-    }
+    // The library opens in the background: the window does not wait for it
+    // (its status arrives as soon as it is known).
+    api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto, this.settings.shared)
+      .then((st) => this.onStatus(st))
+      .catch((e) => console.error("images", e));
   }
 
   onDisable() {

@@ -38,10 +38,12 @@
 
 ## Fluxo de inicialização (`ui/main.ts`)
 
-1. `vault_init` (Rust): lista arquivos e inicia o watcher do vault.
-2. `App` é criado, `app.json`/`appearance.json` são carregados e os core plugins registrados.
+1. `vault_init` (Rust, fora da thread principal): lista arquivos e inicia o watcher do vault. A listagem fica guardada para o passo 4 não percorrer o vault de novo.
+2. `App` é criado, `app.json`/`appearance.json` são carregados e os core plugins registrados. A leitura dos metadados (passo 4) já começa aqui, em paralelo.
 3. Tema, snippets e variáveis CSS (fonte, cor de destaque) são aplicados.
-4. `vault_metadata_all` (Rust, em paralelo) monta o `MetadataCache` e os links são resolvidos.
+4. `vault_metadata_all` (Rust) devolve os metadados de todas as notas como bytes JSON prontos. As notas com a mesma data e o mesmo tamanho da última vez vêm de `.obsidian/ateliet/metadata-cache.txt`, que guarda o JSON de cada nota como texto e nunca é reinterpretado no Rust. Só as novas ou editadas são lidas, em paralelo, e o cache é regravado em segundo plano. Um build novo começa do zero (a versão do cache inclui o commit). Na resolução de links, uma passada completa memoriza o destino de cada texto de link por pasta.
+- Comandos Tauri síncronos rodam na thread principal no macOS e travam a janela inteira. Por isso os que podem demorar (vault, biblioteca de imagens, coleções, plugins do Pictogrep) são `async`. A biblioteca de imagens abre sem que o boot espere por ela. O modelo CLIP só é carregado quando uma imagem realmente precisa de vetor novo. As miniaturas menores saem da miniatura de 480 px em cache, e o protocolo `ateliet://` atende num pool limitado de threads.
+- O console registra o tempo de cada etapa (`[ateliet] boot …`, `[ateliet] metadata: …`) para achar o que deixa um vault lento para abrir.
 5. Os core plugins são ligados conforme o `core-plugins.json`.
 6. Os plugins da comunidade carregam, na ordem do `community-plugins.json`.
 7. O layout é carregado (`.obsidian/ateliet/workspace.json`, ou o `workspace.json` do Obsidian na primeira vez) e `onLayoutReady` é disparado.

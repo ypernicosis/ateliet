@@ -179,16 +179,30 @@ export class MetadataCache extends Events {
     }
   }
 
+  private prefetched: Promise<ArrayBuffer> | null = null;
+
+  /** Starts reading the notes' metadata (the cache, or parsing) while the rest of the app loads. */
+  /** @internal */ prefetch(): Promise<ArrayBuffer> {
+    return (this.prefetched ||= invoke<ArrayBuffer>("vault_metadata_all", { path: this.vault.adapter.basePath, configDir: this.vault.configDir }));
+  }
+
   /** @internal */ async initialize(): Promise<void> {
     for (const f of this.vault.getFiles()) this.indexName(f, true);
-    const all = await invoke<Record<string, any>>("vault_metadata_all", { path: this.vault.adapter.basePath });
+    const t0 = performance.now();
+    const raw = await (this.prefetched || this.prefetch());
+    this.prefetched = null;
+    const tr = performance.now();
+    const all: Record<string, any> = JSON.parse(new TextDecoder().decode(raw));
+    const t1 = performance.now();
     for (const path in all) {
       const { meta, mtime, size } = all[path];
       this.fileCache[path] = { mtime, size, hash: path };
       this.metadataCache[path] = meta;
     }
     this.initialized = true;
+    const t2 = performance.now();
     this.resolveAll();
+    console.info(`[ateliet] metadata: wait ${Math.round(tr - t0)} ms, parse ${Math.round(t1 - tr)} ms (${(raw.byteLength / 1e6).toFixed(1)} MB), store ${Math.round(t2 - t1)} ms, resolve links ${Math.round(performance.now() - t2)} ms`);
     this.registerVaultEvents();
   }
 
@@ -267,7 +281,17 @@ export class MetadataCache extends Events {
       const lp = getLinkpath(ref.link);
       if (!lp) return;
       keys.add(linkKey(lp));
-      const dest = this.getFirstLinkpathDest(lp, path);
+      let dest: TFile | null;
+      const memo = this.resolveMemo;
+      if (memo) {
+        // During a full pass the vault does not change: a link text resolves the same from every note of a folder.
+        const key = (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "") + "\0" + lp;
+        dest = memo.get(key) ?? null;
+        if (!memo.has(key)) {
+          dest = this.getFirstLinkpathDest(lp, path);
+          memo.set(key, dest);
+        }
+      } else dest = this.getFirstLinkpathDest(lp, path);
       if (dest) resolved[dest.path] = (resolved[dest.path] || 0) + 1;
       else unresolved[lp] = (unresolved[lp] || 0) + 1;
     });
@@ -305,8 +329,15 @@ export class MetadataCache extends Events {
     this.trigger("resolved");
   }
 
+  private resolveMemo: Map<string, TFile | null> | null = null;
+
   /** @internal */ resolveAll() {
-    for (const path in this.fileCache) this.resolveFile(path);
+    this.resolveMemo = new Map();
+    try {
+      for (const path in this.fileCache) this.resolveFile(path);
+    } finally {
+      this.resolveMemo = null;
+    }
     this.resolved = true;
     this.trigger("resolved");
   }

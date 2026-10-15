@@ -476,20 +476,24 @@ impl Gallery {
                 batch
             };
             announced_idle = false;
-            let Some(model) = self.model.get() else {
+            if !self.process(batch) {
+                // The model is needed but could not be loaded: try again later.
                 let mut lib = self.lib.lock().unwrap();
                 lib.working = false;
                 drop(lib);
                 self.emit_status();
                 std::thread::sleep(Duration::from_secs(5));
                 continue;
-            };
-            self.process(&model, batch);
+            }
             self.emit_status();
         }
     }
 
-    fn process(&self, model: &Clip, batch: Vec<ImageEntry>) {
+    /// Analyses a batch. The model (two ONNX sessions, about 300 MB) is
+    /// loaded only when a picture really needs it: vectors Pictogrep or an
+    /// earlier name already has, and pictures that cannot be decoded, do not.
+    /// Returns false when the model was needed and could not be loaded.
+    fn process(&self, batch: Vec<ImageEntry>) -> bool {
         // Content digests first: a renamed or moved picture gets its old
         // vector back without being analysed again.
         let digests: Vec<Option<[u8; 32]>> = pool().install(|| batch.par_iter().map(|e| images::file_digest(Path::new(&e.abs)).ok()).collect());
@@ -533,7 +537,7 @@ impl Gallery {
             drop(shared);
         }
         if todo.is_empty() {
-            return;
+            return true;
         }
         let thumbs = thumb_dir();
         let prepared: Vec<Option<Vec<f32>>> = pool().install(|| todo
@@ -553,6 +557,14 @@ impl Gallery {
             })
             .collect());
         let inputs: Vec<Vec<f32>> = prepared.iter().flatten().cloned().collect();
+        if inputs.is_empty() {
+            let mut lib = self.lib.lock().unwrap();
+            for (e, _) in &todo {
+                lib.failed.insert(e.key.clone());
+            }
+            return true;
+        }
+        let Some(model) = self.model.get() else { return false };
         let vectors = match model.embed_images(&inputs) {
             Ok(v) => v,
             Err(err) => {
@@ -561,7 +573,7 @@ impl Gallery {
                 for (e, _) in &todo {
                     lib.failed.insert(e.key.clone());
                 }
-                return;
+                return true;
             }
         };
         let mut vectors = vectors.into_iter();
@@ -584,6 +596,7 @@ impl Gallery {
         if lib.last_save.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
             self.save(&mut lib);
         }
+        true
     }
 }
 
@@ -624,7 +637,7 @@ fn resolve_shared(setting: &str) -> Option<Home> {
 }
 
 #[tauri::command]
-pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries>, vault: String, config_dir: String, external: Vec<String>, auto: bool, shared: String) -> Res<Status> {
+pub async fn images_open(app: AppHandle, window: tauri::Window, state: State<'_, Galleries>, vault: String, config_dir: String, external: Vec<String>, auto: bool, shared: String) -> Res<Status> {
     state.close(window.label());
     let root = PathBuf::from(&vault);
     let index_path = root.join(&config_dir).join("ateliet").join("images").join("index.bin");
@@ -661,7 +674,7 @@ pub fn images_open(app: AppHandle, window: tauri::Window, state: State<Galleries
 }
 
 #[tauri::command]
-pub fn images_configure(window: tauri::Window, state: State<Galleries>, external: Vec<String>, auto: bool, shared: String) -> Res<()> {
+pub async fn images_configure(window: tauri::Window, state: State<'_, Galleries>, external: Vec<String>, auto: bool, shared: String) -> Res<()> {
     let g = state.get(window.label())?;
     let shared = resolve_shared(&shared);
     crate::shared::set_home(shared.clone());
@@ -692,7 +705,7 @@ pub fn images_configure(window: tauri::Window, state: State<Galleries>, external
 
 /// Vault-relative paths reported by the vault watcher.
 #[tauri::command]
-pub fn images_refresh(window: tauri::Window, state: State<Galleries>, paths: Vec<String>) -> Res<()> {
+pub async fn images_refresh(window: tauri::Window, state: State<'_, Galleries>, paths: Vec<String>) -> Res<()> {
     let g = state.get(window.label())?;
     let abs: Vec<PathBuf> = paths.iter().map(|p| g.vault.join(p)).collect();
     std::thread::spawn(move || g.refresh(abs));
@@ -700,14 +713,14 @@ pub fn images_refresh(window: tauri::Window, state: State<Galleries>, paths: Vec
 }
 
 #[tauri::command]
-pub fn images_rescan(window: tauri::Window, state: State<Galleries>) -> Res<()> {
+pub async fn images_rescan(window: tauri::Window, state: State<'_, Galleries>) -> Res<()> {
     let g = state.get(window.label())?;
     std::thread::spawn(move || g.rescan());
     Ok(())
 }
 
 #[tauri::command]
-pub fn images_status(window: tauri::Window, state: State<Galleries>) -> Res<Status> {
+pub async fn images_status(window: tauri::Window, state: State<'_, Galleries>) -> Res<Status> {
     Ok(state.get(window.label())?.status())
 }
 
@@ -718,7 +731,7 @@ pub fn images_model_download(app: AppHandle, state: State<Galleries>) {
 
 /// Analyse every picture again (keeps nothing but the dimensions).
 #[tauri::command]
-pub fn images_reindex(window: tauri::Window, state: State<Galleries>) -> Res<()> {
+pub async fn images_reindex(window: tauri::Window, state: State<'_, Galleries>) -> Res<()> {
     let g = state.get(window.label())?;
     {
         let mut lib = g.lib.lock().unwrap();
@@ -889,7 +902,7 @@ pub struct FolderInfo {
 
 /// Folders that directly contain pictures, with a cover (the newest picture).
 #[tauri::command]
-pub fn images_folders(window: tauri::Window, state: State<Galleries>) -> Res<Vec<FolderInfo>> {
+pub async fn images_folders(window: tauri::Window, state: State<'_, Galleries>) -> Res<Vec<FolderInfo>> {
     let g = state.get(window.label())?;
     let lib = g.lib.lock().unwrap();
     let mut map: HashMap<&str, FolderInfo> = HashMap::new();
@@ -922,7 +935,13 @@ pub fn serve_thumbnail(path: &str, width: u32) -> Option<(Vec<u8>, &'static str)
         let t = sniff(&bytes);
         return Some((bytes, t));
     }
-    let img = images::open_oriented(abs).ok()?;
+    // A smaller preview comes from the cached larger one when there is one
+    // (decoding a 480 px JPEG instead of the full picture).
+    let larger = (max < THUMB_SIZE).then(|| images::thumbnail_path(&thumb_dir(), abs, mtime, meta.len(), THUMB_SIZE)).filter(|p| p.exists());
+    let img = match larger.and_then(|p| image::open(p).ok()) {
+        Some(img) => img,
+        None => images::open_oriented(abs).ok()?,
+    };
     let (bytes, t) = images::thumbnail(&img, max);
     if let Some(dir) = tp.parent() {
         let _ = fs::create_dir_all(dir);
