@@ -1,0 +1,6 @@
+# O crate `ort` baixa binários pré-compilados do ONNX Runtime feitos para
+# macOS 13.4. Se o linker usar um alvo mais antigo (o padrão do Rust é 11.0),
+# o macOS emite avisos "built for newer 'macOS' version" para cada objeto.
+# Alinhar o alvo de deploy evita os avisos e a mistura de versões no binário.
+[env]
+MACOSX_DEPLOYMENT_TARGET = { value = "13.4", force = false }
