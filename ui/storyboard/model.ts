@@ -111,6 +111,12 @@ export interface Onion {
   opacity: number;
   /** Earlier frames reddish, later ones greenish. */
   tint: boolean;
+  colorBefore: string;
+  colorAfter: string;
+  /** Farther frames fainter. */
+  fade: boolean;
+  /** Picture layers too (not only drawing). */
+  pictures: boolean;
 }
 
 export interface Board {
@@ -215,7 +221,7 @@ export function newBoard(o: NewBoardOptions): Board {
     palette: [...DEFAULT_PALETTE],
     recent: [],
     guides: { thirds: false, center: false, safe: false, grid: 0, mirror: false },
-    onion: { enabled: false, before: 1, after: 1, opacity: 0.3, tint: true },
+    onion: { enabled: false, before: 1, after: 1, opacity: 0.3, tint: true, colorBefore: "#d0453b", colorAfter: "#2f9e5a", fade: true, pictures: false },
     created: now,
     modified: now,
   };

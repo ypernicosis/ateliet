@@ -8,6 +8,7 @@ import { Editor } from "./editor.ts";
 import { Frame, Layer, frameStarts, newLayer, timecode, totalFrames, uid } from "./model.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
+import { openPopover } from "./popover.ts";
 
 export const SHOTS = ["", "Extreme wide", "Wide", "Full", "Medium wide", "Medium", "Medium close-up", "Close-up", "Extreme close-up", "Over the shoulder", "Point of view", "Insert", "Two shot", "Establishing"];
 export const CAMERA = ["", "Static", "Pan left", "Pan right", "Tilt up", "Tilt down", "Dolly in", "Dolly out", "Truck left", "Truck right", "Crane up", "Crane down", "Zoom in", "Zoom out", "Handheld", "Tracking", "Whip pan", "Rack focus"];
@@ -63,7 +64,8 @@ export class Timeline {
     fps.addEventListener("change", () => this.ed.mutate("Frame rate", (b) => (b.fps = Number(fps.value))));
     bar.createDiv("sb-spacer");
     this.onionBtn = btn("layers-3", "Onion skin (O): see the frames before and after", () => this.toggleOnion());
-    btn("settings-2", "Onion skin settings", (e) => this.onionMenu(e));
+    const onionSettings = btn("chevron-down", "Onion skin settings: frames, opacity, colours", () => this.onionPanel(onionSettings));
+    onionSettings.addClass("sb-caret");
     btn("plus", "New frame (Ctrl/Cmd+Enter)", () => this.ed.newFrame());
     btn("copy-plus", "Duplicate frame", () => this.duplicate(this.ed.frame));
     const zoom = bar.createEl("input", { type: "range", cls: "sb-timeline-zoom", attr: { min: "0", max: "100", value: "0", "aria-label": "Timeline zoom" } });
@@ -147,6 +149,12 @@ export class Timeline {
       clip.style.left = `${starts[i] * k}px`;
       clip.style.width = `${Math.max(8, f.duration * k - 2)}px`;
       clip.toggleClass("is-active", f === this.ed.frame);
+      const cur = this.ed.frameIndex, on = b.onion;
+      if (on.enabled && ((i < cur && cur - i <= on.before) || (i > cur && i - cur <= on.after))) {
+        clip.addClass("in-onion");
+        clip.style.setProperty("--sb-onion", i < cur ? on.colorBefore : on.colorAfter);
+        clip.setAttr("aria-label", "Shown as onion skin");
+      }
       if (f.color) clip.style.setProperty("--sb-label", f.color);
       const url = this.thumb(f);
       if (url) clip.createEl("img", { attr: { src: url, draggable: "false" } });
@@ -320,29 +328,88 @@ export class Timeline {
   // ── onion skin ──────────────────────────────────────────────────────────
 
   toggleOnion() {
-    this.ed.board.onion.enabled = !this.ed.board.onion.enabled;
-    this.ed.changed();
-    this.ed.refreshFrame();
-  }
-
-  private onionMenu(e: MouseEvent) {
     const o = this.ed.board.onion;
-    const m = new Menu();
-    for (const n of [1, 2, 3]) m.addItem((i) => i.setTitle(`${n} before`).setChecked(o.before === n).onClick(() => this.setOnion({ before: n })));
-    m.addItem((i) => i.setTitle("None before").setChecked(o.before === 0).onClick(() => this.setOnion({ before: 0 })));
-    m.addSeparator();
-    for (const n of [1, 2, 3]) m.addItem((i) => i.setTitle(`${n} after`).setChecked(o.after === n).onClick(() => this.setOnion({ after: n })));
-    m.addItem((i) => i.setTitle("None after").setChecked(o.after === 0).onClick(() => this.setOnion({ after: 0 })));
-    m.addSeparator();
-    for (const v of [0.15, 0.3, 0.5]) m.addItem((i) => i.setTitle(`Opacity ${Math.round(v * 100)}%`).setChecked(Math.abs(o.opacity - v) < 0.01).onClick(() => this.setOnion({ opacity: v })));
-    m.addItem((i) => i.setTitle("Tint (earlier red, later green)").setChecked(o.tint).onClick(() => this.setOnion({ tint: !o.tint })));
-    m.showAtMouseEvent(e);
+    o.enabled = !o.enabled;
+    if (o.enabled && this.ed.board.frames.length < 2) new Notice("Onion skin shows the frames before and after this one, faintly. Add a frame (+ in the timeline, or Ctrl/Cmd+Enter) to draw over this one.", 7000);
+    this.afterOnion();
   }
 
-  private setOnion(p: Partial<typeof this.ed.board.onion>) {
-    Object.assign(this.ed.board.onion, p, { enabled: true });
+  private afterOnion() {
     this.ed.changed();
     this.ed.refreshFrame();
+    this.ed.trigger("onion");
+    this.render();
+  }
+
+  /** The onion skin settings, as a panel (sliders and colours, not a menu). */
+  onionPanel(anchor: HTMLElement) {
+    openPopover(anchor, (el) => {
+      const o = this.ed.board.onion;
+      el.addClass("sb-onion-panel");
+      const head = el.createDiv("sb-pop-head");
+      head.createSpan({ cls: "sb-pop-title", text: "Onion skin" });
+      const sw = head.createEl("label", { cls: "sb-switch", attr: { "aria-label": "On / off (O)" } });
+      const cb = sw.createEl("input", { type: "checkbox" });
+      cb.checked = o.enabled;
+      sw.createSpan("sb-switch-track");
+      cb.addEventListener("change", () => {
+        if (cb.checked !== o.enabled) this.toggleOnion();
+      });
+      el.createDiv({ cls: "sb-hint sb-pop-desc", text: "The frames around this one, faint, to draw the next pose or check motion." });
+      const slider = (label: string, min: number, max: number, step: number, value: number, fmt: (v: number) => string, set: (v: number) => void) => {
+        const row = el.createDiv("sb-pop-row");
+        row.createSpan({ cls: "sb-pop-label", text: label });
+        const input = row.createEl("input", { type: "range", attr: { min: String(min), max: String(max), step: String(step), value: String(value) } });
+        const out = row.createSpan({ cls: "sb-pop-value", text: fmt(value) });
+        input.addEventListener("input", () => {
+          const v = Number(input.value);
+          out.setText(fmt(v));
+          set(v);
+          o.enabled = true;
+          cb.checked = true;
+          this.ed.invalidate();
+        });
+        input.addEventListener("change", () => this.afterOnion());
+      };
+      const frames = (n: number) => (n === 0 ? "none" : `${n} ${n === 1 ? "frame" : "frames"}`);
+      slider("Before", 0, 5, 1, o.before, frames, (v) => (o.before = v));
+      slider("After", 0, 5, 1, o.after, frames, (v) => (o.after = v));
+      slider("Opacity", 5, 80, 1, Math.round(o.opacity * 100), (v) => `${v}%`, (v) => (o.opacity = v / 100));
+      const colors = el.createDiv("sb-pop-row");
+      colors.createSpan({ cls: "sb-pop-label", text: "Colours" });
+      const tint = colors.createEl("label", { cls: "sb-pop-check" });
+      const tcb = tint.createEl("input", { type: "checkbox" });
+      tcb.checked = o.tint;
+      tint.appendText("tint");
+      tcb.addEventListener("change", () => {
+        o.tint = tcb.checked;
+        this.afterOnion();
+      });
+      for (const [key, label] of [["colorBefore", "Before"], ["colorAfter", "After"]] as const) {
+        const c = colors.createEl("input", { type: "color", attr: { "aria-label": `${label} colour` } });
+        c.value = o[key];
+        c.addEventListener("input", () => {
+          o[key] = c.value;
+          o.tint = tcb.checked = true;
+          this.ed.invalidate();
+        });
+        c.addEventListener("change", () => this.afterOnion());
+      }
+      const checks = el.createDiv("sb-pop-checks");
+      const check = (label: string, value: boolean, set: (v: boolean) => void, title: string) => {
+        const lab = checks.createEl("label", { cls: "sb-pop-check", attr: { title } });
+        const c = lab.createEl("input", { type: "checkbox" });
+        c.checked = value;
+        lab.appendText(label);
+        c.addEventListener("change", () => {
+          set(c.checked);
+          this.afterOnion();
+        });
+      };
+      check("Farther frames fainter", o.fade !== false, (v) => (o.fade = v), "Each step away halves the opacity");
+      check("Include picture layers", !!o.pictures, (v) => (o.pictures = v), "Off: only what was drawn");
+      el.createDiv({ cls: "sb-hint sb-pop-desc", text: "Never exported. Layers shown in every frame are left out (they would only blur)." });
+    });
   }
 
   // ── editing frames ──────────────────────────────────────────────────────

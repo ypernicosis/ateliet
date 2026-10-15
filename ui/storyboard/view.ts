@@ -23,7 +23,8 @@ import { FileView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
 import { TFile } from "../obsidian/vault.ts";
-import { fileUrl, invoke } from "../tauri.ts";
+import { currentWindow, fileUrl, invoke } from "../tauri.ts";
+import { closePopover } from "./popover.ts";
 
 export const STORYBOARD_VIEW = "storyboard";
 const TOOLS_KEY = "ateliet-storyboard-tools";
@@ -64,6 +65,11 @@ export class StoryboardView extends FileView {
   private activePointer: number | null = null;
   private clipboard: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
   private lastTraceMode: TraceMode = "photo";
+  private focus: { parent: HTMLElement; next: Node | null; osFullscreen: boolean } | null = null;
+  private focusBar!: HTMLElement;
+  private focusBtn!: HTMLElement;
+  private onionBtn!: HTMLElement;
+  private side!: HTMLElement;
 
   getViewType() {
     return STORYBOARD_VIEW;
@@ -112,6 +118,7 @@ export class StoryboardView extends FileView {
   private async close() {
     const ed = this.ed;
     if (!ed) return;
+    if (this.focus) await this.setFocus(false);
     ed.commitFloating();
     await ed.save();
     this.refs?.destroy();
@@ -125,15 +132,16 @@ export class StoryboardView extends FileView {
   // ── building the view ───────────────────────────────────────────────────
 
   private build(doc: StoryDoc) {
-    const root = (this.root = this.contentEl.createDiv("sb-root"));
+    const root = (this.root = this.contentEl.createDiv({ cls: "sb-root", attr: { "data-tauri-drag-region": "" } }));
     const bar = root.createDiv("sb-toolbar");
     const main = root.createDiv("sb-main");
     this.toolsEl = main.createDiv("sb-tools");
     const center = main.createDiv("sb-center");
     this.stage = center.createDiv({ cls: "sb-stage", attr: { tabindex: "0" } });
     const handle = main.createDiv({ cls: "sb-side-handle", attr: { "aria-label": "Drag to resize" } });
-    const side = main.createDiv("sb-side");
+    const side = (this.side = main.createDiv("sb-side"));
     this.dragWidth(handle, side);
+    this.focusBar = center.createDiv("sb-focusbar");
     const ed = (this.ed = new Editor(doc, this.stage));
     ed.app = this.app;
 
@@ -160,6 +168,14 @@ export class StoryboardView extends FileView {
     ed.on("board", () => this.updateTraceButton());
     ed.on("frame", () => this.updateTraceButton());
     ed.on("selection", () => this.renderOptions());
+    ed.on("onion", () => this.updateOnion());
+    ed.on("board", () => this.updateOnion());
+    ed.on("frame", () => this.renderFocusBar());
+    ed.on("history", () => this.renderFocusBar());
+    // Another tab coming forward leaves focus mode (it covers the whole window).
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf: any) => {
+      if (this.focus && leaf && leaf !== this.leaf) this.setFocus(false);
+    }));
 
     this.bindStage();
     this.setTool(this.toolId);
@@ -184,12 +200,20 @@ export class StoryboardView extends FileView {
     handle.addEventListener("pointerdown", (e) => {
       try { handle.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
       const x0 = e.clientX, w0 = side.getBoundingClientRect().width;
-      const move = (ev: PointerEvent) => (side.style.width = `${Math.max(200, Math.min(900, w0 - (ev.clientX - x0)))}px`);
+      // In focus mode the reference can sit on either side and is sized in percent.
+      const dir = this.focus && this.root.hasClass("ref-left") ? 1 : -1;
+      const total = side.parentElement!.getBoundingClientRect().width;
+      const move = (ev: PointerEvent) => {
+        const w = w0 + dir * (ev.clientX - x0);
+        if (this.focus) side.style.width = `${Math.max(15, Math.min(80, (w / total) * 100))}%`;
+        else side.style.width = `${Math.max(200, Math.min(900, w))}px`;
+      };
       const up = () => {
         handle.removeEventListener("pointermove", move);
         handle.removeEventListener("pointerup", up);
         try {
-          localStorage.setItem("ateliet-storyboard-side", String(Math.round(side.getBoundingClientRect().width)));
+          if (this.focus) localStorage.setItem("ateliet-storyboard-focus-ref", side.style.width);
+          else localStorage.setItem("ateliet-storyboard-side", String(Math.round(side.getBoundingClientRect().width)));
         } catch {
           /* private mode */
         }
@@ -240,11 +264,15 @@ export class StoryboardView extends FileView {
     this.button(bar, "grid-3x3", "Guides and grid", (e) => this.guidesMenu(e));
     bar.createDiv("sb-sep");
     this.traceBtn = this.button(bar, "scan-line", "Trace (T shows/hides · hold Q to peek · Shift+T display)", (e) => this.traceMenu(e));
+    this.onionBtn = this.button(bar, "layers-3", "Onion skin (O): the frames before and after, faint", () => this.timeline?.toggleOnion());
+    const onionMore = this.button(bar, "chevron-down", "Onion skin settings", () => this.timeline?.onionPanel(onionMore));
+    onionMore.addClass("sb-caret");
     bar.createDiv("sb-sep");
+    this.focusBtn = this.button(bar, "focus", "Focus (Tab): only the drawing and the reference", () => this.setFocus(!this.focus));
     this.button(bar, "import", "Import (Clip Studio, pictures, Pictogrep drawings)", (e) => this.importMenu(e));
     this.button(bar, "share", "Export (PNG frames, contact sheet, Pictogrep, video)", (e) => this.exportMenu(e));
     this.button(bar, "settings", "Storyboard settings (size, infinite canvas, paper, fps)", () => this.editSettings());
-    this.button(bar, "panel-right", "Show or hide references and layers (Tab) · timeline (Shift+Tab)", () => this.root.toggleClass("hide-side", !this.root.hasClass("hide-side")));
+    this.button(bar, "panel-right", "Show or hide references and layers · timeline: Shift+Tab", () => this.root.toggleClass("hide-side", !this.root.hasClass("hide-side")));
     this.statusEl = bar.createDiv("sb-status");
   }
 
@@ -294,6 +322,114 @@ export class StoryboardView extends FileView {
     this.colorPop = { el, panel };
   }
 
+  // ── focus mode ──────────────────────────────────────────────────────────
+  //
+  // Only the drawing and the reference, side by side, over the whole window:
+  // Ateliet's tabs and sidebars, the toolbar, the timeline and the layers go
+  // away; the slim tool column and a small floating bar stay. Tab or Esc
+  // come back. The reference can sit left or right and the divider moves.
+
+  get inFocus() {
+    return !!this.focus;
+  }
+
+  async setFocus(on: boolean) {
+    if (on === !!this.focus || !this.ed) return;
+    closePopover();
+    if (on) {
+      this.focus = { parent: this.root.parentElement!, next: this.root.nextSibling, osFullscreen: false };
+      document.body.appendChild(this.root);
+      this.root.addClass("sb-focus");
+      let left = false, width = "42%";
+      try {
+        left = localStorage.getItem("ateliet-storyboard-focus-left") === "1";
+        width = localStorage.getItem("ateliet-storyboard-focus-ref") || width;
+      } catch {
+        /* private mode */
+      }
+      this.root.toggleClass("ref-left", left);
+      this.side.style.width = width;
+    } else {
+      const f = this.focus!;
+      this.focus = null;
+      if (f.osFullscreen) await currentWindow().setFullscreen(false).catch(() => {});
+      this.root.removeClass("sb-focus", "ref-left");
+      if (f.parent.isConnected) f.parent.insertBefore(this.root, f.next && f.next.parentNode === f.parent ? f.next : null);
+      else this.contentEl.appendChild(this.root);
+      let w = 0;
+      try {
+        w = Number(localStorage.getItem("ateliet-storyboard-side") || 0);
+      } catch {
+        /* private mode */
+      }
+      this.side.style.width = w ? `${w}px` : "";
+    }
+    this.focusBtn?.toggleClass("is-active", !!this.focus);
+    this.renderFocusBar();
+    this.stage.focus({ preventScroll: true });
+  }
+
+  private async toggleOsFullscreen() {
+    if (!this.focus) return;
+    const win = currentWindow();
+    const now = await win.isFullscreen().catch(() => false);
+    await win.setFullscreen(!now).catch(() => {});
+    this.focus.osFullscreen = !now;
+    this.renderFocusBar();
+  }
+
+  private renderFocusBar() {
+    const bar = this.focusBar;
+    if (!bar || !this.ed) return;
+    bar.empty();
+    if (!this.focus) return;
+    const ed = this.ed;
+    const b = (icon: string, label: string, fn: () => void, active = false, disabled = false) => {
+      const x = bar.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
+      setIcon(x, icon);
+      x.toggleClass("is-active", active);
+      x.toggleClass("mod-disabled", disabled);
+      x.addEventListener("click", () => !disabled && fn());
+      return x;
+    };
+    b("minimize-2", "Leave focus (Tab or Esc)", () => this.setFocus(false));
+    bar.createDiv("sb-sep");
+    b("undo-2", "Undo (Ctrl/Cmd+Z)", () => ed.undo(), false, !ed.history.canUndo);
+    b("redo-2", "Redo", () => ed.redo(), false, !ed.history.canRedo);
+    const brush = this.settings.brushes[this.toolId as BrushKind];
+    if (brush) {
+      bar.createDiv("sb-sep");
+      this.slider(bar, "", 0.5, 500, brush.size, (v) => (v < 10 ? v.toFixed(1) : String(Math.round(v))), (v) => (brush.size = v), true);
+    }
+    bar.createDiv("sb-sep");
+    const traces = ed.layers.filter((l) => l.kind === "trace");
+    b("scan-line", "Trace (T)", () => this.toggleTrace(), traces.some((l) => l.visible));
+    b("layers-3", "Onion skin (O)", () => this.timeline?.toggleOnion(), ed.board.onion.enabled);
+    b("flip-horizontal-2", "Mirror the view (F)", () => ed.setMirror(!ed.view.mirror), ed.view.mirror);
+    bar.createDiv("sb-sep");
+    b("chevron-left", "Previous frame (↑ or ,)", () => this.timeline?.go(ed.frameIndex - 1), false, ed.frameIndex === 0);
+    bar.createDiv({ cls: "sb-focus-frame", text: `${ed.frameIndex + 1} / ${ed.board.frames.length}` });
+    b("chevron-right", "Next frame (↓ or .)", () => this.timeline?.go(ed.frameIndex + 1), false, ed.frameIndex >= ed.board.frames.length - 1);
+    b("plus", "New frame (Ctrl/Cmd+Enter)", () => ed.newFrame());
+    bar.createDiv("sb-sep");
+    b("arrow-left-right", "Reference on the other side", () => {
+      const left = !this.root.hasClass("ref-left");
+      this.root.toggleClass("ref-left", left);
+      try {
+        localStorage.setItem("ateliet-storyboard-focus-left", left ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+    });
+    b(this.focus.osFullscreen ? "shrink" : "expand", this.focus.osFullscreen ? "Leave full screen" : "Full screen", () => this.toggleOsFullscreen(), this.focus.osFullscreen);
+  }
+
+  private updateOnion() {
+    if (!this.ed || !this.onionBtn) return;
+    this.onionBtn.toggleClass("is-active", this.ed.board.onion.enabled);
+    this.renderFocusBar();
+  }
+
   private setStatus(s: string) {
     this.statusEl?.setText(s);
     this.statusEl?.toggleClass("is-dirty", s !== "Saved");
@@ -328,6 +464,7 @@ export class StoryboardView extends FileView {
     this.stage.style.cursor = t.cursor || "";
     this.toolsEl.querySelectorAll(".sb-tool").forEach((b: any) => b.toggleClass("is-active", b.dataset.tool === id));
     this.renderOptions();
+    this.renderFocusBar();
     ed.drawOverlay();
   }
 
@@ -489,6 +626,7 @@ export class StoryboardView extends FileView {
         return;
       }
       this.activePointer = e.pointerId;
+      this.root.addClass("is-drawing");
       try { st.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ }
       const p = ed.eventPoint(e);
       ed.pointer = p;
@@ -526,6 +664,7 @@ export class StoryboardView extends FileView {
       }
       if (this.activePointer !== e.pointerId) return;
       this.activePointer = null;
+      this.root.removeClass("is-drawing");
       if (e.type === "pointercancel") ed.tool?.cancel?.();
       else ed.tool?.up?.(e, ed.eventPoint(e));
       if (this.toolBeforeAlt) {
@@ -607,13 +746,15 @@ export class StoryboardView extends FileView {
     else if (k === "ArrowRight") this.refs?.step(1);
     else if (k === "ArrowUp" || k === ",") this.timeline?.go(ed.frameIndex - 1);
     else if (k === "ArrowDown" || k === ".") this.timeline?.go(ed.frameIndex + 1);
-    else if (k === "Tab") this.root.toggleClass(e.shiftKey ? "hide-timeline" : "hide-side", !this.root.hasClass(e.shiftKey ? "hide-timeline" : "hide-side"));
+    else if (k === "Tab" && e.shiftKey) this.root.toggleClass("hide-timeline", !this.root.hasClass("hide-timeline"));
+    else if (k === "Tab") this.setFocus(!this.focus);
     else if (k === "Home") this.timeline?.go(0);
     else if (k === "End") this.timeline?.go(ed.board.frames.length - 1);
     else if (k === "Enter") this.timeline?.toggle();
     else if (k === "Escape") {
       if (ed.floating) ed.cancelFloating();
       else if (ed.selection) ed.setSelection(null);
+      else if (this.focus) this.setFocus(false);
       else used = false;
     } else if (k === "Delete" || k === "Backspace") ed.clearSelection();
     else if (k === "[" || k === "]" || k === "{" || k === "}") this.adjustBrush(k);

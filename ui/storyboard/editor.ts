@@ -138,7 +138,7 @@ export class Editor extends Events {
     this.commitFloating();
     const changed = f !== this.frame;
     this.frame = f;
-    this.comp.want(f);
+    this.wantPictures();
     const need = this.comp.layersFor(f, true);
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
@@ -153,13 +153,21 @@ export class Editor extends Events {
     if (!this.board.frames.includes(this.frame)) this.frame = this.board.frames.find((f) => f.id === this.frame?.id) || this.board.frames[0];
     else this.frame = this.board.frames.find((f) => f.id === this.frame.id)!;
     if (!this.frame.layers.includes(this.frame.active)) this.frame.active = this.frame.layers[this.frame.layers.length - 1];
-    this.comp.want(this.frame);
+    this.wantPictures();
     const need = this.comp.layersFor(this.frame, true);
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
     this.invalidate();
     this.trigger("frame", this.frame);
     this.trigger("board");
+  }
+
+  /** Starts loading the pictures of the frame and of its onion-skin neighbours. */
+  private wantPictures() {
+    const b = this.board, i = this.frameIndex;
+    this.comp.want(this.frame);
+    if (!b.onion.enabled || !b.onion.pictures) return;
+    for (let k = -b.onion.before; k <= b.onion.after; k++) if (k && b.frames[i + k]) this.comp.want(b.frames[i + k]);
   }
 
   frameName(f: Frame = this.frame) {

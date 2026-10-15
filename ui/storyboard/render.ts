@@ -318,13 +318,14 @@ export class Compositor {
     const b = this.board;
     const i = b.frames.indexOf(frame);
     const sides: [number, string][] = [];
-    for (let k = b.onion.before; k >= 1; k--) sides.push([i - k, "#d0453b"]);
-    for (let k = 1; k <= b.onion.after; k++) sides.push([i + k, "#2f9e5a"]);
+    for (let k = b.onion.before; k >= 1; k--) sides.push([i - k, b.onion.colorBefore || "#d0453b"]);
+    for (let k = 1; k <= b.onion.after; k++) sides.push([i + k, b.onion.colorAfter || "#2f9e5a"]);
     for (const [j, tint] of sides) {
       const f = b.frames[j];
       if (!f) continue;
       const buf = scratch.take(m);
-      const layers = f.layers.map((id) => b.layers[id]).filter((l) => l && l.visible && l.kind !== "trace" && !l.shared);
+      // Shared layers are the same in every frame: skinning them only blurs.
+      const layers = f.layers.map((id) => b.layers[id]).filter((l) => l && l.visible && !l.shared && (l.kind === "raster" || (l.kind === "image" && b.onion.pictures)));
       this.drawLayers(buf, layers, { ...o, stroke: null, floating: null }, scratch, m);
       if (b.onion.tint) {
         buf.save();
@@ -338,7 +339,7 @@ export class Compositor {
       const distance = Math.abs(j - i);
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.globalAlpha = b.onion.opacity / distance;
+      ctx.globalAlpha = b.onion.fade === false ? b.onion.opacity : b.onion.opacity / distance;
       ctx.drawImage(buf.canvas, 0, 0);
       ctx.restore();
     }
