@@ -4,10 +4,10 @@
 import { Component } from "./events.ts";
 import { setIcon } from "./icons.ts";
 import { Menu, Scope } from "./ui.ts";
-import { debounce, resolveSubpath } from "./util.ts";
+import { debounce, renderMath, resolveSubpath } from "./util.ts";
 import { TFile } from "./vault.ts";
 import { Editor, editorEditorField, infoExtension } from "./editor.ts";
-import { renderMarkdownInto, renderProperties } from "./renderer.ts";
+import { MarkdownPreviewRenderer, renderMarkdownInto, renderProperties } from "./renderer.ts";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView, keymap, drawSelection, dropCursor, highlightSpecialChars, lineNumbers, rectangularSelection, crosshairCursor } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
@@ -788,9 +788,17 @@ export function buildSizer(cm: EditorView, before: HTMLElement[]): HTMLElement {
 
 export function liveHost(app: any, sourcePath: () => string, owner?: Component) {
   return {
+    // Each rendering gets its own component, so what plugins attach to it
+    // (dataview's live queries…) stops when the editor drops the widget.
     renderMarkdown: (md: string, el: HTMLElement) => {
-      renderMarkdownInto(app, md, el, sourcePath(), owner || new Component(), { sections: true });
+      const c = new Component();
+      if (owner) owner.addChild(c);
+      else c.load();
+      renderMarkdownInto(app, md, el, sourcePath(), c, { sections: true });
+      return () => (owner ? owner.removeChild(c) : c.unload());
     },
+    hasCodeBlockRenderer: (lang: string) => !!lang && (MarkdownPreviewRenderer.hasCodeBlockProcessor(lang) || lang === "mermaid"),
+    renderMath: (source: string, display: boolean) => renderMath(source, display),
     propertiesMode: () => app.vault.getConfig("propertiesInDocument"),
     renderProperties: (el: HTMLElement) => {
       if (app.vault.getConfig("propertiesInDocument") === "hidden") return true;

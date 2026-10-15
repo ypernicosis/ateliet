@@ -153,7 +153,7 @@ Mudanças feitas por um app aparecem ao vivo no outro: o watcher em Rust detecta
 
 ## O que funciona
 
-- Editor CodeMirror 6 com **Live Preview** (marcação escondida fora do cursor; checkboxes, bullets, imagens, callouts, tabelas e propriedades como widgets), modo código-fonte e **modo de leitura** renderizado pelo Rust.
+- Editor CodeMirror 6 com **Live Preview** (marcação escondida fora do cursor; checkboxes, bullets, imagens, callouts, tabelas, matemática, embeds de notas, blocos de código com processador (Dataview, mermaid) e propriedades como widgets), modo código-fonte e **modo de leitura** renderizado pelo Rust.
 - Wikilinks, embeds (notas com `#heading`/`^bloco`, imagens, áudio, vídeo, PDF), tags, callouts dobráveis, realce, comentários `%% %%`, matemática (MathJax), mermaid, notas de rodapé e tarefas com status personalizados.
 - Explorador de arquivos (arrastar para mover, renomear inline, ordenação), busca global em Rust (`path:`, `file:`, `tag:`, `"frase"`, `-exclusão`, `OR`, `/regex/`), Quick Switcher, Paleta de Comandos, backlinks (com menções não linkadas), links de saída, tags, outline, favoritos, notas diárias, templates, contagem de palavras e page preview ao passar o mouse.
 - Renomear arquivos **atualiza os links** no vault inteiro.

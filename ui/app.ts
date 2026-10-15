@@ -242,13 +242,19 @@ export class App extends Events {
     const internal = e.dataTransfer?.getData("text/x-ateliet-path");
     if (internal) {
       e.preventDefault();
-      const f = this.vault.getAbstractFileByPath(internal);
-      if (f instanceof TFile) {
-        const pos = view.editMode.cm.posAtCoords({ x: e.clientX, y: e.clientY });
+      // Several files (a selection in the file explorer) arrive one path per line.
+      const links: string[] = [];
+      for (const path of internal.split("\n")) {
+        const f = this.vault.getAbstractFileByPath(path);
+        if (!(f instanceof TFile)) continue;
         let link = this.fileManager.generateMarkdownLink(f, view.file?.path || "");
         // Pictures are embedded, like Obsidian does when dragging them in.
         if (/^(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.extension) && !link.startsWith("!")) link = "!" + link;
-        view.editMode.cm.dispatch({ changes: { from: pos ?? view.editMode.cm.state.selection.main.head, insert: link } });
+        links.push(link);
+      }
+      if (links.length) {
+        const pos = view.editMode.cm.posAtCoords({ x: e.clientX, y: e.clientY });
+        view.editMode.cm.dispatch({ changes: { from: pos ?? view.editMode.cm.state.selection.main.head, insert: links.join("\n") } });
       }
       return true;
     }

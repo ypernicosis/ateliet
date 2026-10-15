@@ -7,8 +7,12 @@ import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate
 
 export interface LivePreviewHost {
   openLink(linktext: string, evt: MouseEvent): void;
-  /** render markdown (a callout, …) into `el` */
-  renderMarkdown?(markdown: string, el: HTMLElement): void;
+  /** render markdown (a callout, a table, a code block with a processor…) into `el`; the returned function frees what the rendering keeps alive */
+  renderMarkdown?(markdown: string, el: HTMLElement): (() => void) | void;
+  /** true when a code block in this language renders as something else in reading view (a code block processor, mermaid) */
+  hasCodeBlockRenderer?(language: string): boolean;
+  /** typeset TeX */
+  renderMath?(source: string, display: boolean): HTMLElement;
   /** render the note's properties into `el`; returns false if properties are shown as source */
   renderProperties?(el: HTMLElement): boolean;
   resolveEmbed(linktext: string): { url: string; kind: "image" | "audio" | "video" | "pdf" | "note" | "other"; render?: (el: HTMLElement) => void } | null;
@@ -202,6 +206,70 @@ class EmbedWidget extends WidgetType {
   }
 }
 
+/** The fence's language, as in "```dataviewjs" or "~~~ yaml {x}". */
+function fenceLanguage(state: EditorState, node: { node: any }): string {
+  const info = node.node.getChild("CodeInfo");
+  return info ? state.doc.sliceString(info.from, info.to).trim().split(/\s/)[0].toLowerCase() : "";
+}
+
+class CodeFlairWidget extends WidgetType {
+  constructor(readonly lang: string) {
+    super();
+  }
+  eq(o: CodeFlairWidget) {
+    return o.lang === this.lang;
+  }
+  toDOM(view: EditorView) {
+    const s = document.createElement("span");
+    s.className = "code-block-flair";
+    s.textContent = this.lang;
+    s.setAttribute("aria-label", "Copy");
+    s.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      // the code between the fences
+      const first = view.state.doc.lineAt(view.posAtDOM(s));
+      const tree = syntaxTree(view.state).resolveInner(first.to, -1);
+      let block: any = tree;
+      while (block && block.name !== "FencedCode") block = block.parent;
+      if (!block) return;
+      const last = view.state.doc.lineAt(block.to);
+      const end = /^\s*(```|~~~)/.test(last.text) && last.number > first.number ? last.from - 1 : last.to;
+      navigator.clipboard?.writeText(view.state.doc.sliceString(Math.min(first.to + 1, end), end));
+    });
+    return s;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
+class MathWidget extends WidgetType {
+  constructor(readonly source: string, readonly display: boolean) {
+    super();
+  }
+  eq(o: MathWidget) {
+    return o.source === this.source && o.display === this.display;
+  }
+  toDOM(view: EditorView) {
+    const host = view.state.facet(livePreviewHost);
+    const el = host?.renderMath?.(this.source, this.display) || document.createElement("span");
+    if (!host?.renderMath) el.textContent = this.source;
+    const wrap = document.createElement("span");
+    wrap.className = "math-inline-widget";
+    wrap.appendChild(el);
+    // A click puts the cursor inside the formula, which shows the TeX.
+    wrap.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      view.dispatch({ selection: { anchor: view.posAtDOM(wrap) + (this.display ? 2 : 1) } });
+      view.focus();
+    });
+    return wrap;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
 // ── live preview decorations ──────────────────────────────────────────────
 
 const hide = Decoration.replace({});
@@ -392,7 +460,31 @@ function buildLivePreview(view: EditorView): DecorationSet {
             return false;
           case "ObsidianComment":
             break;
-          case "FencedCode":
+          case "InlineMath": {
+            if (!host?.renderMath || touched(node.from, node.to)) return false;
+            const text = doc.sliceString(node.from, node.to);
+            const display = text.startsWith("$$");
+            const parent = node.node.parent;
+            // a paragraph made only of $$…$$ is a block widget (StateField); a formula over several lines stays text
+            if (text.includes("\n") || (display && parent?.name === "Paragraph" && parent.from === node.from && parent.to === node.to)) return false;
+            const open = display ? 2 : 1;
+            deco.push(Decoration.replace({ widget: new MathWidget(text.slice(open, -open), display) }).range(node.from, node.to));
+            return false;
+          }
+          case "FencedCode": {
+            // Blocks a code block processor renders are block widgets (StateField).
+            const lang = fenceLanguage(state, node);
+            if (host?.hasCodeBlockRenderer?.(lang) || touched(node.from, node.to, true)) return false;
+            // Away from the cursor the fences are hidden; the opening one leaves the language as a flair.
+            const marks = node.node.getChildren("CodeMark");
+            const first = doc.lineAt(node.from);
+            if (marks[0] && marks[0].from < first.to) {
+              deco.push((lang ? Decoration.replace({ widget: new CodeFlairWidget(lang) }) : hide).range(marks[0].from, first.to));
+            }
+            const close = marks.length > 1 ? marks[marks.length - 1] : null;
+            if (close && doc.lineAt(close.from).number > first.number) deco.push(hide.range(close.from, close.to));
+            return false;
+          }
           case "Frontmatter":
             return false;
         }
@@ -453,6 +545,71 @@ function linkClicks(live: boolean): Extension {
 
 // ── block widgets (callouts, properties, tables) — must come from a StateField ─────
 
+/** What a rendering keeps alive (plugin render children), freed when CodeMirror drops the widget's DOM. */
+const disposers = new WeakMap<HTMLElement, () => void>();
+
+function renderInto(view: EditorView, markdown: string, el: HTMLElement) {
+  const dispose = view.state.facet(livePreviewHost)?.renderMarkdown?.(markdown, el);
+  if (dispose) disposers.set(el, dispose);
+}
+
+function disposeRendering(dom: HTMLElement) {
+  disposers.get(dom)?.();
+  disposers.delete(dom);
+}
+
+const EDIT_ICON = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon lucide-code-2"><path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/></svg>';
+
+/**
+ * A block that reading view renders and Live Preview shows rendered while the
+ * cursor is elsewhere: code blocks with a processor (dataviewjs, mermaid…),
+ * display math, note and PDF embeds, HTML blocks. "click" blocks are edited by
+ * clicking them; "button" blocks hold interactive content, so they get
+ * Obsidian's edit button instead.
+ */
+class RenderedBlockWidget extends WidgetType {
+  constructor(readonly text: string, readonly cls: string, readonly edit: "click" | "button", readonly caret: number) {
+    super();
+  }
+  eq(o: RenderedBlockWidget) {
+    return o.text === this.text && o.cls === this.cls;
+  }
+  toDOM(view: EditorView) {
+    const el = document.createElement("div");
+    el.className = `cm-embed-block ${this.cls} markdown-rendered`;
+    renderInto(view, this.text, el);
+    const enter = () => {
+      view.dispatch({ selection: { anchor: Math.min(view.posAtDOM(el) + this.caret, view.state.doc.length) } });
+      view.focus();
+    };
+    if (this.edit === "button") {
+      const btn = document.createElement("div");
+      btn.className = "edit-block-button";
+      btn.setAttribute("aria-label", "Edit this block");
+      btn.innerHTML = EDIT_ICON;
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        enter();
+      });
+      el.appendChild(btn);
+    } else {
+      el.addEventListener("mousedown", (e) => {
+        if (e.button !== 0 || (e.target as HTMLElement).closest("a, input, button")) return;
+        e.preventDefault();
+        enter();
+      });
+    }
+    return el;
+  }
+  destroy(dom: HTMLElement) {
+    disposeRendering(dom);
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
 class CalloutWidget extends WidgetType {
   constructor(readonly text: string) {
     super();
@@ -464,8 +621,7 @@ class CalloutWidget extends WidgetType {
   toDOM(view: EditorView) {
     const el = document.createElement("div");
     el.className = "cm-embed-block cm-callout markdown-rendered";
-    const host = view.state.facet(livePreviewHost);
-    host?.renderMarkdown?.(this.text, el);
+    renderInto(view, this.text, el);
     el.addEventListener("mousedown", (e) => {
       if ((e.target as HTMLElement).closest("a, input, .callout-fold, .callout-title")) return;
       e.preventDefault();
@@ -473,6 +629,9 @@ class CalloutWidget extends WidgetType {
       view.focus();
     });
     return el;
+  }
+  destroy(dom: HTMLElement) {
+    disposeRendering(dom);
   }
   ignoreEvent() {
     return true;
@@ -528,7 +687,7 @@ class TableWidget extends WidgetType {
   toDOM(view: EditorView) {
     const el = document.createElement("div");
     el.className = "cm-embed-block cm-table-widget markdown-rendered";
-    view.state.facet(livePreviewHost)?.renderMarkdown?.(this.text, el);
+    renderInto(view, this.text, el);
     // A click puts the cursor in the clicked cell of the source, which shows the table as text.
     el.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest("a, input")) return;
@@ -548,6 +707,9 @@ class TableWidget extends WidgetType {
       view.focus();
     });
     return el;
+  }
+  destroy(dom: HTMLElement) {
+    disposeRendering(dom);
   }
   ignoreEvent() {
     return true;
@@ -583,7 +745,42 @@ function buildBlocks(state: EditorState): DecorationSet {
         }
         return false;
       }
-      if (node.name === "FencedCode" || node.name === "Document") return node.name === "Document";
+      if (node.name === "FencedCode") {
+        const lang = fenceLanguage(state, node);
+        const from = doc.lineAt(node.from).from, to = doc.lineAt(node.to).to;
+        if (host?.renderMarkdown && host.hasCodeBlockRenderer?.(lang) && !inside(from, to)) {
+          const firstLine = doc.lineAt(from);
+          out.push(Decoration.replace({ widget: new RenderedBlockWidget(doc.sliceString(from, to), "cm-preview-code-block cm-lang-" + lang, "button", firstLine.length + 1), block: true }).range(from, to));
+        }
+        return false;
+      }
+      if (node.name === "HTMLBlock") {
+        const from = doc.lineAt(node.from).from, to = doc.lineAt(node.to).to;
+        if (host?.renderMarkdown && !inside(from, to)) out.push(Decoration.replace({ widget: new RenderedBlockWidget(doc.sliceString(from, to), "cm-html-embed", "click", 0), block: true }).range(from, to));
+        return false;
+      }
+      if (node.name === "Paragraph") {
+        const from = doc.lineAt(node.from).from, to = doc.lineAt(node.to).to;
+        if (!host?.renderMarkdown || inside(from, to) || doc.sliceString(from, node.from).trim() || doc.sliceString(node.to, to).trim()) return false;
+        const only = node.node.firstChild;
+        if (!only || only.nextSibling || only.from !== node.from || only.to !== node.to) return false;
+        const text = doc.sliceString(from, to);
+        // $$…$$ alone in its paragraph: display math
+        if (only.name === "InlineMath" && text.trim().startsWith("$$")) {
+          out.push(Decoration.replace({ widget: new RenderedBlockWidget(text, "math-block-widget", "click", 2), block: true }).range(from, to));
+        }
+        // ![[note]] alone on its line: the note (or PDF…) itself, as in reading view
+        if (only.name === "Embed") {
+          const inner = doc.sliceString(only.from + 3, only.to - 2);
+          const target = inner.split("|")[0].replace(/\\$/, "");
+          const r = host.resolveEmbed(target);
+          if (r && !r.render && r.kind !== "image" && r.kind !== "audio" && r.kind !== "video") {
+            out.push(Decoration.replace({ widget: new RenderedBlockWidget(text, "markdown-embed-widget", "button", 3), block: true }).range(from, to));
+          }
+        }
+        return false;
+      }
+      if (node.name === "Document") return true;
       return false;
     },
   });

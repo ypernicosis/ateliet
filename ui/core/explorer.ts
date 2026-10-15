@@ -25,6 +25,9 @@ export class FileExplorerView extends ItemView {
   expanded = new Set<string>();
   navFilesContainer!: HTMLElement;
   private activeEl: HTMLElement | null = null;
+  /** Paths picked with Shift-click; acted on together by the context menu and drag and drop. */
+  selected = new Set<string>();
+  private anchor: string | null = null;
   private refresh = debounce(() => this.render(), 50, true);
   autoReveal = false;
 
@@ -58,6 +61,9 @@ export class FileExplorerView extends ItemView {
       this.app.workspace.requestSaveLayout();
     });
     this.navFilesContainer = this.contentEl.createDiv({ cls: "nav-files-container node-insert-event", attr: { tabindex: "-1" } });
+    this.navFilesContainer.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.selected.size) this.clearSelection();
+    });
     this.navFilesContainer.addEventListener("contextmenu", (e) => {
       if ((e.target as HTMLElement).closest(".tree-item-self")) return;
       e.preventDefault();
@@ -123,6 +129,72 @@ export class FileExplorerView extends ItemView {
     this.renderChildren(this.app.vault.getRoot(), rootChildren);
     this.navFilesContainer.scrollTop = scroll;
     this.updateActive();
+    this.updateSelection();
+  }
+
+  // ── multiple selection ───────────────────────────────────────────────────
+  /** Handles a click with Shift (range from the last plain click) and returns true; a plain click resets the selection. */
+  private handleSelectClick(file: TAbstractFile, e: MouseEvent): boolean {
+    if (!e.shiftKey) {
+      this.clearSelection();
+      this.anchor = file.path;
+      return false;
+    }
+    e.preventDefault();
+    const order = Array.from(this.navFilesContainer.querySelectorAll<HTMLElement>(".tree-item-self[data-path]")).map((el) => el.dataset.path!);
+    const from = order.indexOf(this.anchor ?? this.app.workspace.getActiveFile()?.path ?? file.path);
+    const to = order.indexOf(file.path);
+    this.selected.clear();
+    if (from === -1) this.selected.add(file.path);
+    else for (let i = Math.min(from, to); i <= Math.max(from, to); i++) this.selected.add(order[i]);
+    if (from === -1) this.anchor = file.path;
+    this.updateSelection();
+    this.navFilesContainer.focus({ preventScroll: true });
+    return true;
+  }
+
+  clearSelection() {
+    if (!this.selected.size) return;
+    this.selected.clear();
+    this.updateSelection();
+  }
+
+  private updateSelection() {
+    for (const path in this.fileItems) this.fileItems[path].selfEl.toggleClass("is-selected", this.selected.has(path));
+  }
+
+  /** The selected files when `file` is one of several selected, without items inside a selected folder; else null. */
+  private selectionFor(file: TAbstractFile): TAbstractFile[] | null {
+    if (this.selected.size < 2 || !this.selected.has(file.path)) return null;
+    const paths = Array.from(this.selected);
+    return paths
+      .filter((p) => !paths.some((q) => q !== p && p.startsWith(q + "/")))
+      .map((p) => this.app.vault.getAbstractFileByPath(p))
+      .filter((f): f is TAbstractFile => !!f);
+  }
+
+  private filesMenu(files: TAbstractFile[], e: MouseEvent) {
+    const m = new Menu();
+    m.addItem((i) => i.setSection("action").setTitle(`Move ${files.length} items to...`).setIcon("folder-tree").onClick(() => openMoveModal(this.app, files as (TFile | TFolder)[])));
+    m.addItem((i) => i.setSection("info").setTitle("Copy paths").setIcon("copy").onClick(() => navigator.clipboard.writeText(files.map((f) => f.path).join("\n"))));
+    m.addItem((i) => i.setSection("danger").setTitle(`Delete ${files.length} items`).setIcon("trash-2").setWarning(true).onClick(() => this.deleteFiles(files)));
+    this.app.workspace.trigger("files-menu", m, files, "file-explorer-context-menu", null);
+    m.showAtMouseEvent(e);
+  }
+
+  private async deleteFiles(files: TAbstractFile[]) {
+    if (this.app.vault.getConfig("promptDelete")) {
+      const ok = await this.app.confirm(`Delete ${files.length} items?`, files.map((f) => f.name).join(", "));
+      if (!ok) return;
+    }
+    this.clearSelection();
+    for (const f of files) {
+      try {
+        await this.app.fileManager.trashFile(f);
+      } catch (err: any) {
+        new this.app.Notice(String(err?.message || err));
+      }
+    }
   }
 
   private renderChildren(folder: TFolder, el: HTMLElement) {
@@ -170,13 +242,16 @@ export class FileExplorerView extends ItemView {
       this.renderChildren(folder, childrenEl);
     }
     self.addEventListener("click", (e) => {
-      if (inner.isContentEditable) return;
+      if (inner.isContentEditable || this.handleSelectClick(folder, e)) return;
       e.preventDefault();
       setCollapsed(!item.collapsed);
     });
     self.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const many = this.selectionFor(folder);
+      if (many) return this.filesMenu(many, e);
+      this.clearSelection();
       this.folderMenu(folder, e);
     });
     this.setupDrag(self, folder);
@@ -190,7 +265,7 @@ export class FileExplorerView extends ItemView {
     if (file.extension !== "md") self.createDiv({ cls: "nav-file-tag", text: file.extension });
     this.fileItems[file.path] = { el, selfEl: self, innerEl: inner, file };
     self.addEventListener("click", (e) => {
-      if (inner.isContentEditable) return;
+      if (inner.isContentEditable || this.handleSelectClick(file, e)) return;
       e.preventDefault();
       this.app.workspace.getLeaf(Keymap.isModEvent(e)).openFile(file);
     });
@@ -200,6 +275,9 @@ export class FileExplorerView extends ItemView {
     self.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      const many = this.selectionFor(file);
+      if (many) return this.filesMenu(many, e);
+      this.clearSelection();
       this.fileMenu(file, e);
     });
     self.addEventListener("mouseover", (e) => {
@@ -344,10 +422,12 @@ export class FileExplorerView extends ItemView {
   // ── drag & drop ──────────────────────────────────────────────────────────
   private setupDrag(el: HTMLElement, file: TAbstractFile) {
     el.addEventListener("dragstart", (e) => {
-      e.dataTransfer!.setData("text/x-ateliet-path", file.path);
-      e.dataTransfer!.setData("text/plain", file instanceof TFile ? this.app.fileManager.generateMarkdownLink(file, "") : file.path);
+      const many = this.selectionFor(file);
+      const files = many || [file];
+      e.dataTransfer!.setData("text/x-ateliet-path", files.map((f) => f.path).join("\n"));
+      e.dataTransfer!.setData("text/plain", files.map((f) => (f instanceof TFile ? this.app.fileManager.generateMarkdownLink(f, "") : f.path)).join("\n"));
       e.dataTransfer!.effectAllowed = "all";
-      (this.app as any).dragManager = { draggable: { type: file instanceof TFile ? "file" : "folder", file } };
+      (this.app as any).dragManager = { draggable: many ? { type: "files", files } : { type: file instanceof TFile ? "file" : "folder", file } };
     });
   }
 
@@ -375,16 +455,19 @@ export class FileExplorerView extends ItemView {
     e.preventDefault();
     e.stopPropagation();
     this.navFilesContainer.querySelectorAll(".is-being-dragged-over").forEach((x) => x.removeClass("is-being-dragged-over"));
-    const path = e.dataTransfer?.getData("text/x-ateliet-path");
-    if (path) {
-      const file = this.app.vault.getAbstractFileByPath(path);
-      if (!file || file === target || file.parent === target) return;
-      if (file instanceof TFolder && (target.path + "/").startsWith(file.path + "/")) return;
-      const dest = (target.isRoot() ? "" : target.path + "/") + file.name;
-      try {
-        await this.app.fileManager.renameFile(file, dest);
-      } catch (err: any) {
-        new this.app.Notice(String(err?.message || err));
+    const paths = e.dataTransfer?.getData("text/x-ateliet-path");
+    if (paths) {
+      if (paths.includes("\n")) this.clearSelection();
+      for (const path of paths.split("\n")) {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (!file || file === target || file.parent === target) continue;
+        if (file instanceof TFolder && (target.path + "/").startsWith(file.path + "/")) continue;
+        const dest = (target.isRoot() ? "" : target.path + "/") + file.name;
+        try {
+          await this.app.fileManager.renameFile(file, dest);
+        } catch (err: any) {
+          new this.app.Notice(String(err?.message || err));
+        }
       }
       return;
     }
