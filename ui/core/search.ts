@@ -312,13 +312,17 @@ export class FolderSuggestModal extends FuzzySuggestModal<TFolder> {
   }
 }
 
-export function openMoveModal(app: any, file: TFile | TFolder) {
+export function openMoveModal(app: any, file: TFile | TFolder | (TFile | TFolder)[]) {
+  const files = Array.isArray(file) ? file : [file];
   new FolderSuggestModal(app, async (folder) => {
-    const dest = (folder.isRoot() ? "" : folder.path + "/") + file.name;
-    try {
-      await app.fileManager.renameFile(file, dest);
-    } catch (e: any) {
-      new app.Notice(String(e?.message || e));
+    for (const f of files) {
+      if (f === folder || (f instanceof TFolder && (folder.path + "/").startsWith(f.path + "/"))) continue;
+      const dest = (folder.isRoot() ? "" : folder.path + "/") + f.name;
+      try {
+        await app.fileManager.renameFile(f, dest);
+      } catch (e: any) {
+        new app.Notice(String(e?.message || e));
+      }
     }
-  }, `Move "${file.name}" to...`).open();
+  }, files.length === 1 ? `Move "${files[0].name}" to...` : `Move ${files.length} items to...`).open();
 }

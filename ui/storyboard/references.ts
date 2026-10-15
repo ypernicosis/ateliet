@@ -378,8 +378,8 @@ export class ReferencePanel {
         /* fall through */
       }
     }
-    const vp = dt.getData("text/x-ateliet-path");
-    if (vp && IMAGE_EXT.test(vp)) return this.add([{ name: vp.split("/").pop()!, path: this.app.vault.adapter.getFullPath(vp) }]);
+    const vps = dt.getData("text/x-ateliet-path").split("\n").filter((vp) => IMAGE_EXT.test(vp));
+    if (vps.length) return this.add(vps.map((vp) => ({ name: vp.split("/").pop()!, path: this.app.vault.adapter.getFullPath(vp) })));
     for (const f of Array.from(dt.files)) {
       if (!f.type.startsWith("image/")) continue;
       this.embed(f.name, new Uint8Array(await f.arrayBuffer()));
