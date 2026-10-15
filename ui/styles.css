@@ -1187,3 +1187,10 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .ateliet-update-commits .mod-muted { list-style: none; }
 .ateliet-update-step { margin-top: var(--size-4-3); color: var(--text-muted); font-size: var(--font-ui-small); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
 .ateliet-update-log { max-height: 180px; overflow: auto; margin: var(--size-4-2) 0 0; padding: var(--size-4-2); background: var(--background-secondary); border-radius: var(--radius-s); font-size: var(--font-ui-smaller); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.image-collections-badge { margin-inline-start: 6px; padding: 1px 6px; border-radius: 999px; background: var(--background-modifier-hover); font-weight: var(--font-normal); text-transform: none; letter-spacing: 0; }
+.shared-plugin-view { padding: 0 !important; overflow: hidden !important; }
+.shared-plugin-frame { width: 100%; height: 100%; border: none; display: block; background: var(--background-primary); }
+.pinterest-modal { width: min(620px, 92vw); }
+.pinterest-status { min-height: 1.5em; margin-top: var(--size-4-2); font-size: var(--font-ui-small); color: var(--text-muted); }
+.pinterest-status.mod-warning { color: var(--text-error); }
+.setting-item-heading-sub { margin: var(--size-4-3) 0 var(--size-4-1); font-size: var(--font-ui-small); font-weight: var(--font-semibold); color: var(--text-muted); }

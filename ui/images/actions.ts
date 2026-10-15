@@ -2,7 +2,7 @@
 // the commands behind it. Pictures and notes meet here: insert into a note,
 // start a note from a picture, see the notes that use it.
 
-import { ImageItem, embedLink, ensureInVault, fullUrl, insertImages, notesUsing, vaultFile } from "./api.ts";
+import { ImageItem, api, embedLink, ensureInVault, fullUrl, insertImages, notesUsing, vaultFile } from "./api.ts";
 import { ConfirmationModal, FuzzySuggestModal, Menu, Notice } from "../obsidian/ui.ts";
 import { TFile, TFolder } from "../obsidian/vault.ts";
 import { invoke } from "../tauri.ts";
@@ -21,6 +21,8 @@ export interface ImagesHost {
   updateSettings(patch: any): Promise<void>;
   addExternalFolder(): Promise<void>;
   setMode(mode: "write" | "images"): Promise<void>;
+  openPlugin(id: string, newLeaf?: boolean): Promise<void>;
+  openPinterest(initial?: { url?: string; collection?: string }): void;
   removeExternalFolder(path: string): Promise<void>;
 }
 
@@ -38,6 +40,36 @@ class FolderPicker extends FuzzySuggestModal<TFolder> {
   onChooseItem(f: TFolder) {
     this.done(f);
   }
+}
+
+/** A collection of the shared library, or a new one typed in the search box. */
+class CollectionPicker extends FuzzySuggestModal<string> {
+  constructor(app: any, private names: string[], private done: (name: string) => void) {
+    super(app);
+    this.setPlaceholder("Add to collection… (type a new name to create one)");
+  }
+  getItems(): string[] {
+    const typed = this.inputEl.value.trim();
+    return typed && !this.names.includes(typed.toLowerCase()) ? [...this.names, `+ ${typed}`] : this.names;
+  }
+  getItemText(n: string): string {
+    return n;
+  }
+  onChooseItem(n: string) {
+    this.done(n.startsWith("+ ") ? n.slice(2) : n);
+  }
+}
+
+export async function addToCollection(host: ImagesHost, items: ImageItem[]) {
+  const info = await api.sharedInfo();
+  new CollectionPicker(host.app, (info.collections || []).map((c) => c.name), async (name) => {
+    try {
+      const r = await api.sharedCollection("add", name, { paths: items.map((i) => i.abs) });
+      new Notice(`${r.added} ${r.added === 1 ? "picture" : "pictures"} added to ${name}.`);
+    } catch (e) {
+      new Notice(String(e));
+    }
+  }).open();
 }
 
 export async function moveToFolder(host: ImagesHost, items: ImageItem[]) {
@@ -87,13 +119,22 @@ async function copyImage(item: ImageItem) {
 
 export async function deleteImages(host: ImagesHost, items: ImageItem[]) {
   const files = items.map((i) => vaultFile(host.app, i)).filter((f): f is TFile => !!f);
-  if (!files.length) return;
+  const shared = items.filter((i) => i.origin === "shared");
+  const count = files.length + shared.length;
+  if (!count) return;
   const used = files.filter((f) => notesUsing(host.app, { key: f.path, external: false } as ImageItem).length > 0).length;
-  const msg = (files.length === 1 ? `"${files[0].name}" will be moved to the trash.` : `${files.length} pictures will be moved to the trash.`) + (used ? ` ${used === 1 && files.length === 1 ? "It is" : `${used} of them are`} used in notes.` : "");
-  const modal = new ConfirmationModal(host.app, files.length === 1 ? "Delete picture" : "Delete pictures", msg);
+  const name = files[0]?.name || shared[0]?.name;
+  let msg = count === 1 ? `"${name}" will be moved to the trash.` : `${count} pictures will be moved to the trash.`;
+  if (used) msg += ` ${used === 1 && count === 1 ? "It is" : `${used} of them are`} used in notes.`;
+  if (shared.length) msg += " Pictures of the shared library disappear from Pictogrep too.";
+  const modal = new ConfirmationModal(host.app, count === 1 ? "Delete picture" : "Delete pictures", msg);
   modal.open();
   if (!(await modal.result)) return;
   for (const f of files) await host.app.fileManager.trashFile(f);
+  if (shared.length) {
+    await api.sharedCollection("forget", "", { paths: shared.map((i) => i.abs) }).catch(() => {});
+    for (const i of shared) await invoke("fs_trash", { path: i.abs }).catch((e) => new Notice(String(e)));
+  }
 }
 
 /** The context menu of one picture, or of a selection. */
@@ -131,9 +172,10 @@ export function imageMenu(host: ImagesHost, items: ImageItem[], extra?: (menu: M
       }),
     );
   }
+  if (host.status?.shared) menu.addItem((i) => i.setTitle("Add to collection…").setIcon("library").onClick(() => addToCollection(host, items)));
   menu.addItem((i) => i.setTitle("Move to folder…").setIcon("folder-input").onClick(() => moveToFolder(host, items)));
   extra?.(menu);
-  if (items.some((i) => !i.external)) {
+  if (items.some((i) => !i.external || i.origin === "shared")) {
     menu.addSeparator();
     menu.addItem((i) => i.setTitle("Delete").setIcon("trash-2").setWarning?.(true).onClick(() => deleteImages(host, items)));
   }

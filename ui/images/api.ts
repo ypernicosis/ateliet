@@ -17,6 +17,8 @@ export interface ImageItem {
   width: number;
   height: number;
   external: boolean;
+  /** "vault", "external" (a folder the user added) or "shared" (the Pictogrep library). */
+  origin: "vault" | "external" | "shared";
   indexed: boolean;
   score?: number;
 }
@@ -39,6 +41,8 @@ export interface ImageQuery {
   count?: number;
   similarTo?: string | null;
   keys?: string[];
+  /** A collection of the shared library, or "__unsorted__". */
+  collection?: string | null;
 }
 
 export interface ModelStatus {
@@ -59,6 +63,48 @@ export interface LibraryStatus {
   scanned: boolean;
   auto: boolean;
   model: ModelStatus;
+  /** The shared library folder in use (Pictogrep's), and whether Pictogrep is open. */
+  shared: string | null;
+  sharedRunning: boolean;
+}
+
+export interface SharedCollection {
+  name: string;
+  count: number;
+  cover: string;
+}
+
+export interface SharedPlugin {
+  id: string;
+  name: string;
+  version: string;
+  entry: string;
+  permissions: string[];
+  paid: boolean;
+  panel: any;
+}
+
+export interface SharedInfo {
+  home: string | null;
+  library?: string;
+  running?: boolean;
+  total?: number;
+  unsorted?: number;
+  collections?: SharedCollection[];
+  plugins?: SharedPlugin[];
+  galleryDl?: string | null;
+}
+
+export interface DownloadJob {
+  state: "idle" | "running" | "done" | "error" | "cancelled";
+  board: string;
+  phase: string;
+  done: number;
+  total: number;
+  automatic: boolean;
+  stopping: boolean;
+  result?: any;
+  error?: string;
 }
 
 export interface FolderInfo {
@@ -83,6 +129,12 @@ export interface ImageSettings {
   importFolder: string;
   /** The search panel was added to the writing layout once already. */
   panelAdded: boolean;
+  /** The shared picture library: "auto" finds Pictogrep's folder, "" turns it off, or a folder path. */
+  shared: string;
+  /** Where pictures dropped into "All pictures" go: the shared library or the vault. */
+  importTarget: "shared" | "vault";
+  /** Vault folder for Pinterest imports when no shared library is in use. */
+  pinterestFolder: string;
 }
 
 export const DEFAULT_SETTINGS: ImageSettings = {
@@ -93,11 +145,14 @@ export const DEFAULT_SETTINGS: ImageSettings = {
   showNames: false,
   importFolder: "",
   panelAdded: false,
+  shared: "auto",
+  importTarget: "shared",
+  pinterestFolder: "Pinterest",
 };
 
 export const api = {
-  open: (vault: string, configDir: string, external: string[], auto: boolean) => invoke<LibraryStatus>("images_open", { vault, configDir, external, auto }),
-  configure: (external: string[], auto: boolean) => invoke("images_configure", { external, auto }),
+  open: (vault: string, configDir: string, external: string[], auto: boolean, shared: string) => invoke<LibraryStatus>("images_open", { vault, configDir, external, auto, shared }),
+  configure: (external: string[], auto: boolean, shared: string) => invoke("images_configure", { external, auto, shared }),
   refresh: (paths: string[]) => invoke("images_refresh", { paths }),
   rescan: () => invoke("images_rescan"),
   status: () => invoke<LibraryStatus>("images_status"),
@@ -105,7 +160,25 @@ export const api = {
   reindex: () => invoke("images_reindex"),
   query: (query: ImageQuery) => invoke<ImagePage>("images_query", { query }),
   folders: () => invoke<FolderInfo[]>("images_folders"),
+  sharedInfo: () => invoke<SharedInfo>("shared_info"),
+  sharedCollection: (action: string, name: string, extra: { into?: string; paths?: string[] } = {}) => invoke<any>("shared_collection", { request: { action, name, ...extra } }),
+  sharedImport: (name: string, data: ArrayBuffer, collection = "") =>
+    invoke<any>("shared_import_bytes", new Uint8Array(data), { headers: { "x-name": encodeURIComponent(name), "x-collection": encodeURIComponent(collection) } }),
+  pluginCall: (id: string, method: string, args: any) => invoke<any>("plugin_call", { id, method, args }),
+  pinterestStart: (request: any) => invoke<DownloadJob>("pinterest_start", { request }),
+  pinterestStatus: () => invoke<DownloadJob>("pinterest_status"),
+  pinterestCancel: () => invoke("pinterest_cancel"),
+  pinterestFollowed: () => invoke<{ boards: any[]; autoSync: boolean; galleryDl: boolean }>("pinterest_followed"),
+  pinterestForget: (url: string) => invoke("pinterest_forget", { url }),
+  pinterestCheck: (url: string) => invoke("pinterest_check", { url }),
 };
+
+/** Base URL of the protocol that serves Pictogrep plugins. */
+export function pluginBase(): string {
+  const T = (window as any).__TAURI__;
+  const u: string = T?.core?.convertFileSrc ? T.core.convertFileSrc("/x", "pgplugin") : "pgplugin://localhost/x";
+  return u.replace(/\/(%2F)?x$/i, "");
+}
 
 export const TILE_WIDTH = { small: 150, medium: 220, large: 320 };
 

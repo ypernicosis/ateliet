@@ -46,6 +46,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "ndarray"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
+url = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
