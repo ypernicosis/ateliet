@@ -161,7 +161,10 @@ function buildRibbon(app: any) {
 function ensureCoreLeaves(app: any) {
   const ws = app.workspace;
   const need: [string, "left" | "right"][] = [["file-explorer", "left"], ["search", "left"], ["backlink", "right"], ["outline", "right"]];
+  // Image mode's right side holds only notes.
+  const images = document.body.hasClass("mode-images");
   for (const [type, side] of need) {
+    if (images && side === "right") continue;
     if (!ws.viewRegistry.viewByType[type] || ws.getLeavesOfType(type).length) continue;
     const leaf = side === "left" ? ws.getLeftLeaf(false) : ws.getRightLeaf(false);
     leaf.setViewState({ type, state: {} });
