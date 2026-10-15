@@ -4,7 +4,8 @@
 // thumbnails, playback and the exported pictures; only the target and its
 // transform change.
 
-import { Board, Frame, Layer, TILE, Transform } from "./model.ts";
+import { Board, Frame, Layer, TILE, Transform, isPageKind } from "./model.ts";
+import { drawPage } from "./pages.ts";
 import { StoryDoc, context } from "./store.ts";
 import { traced } from "./trace.ts";
 
@@ -44,6 +45,8 @@ export interface DrawOptions {
   floating?: Floating | null;
   hidden?: Set<string>;
   onion?: boolean;
+  /** Page kinds: leave out panels and balloons (the editor draws them itself). */
+  noDecor?: boolean;
 }
 
 const pools = new Map<string, HTMLCanvasElement[]>();
@@ -170,8 +173,17 @@ export class Compositor {
     const above = layers.filter((l) => l.kind === "trace" && l.trace?.above);
     this.drawLayers(ctx, below, o, scratch, m);
     this.drawLayers(ctx, above, o, scratch, m);
+    if (!o.noDecor) this.decor(ctx, frame, !o.exporting);
     ctx.restore();
     scratch.release();
+  }
+
+  /** Panels, balloons and (on screen, or on thumbnail sheets) panel numbers. */
+  decor(ctx: CanvasRenderingContext2D, frame: Frame, screen: boolean) {
+    const b = this.board;
+    if (!isPageKind(b.kind) || !b.page) return;
+    const m = ctx.getTransform();
+    drawPage(ctx, b, frame, { numbers: screen || b.kind === "thumbnails", px: 1 / Math.hypot(m.a, m.b) });
   }
 
   visibleLayers(frame: Frame, o: DrawOptions): Layer[] {

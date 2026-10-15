@@ -1319,9 +1319,10 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .sb-timeline-scroll { flex: 1 1 auto; position: relative; overflow-x: auto; overflow-y: hidden; padding: 0 12px; }
 .sb-ruler { display: block; height: 18px; cursor: col-resize; }
 .sb-track { position: relative; height: calc(100% - 26px); min-height: 80px; margin-top: 4px; }
-.sb-clip { position: absolute; top: 0; bottom: 0; border-radius: 5px; overflow: hidden; background: var(--background-secondary-alt); border: 2px solid var(--sb-label, var(--background-modifier-border)); cursor: var(--cursor); display: flex; flex-direction: column; }
+.sb-clip { box-sizing: border-box; position: absolute; top: 0; bottom: 0; border-radius: 5px; overflow: hidden; background: var(--background-secondary-alt); border: 2px solid var(--sb-label, var(--background-modifier-border)); cursor: var(--cursor); display: flex; flex-direction: column; }
 .sb-clip.is-active { border-color: var(--interactive-accent); box-shadow: 0 0 0 1px var(--interactive-accent); }
 .sb-clip img { flex: 1 1 auto; min-height: 0; width: 100%; object-fit: contain; object-position: left center; display: block; pointer-events: none; }
+.sb-timeline.is-webtoon .sb-clip img { object-fit: cover; object-position: center top; }
 .sb-clip-info { flex: 0 0 auto; display: flex; gap: 4px; padding: 1px 5px; font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; background: var(--background-primary); }
 .sb-clip-num { font-weight: var(--font-semibold); color: var(--text-normal); }
 .sb-clip-name { overflow: hidden; text-overflow: ellipsis; }
@@ -1430,3 +1431,26 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .sb-root.is-drawing .sb-focusbar { opacity: .12; pointer-events: none; }
 .sb-focus-frame { min-width: 40px; text-align: center; font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; color: var(--text-muted); }
 .sb-focus .sb-color-pop { bottom: 60px; }
+.sb-timeline.mode-pages .sb-play-only, .sb-timeline:not(.mode-time) .sb-time-only, .sb-timeline:not(.mode-time) .sb-ruler, .sb-timeline:not(.mode-time) .sb-playhead { display: none; }
+.sb-timeline:not(.mode-time) .sb-track { height: calc(100% - 8px); margin-top: 6px; }
+.sb-clip-note { flex: 0 0 auto; padding: 0 5px 3px; font-size: 10px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--background-primary); }
+.sb-note-script { flex: 1 1 auto; }
+.sb-note-script textarea { flex: 1 1 auto; min-height: 90px; }
+.sb-opt-select { height: 26px; font-size: var(--font-ui-smaller); max-width: 190px; }
+.sb-balloon-editor { position: absolute; z-index: 6; resize: none; padding: 6px 8px; border: 2px solid var(--interactive-accent); border-radius: 8px; background: rgba(255,255,255,.96); color: #111; font-family: system-ui, sans-serif; line-height: 1.3; box-shadow: var(--shadow-s); }
+.sb-phone-modal { width: auto; }
+.sb-phone { padding: 14px 12px; background: #1b1b1d; border-radius: 34px; box-shadow: inset 0 0 0 2px #333; }
+.sb-phone-screen { height: min(844px, 74vh); aspect-ratio: 390 / 844; overflow-y: auto; background: #fff; border-radius: 22px; scrollbar-width: thin; }
+.sb-phone-part { display: block; width: 100%; height: auto; }
+.sb-options-modal { width: min(760px, 94vw); }
+.sb-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 6px 0 14px; }
+.sb-kind { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); cursor: var(--cursor); min-width: 0; }
+.sb-kind:hover { border-color: var(--background-modifier-border-hover); background: var(--background-modifier-hover); }
+.sb-kind.is-active { border-color: var(--interactive-accent); box-shadow: 0 0 0 1px var(--interactive-accent); background: var(--background-modifier-hover); }
+.sb-kind-icon { display: flex; color: var(--text-muted); }
+.sb-kind.is-active .sb-kind-icon { color: var(--interactive-accent); }
+.sb-kind-icon svg { width: 20px; height: 20px; }
+.sb-kind-name { font-weight: var(--font-semibold); font-size: var(--font-ui-small); }
+.sb-kind-blurb { font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.35; }
+.sb-kind-warning { white-space: normal; margin-top: 8px; }
+@media (max-width: 640px) { .sb-kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

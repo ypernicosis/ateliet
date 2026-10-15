@@ -5,7 +5,7 @@
 // number of frames; for film, shots held for seconds. Same thing.
 
 import { Editor } from "./editor.ts";
-import { Frame, Layer, frameStarts, newLayer, timecode, totalFrames, uid } from "./model.ts";
+import { Frame, Layer, frameStarts, isPageKind, newLayer, timecode, totalFrames, uid, unitName } from "./model.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
 import { openPopover } from "./popover.ts";
@@ -34,8 +34,16 @@ export class Timeline {
   private version = 0;
   private off: (() => void)[] = [];
 
+  /** time: animatic; cards: presentation board; pages: the page kinds. */
+  get mode(): "time" | "cards" | "pages" {
+    const k = this.ed.board.kind;
+    return isPageKind(k) ? "pages" : k === "presentation" ? "cards" : "time";
+  }
+
   constructor(private app: any, private ed: Editor, parent: HTMLElement) {
     this.el = parent.createDiv("sb-timeline");
+    this.el.addClass(`mode-${isPageKind(ed.board.kind) ? "pages" : ed.board.kind === "presentation" ? "cards" : "time"}`);
+    this.el.toggleClass("is-webtoon", ed.board.kind === "webtoon");
     const bar = this.el.createDiv("sb-timeline-bar");
     const btn = (icon: string, label: string, fn: (e: MouseEvent) => void) => {
       const b = bar.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
@@ -68,7 +76,10 @@ export class Timeline {
     onionSettings.addClass("sb-caret");
     btn("plus", "New frame (Ctrl/Cmd+Enter)", () => this.ed.newFrame());
     btn("copy-plus", "Duplicate frame", () => this.duplicate(this.ed.frame));
-    const zoom = bar.createEl("input", { type: "range", cls: "sb-timeline-zoom", attr: { min: "0", max: "100", value: "0", "aria-label": "Timeline zoom" } });
+    const zoom = bar.createEl("input", { type: "range", cls: "sb-timeline-zoom sb-time-only", attr: { min: "0", max: "100", value: "0", "aria-label": "Timeline zoom" } });
+    // Pages and cards have no clock.
+    for (const el of [this.playBtn, loopBtn, this.timeEl, fps]) el.addClass("sb-play-only");
+    for (const el of [this.onionBtn, onionSettings]) el.addClass("sb-time-only");
     zoom.addEventListener("input", () => {
       const v = Number(zoom.value);
       this.pxPerFrame = v === 0 ? 0 : 2 + (v / 100) ** 2 * 60;
@@ -129,6 +140,28 @@ export class Timeline {
     return u;
   }
 
+  private thumbQueue: Frame[] = [];
+  private thumbBusy = false;
+
+  /** Frames without a picture yet (a new board, imported pages) get one, one at a time. */
+  private queueThumb(f: Frame) {
+    if (!this.thumbQueue.includes(f)) this.thumbQueue.push(f);
+    if (this.thumbBusy) return;
+    this.thumbBusy = true;
+    const next = async () => {
+      const g = this.thumbQueue.shift();
+      if (!g || !this.el.isConnected) {
+        // Detached (a re-render or a closed view): what is left is asked for again on the next render.
+        this.thumbQueue.length = 0;
+        this.thumbBusy = false;
+        return;
+      }
+      if (!this.ed.doc.thumbs.has(g.id)) await this.ed.updateThumb(g);
+      setTimeout(next, 30);
+    };
+    setTimeout(next, 200);
+  }
+
   private scale(): number {
     const total = Math.max(1, totalFrames(this.ed.board));
     const fit = Math.max(2, (this.scroller.clientWidth - 24) / total);
@@ -139,15 +172,36 @@ export class Timeline {
     const b = this.ed.board;
     if (!this.ed.frame) return;
     const k = this.scale();
+    const mode = this.mode;
     const starts = frameStarts(b);
     const total = totalFrames(b);
-    const width = Math.max(this.scroller.clientWidth, total * k + 80);
+    // Cards and pages: one box each, in reading order (manga: right to left, spreads paired).
+    const trackH = Math.max(60, this.track.clientHeight || 110);
+    // A webtoon part is far taller than wide: its box shows the top of it.
+    const boxW = mode === "cards" ? 190 : b.kind === "webtoon" ? 120 : Math.max(46, Math.min(220, ((trackH - 22) * b.width) / b.height));
+    const pos: number[] = [];
+    let x = 4;
+    b.frames.forEach((_, i) => {
+      if (mode === "time") return;
+      const spreadGap = b.page?.spreads ? (i === 1 || (i > 1 && i % 2 === 1) ? 18 : 2) : 10;
+      if (i > 0) x += spreadGap;
+      pos.push(x);
+      x += boxW;
+    });
+    const contentW = mode === "time" ? total * k + 80 : x + 40;
+    const width = Math.max(this.scroller.clientWidth - 24, contentW);
+    const rtl = mode === "pages" && !!b.page?.rtl;
     this.track.style.width = `${width}px`;
     this.track.empty();
     b.frames.forEach((f, i) => {
       const clip = this.track.createDiv({ cls: "sb-clip", attr: { draggable: "true" } });
-      clip.style.left = `${starts[i] * k}px`;
-      clip.style.width = `${Math.max(8, f.duration * k - 2)}px`;
+      if (mode === "time") {
+        clip.style.left = `${starts[i] * k}px`;
+        clip.style.width = `${Math.max(8, f.duration * k - 2)}px`;
+      } else {
+        clip.style.left = `${rtl ? width - pos[i] - boxW : pos[i]}px`;
+        clip.style.width = `${boxW}px`;
+      }
       clip.toggleClass("is-active", f === this.ed.frame);
       const cur = this.ed.frameIndex, on = b.onion;
       if (on.enabled && ((i < cur && cur - i <= on.before) || (i > cur && i - cur <= on.after))) {
@@ -158,10 +212,16 @@ export class Timeline {
       if (f.color) clip.style.setProperty("--sb-label", f.color);
       const url = this.thumb(f);
       if (url) clip.createEl("img", { attr: { src: url, draggable: "false" } });
+      else this.queueThumb(f);
       const info = clip.createDiv("sb-clip-info");
-      info.createSpan({ cls: "sb-clip-num", text: String(i + 1) });
+      info.createSpan({ cls: "sb-clip-num", text: mode === "pages" ? `${unitName(b).toLowerCase().slice(0, 1)}.${i + 1}` : String(i + 1) });
       if (f.name) info.createSpan({ cls: "sb-clip-name", text: f.name });
-      info.createSpan({ cls: "sb-clip-dur", text: `${(f.duration / b.fps).toFixed(f.duration % b.fps ? 2 : 0)}s` });
+      if (mode === "time") info.createSpan({ cls: "sb-clip-dur", text: `${(f.duration / b.fps).toFixed(f.duration % b.fps ? 2 : 0)}s` });
+      if (mode === "cards") {
+        const note = [f.notes.shot, f.notes.camera].filter(Boolean).join(" · ");
+        if (note) info.createSpan({ cls: "sb-clip-dur", text: note });
+        if (f.notes.action || f.notes.dialogue) clip.createDiv({ cls: "sb-clip-note", text: f.notes.action || `“${f.notes.dialogue}”` });
+      }
       clip.addEventListener("click", () => this.ed.setFrame(f));
       clip.addEventListener("dblclick", () => this.rename(f));
       clip.addEventListener("contextmenu", (e) => {
@@ -181,9 +241,11 @@ export class Timeline {
         this.move(id, f.id, e.clientX > r.left + r.width / 2);
       });
       // The right edge sets the duration.
-      const edge = clip.createDiv({ cls: "sb-clip-edge", attr: { "aria-label": "Drag to change how long the frame lasts" } });
-      edge.addEventListener("pointerdown", (e) => this.resize(e, f, edge));
-      edge.addEventListener("click", (e) => e.stopPropagation());
+      if (mode === "time") {
+        const edge = clip.createDiv({ cls: "sb-clip-edge", attr: { "aria-label": "Drag to change how long the frame lasts" } });
+        edge.addEventListener("pointerdown", (e) => this.resize(e, f, edge));
+        edge.addEventListener("click", (e) => e.stopPropagation());
+      }
     });
     this.drawRuler(width, k);
     this.placePlayhead();
@@ -555,6 +617,18 @@ export class Timeline {
     el.empty();
     const head = el.createDiv("sb-notes-head");
     head.createSpan({ cls: "sb-notes-title", text: ed.frameName(f) });
+    if (this.mode === "pages") {
+      // A page is written from the script: the excerpt it covers, next to it.
+      const n = (f.panels || []).length, bl = (f.balloons || []).length;
+      head.createSpan({ cls: "sb-notes-dur", text: `${n} ${n === 1 ? "panel" : "panels"} · ${bl} ${bl === 1 ? "balloon" : "balloons"}` });
+      const wrap = el.createDiv("sb-note sb-note-script");
+      wrap.createDiv({ cls: "sb-note-label", text: ed.board.kind === "thumbnails" ? "Notes" : `Script for this ${unitName(ed.board).toLowerCase()}` });
+      const t = wrap.createEl("textarea", { attr: { rows: "6", placeholder: ed.board.kind === "thumbnails" ? "What these thumbnails explore" : `Paste the part of the script this ${unitName(ed.board).toLowerCase()} covers; write its beats` } });
+      t.value = f.script || "";
+      t.addEventListener("keydown", (e) => e.stopPropagation());
+      t.addEventListener("change", () => ed.mutate("Page script", () => (f.script = t.value)));
+      return;
+    }
     head.createSpan({ cls: "sb-notes-dur", text: `${(f.duration / ed.board.fps).toFixed(2)} s · ${f.duration} frames` });
     const grid = el.createDiv("sb-notes-grid");
     const select = (label: string, values: string[], key: "shot" | "camera") => {
