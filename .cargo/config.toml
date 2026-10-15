@@ -2,5 +2,8 @@
 # macOS 13.4. Se o linker usar um alvo mais antigo (o padrão do Rust é 11.0),
 # o macOS emite avisos "built for newer 'macOS' version" para cada objeto.
 # Alinhar o alvo de deploy evita os avisos e a mistura de versões no binário.
+# O `tauri build` define essa variável a partir de
+# bundle.macOS.minimumSystemVersion (padrão 10.13), que prevalece sobre o valor
+# daqui; por isso o mesmo 13.4 também está em tauri.conf.json.
 [env]
 MACOSX_DEPLOYMENT_TARGET = { value = "13.4", force = false }

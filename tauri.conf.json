@@ -18,6 +18,9 @@
     "active": true,
     "targets": "all",
     "icon": ["icons/icon.png", "icons/icon.icns"],
-    "category": "Productivity"
+    "category": "Productivity",
+    "macOS": {
+      "minimumSystemVersion": "13.4"
+    }
   }
 }
