@@ -15,6 +15,7 @@ import { invoke, isMac } from "./tauri.ts";
 const APPEARANCE_KEYS = new Set([
   "accentColor", "baseFontSize", "baseFontSizeAction", "cssTheme", "enabledCssSnippets", "interfaceFontFamily",
   "monospaceFontFamily", "nativeMenus", "showRibbon", "showViewHeader", "textFontFamily", "theme", "translucency",
+  "atelietTextAlign",
 ]);
 
 export class App extends Events {
@@ -582,6 +583,7 @@ export class CustomCss extends Events {
       body.style.removeProperty("--accent-s");
       body.style.removeProperty("--accent-l");
     }
+    body.style.setProperty("--ateliet-text-align", cfg("atelietTextAlign") || "justify");
     body.toggleClass("is-translucent", !!cfg("translucency"));
     body.toggleClass("show-ribbon", cfg("showRibbon") !== false);
     this.app.workspace.leftRibbon.containerEl.toggle(cfg("showRibbon") !== false);
