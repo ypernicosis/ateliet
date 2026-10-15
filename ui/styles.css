@@ -303,6 +303,8 @@ body {
   --cursor-link: pointer;
   --frame-left-space: 0px;
   --traffic-lights-offset-x: 12px;
+  /* width the macOS traffic lights take at the window's top-left corner */
+  --traffic-lights-width: 84px;
 }
 
 .theme-dark {
@@ -565,9 +567,11 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
 .mod-sidedock .workspace-tab-header.is-active { background-color: var(--background-modifier-hover); color: var(--text-normal); }
 .mod-sidedock .workspace-tab-header-inner-icon { opacity: 1; --icon-size: var(--icon-m); }
 .mod-sidedock .workspace-tab-container { background-color: var(--background-secondary); }
-.is-hidden-frameless.is-left-sidedock-collapsed .mod-root > .workspace-tabs:first-child .workspace-tab-header-container,
-.is-hidden-frameless.is-left-sidedock-collapsed:not(.show-ribbon) .mod-root .workspace-tab-header-container { --frame-left-space: 32px; }
-.is-hidden-frameless:not(.show-ribbon) .mod-left-split .workspace-tab-header-container { padding-left: 80px; }
+/* macOS overlay title bar: whatever header sits at the top-left corner starts after the traffic lights. */
+.is-hidden-frameless:not(.is-fullscreen).show-ribbon:not(.is-left-sidedock-collapsed) .mod-left-split .workspace-tab-header-container { padding-left: calc(var(--traffic-lights-width) - var(--ribbon-width)); }
+.is-hidden-frameless:not(.is-fullscreen):not(.show-ribbon):not(.is-left-sidedock-collapsed) .mod-left-split .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
+.is-hidden-frameless:not(.is-fullscreen).show-ribbon.is-left-sidedock-collapsed .mod-root > .workspace-tabs:first-child .workspace-tab-header-container { padding-left: calc(var(--traffic-lights-width) - var(--ribbon-width)); }
+.is-hidden-frameless:not(.is-fullscreen):not(.show-ribbon).is-left-sidedock-collapsed .mod-root .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
 .is-hidden-frameless.is-right-sidedock-collapsed .mod-root .workspace-tab-header-container { padding-right: 44px; }
 .is-hidden-frameless:not(.is-right-sidedock-collapsed) .mod-right-split .workspace-tab-header-container { padding-right: 44px; }
 
@@ -680,6 +684,9 @@ body:not(.show-view-header) .mod-root .view-header { display: none; }
 .markdown-source-view.mod-cm6 .cm-content { flex-basis: unset !important; width: 0; min-height: unset; padding: 0; }
 .cm-content { caret-color: var(--caret-color, var(--text-normal)); white-space: pre-wrap; word-wrap: break-word; }
 .cm-line { padding: 0; }
+/* CM measures block widgets by their border box: keep children's margins (callout, properties) inside it,
+   or every line below the widget drifts and clicks land on the wrong line. */
+.cm-embed-block { display: flow-root; }
 .cm-cursor, .cm-dropCursor { border-left: 2px solid var(--caret-color, var(--interactive-accent)) !important; }
 .cm-selectionBackground, .cm-focused .cm-selectionBackground, .cm-content ::selection { background: var(--text-selection) !important; }
 .cm-gutters { background: var(--background-primary) !important; border: none !important; color: var(--text-faint); font-size: var(--font-ui-smaller); }
@@ -1080,3 +1087,12 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .video-container video { max-width: 100%; max-height: calc(100vh - 140px); }
 .pdf-container { width: 100%; height: 100%; border: none; }
 .view-content:has(> .pdf-container) { padding: 0; }
+
+/* ── self-update ──────────────────────────────────────────────────────── */
+.side-dock-ribbon-action.mod-update { color: var(--interactive-accent); opacity: 1; }
+.mod-ateliet-update { width: 560px; max-width: 90vw; }
+.ateliet-update-commits { max-height: 30vh; overflow-y: auto; padding-inline-start: 1.2em; user-select: text; -webkit-user-select: text; font-size: var(--font-ui-small); }
+.ateliet-update-commits li { margin-block: 2px; }
+.ateliet-update-commits .mod-muted { color: var(--text-muted); list-style: none; }
+.ateliet-update-step { margin-top: var(--size-4-3); color: var(--text-muted); font-size: var(--font-ui-small); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.ateliet-update-log { max-height: 180px; overflow: auto; margin: var(--size-4-2) 0 0; padding: var(--size-4-2); background: var(--background-secondary); border-radius: var(--radius-s); font-size: var(--font-ui-smaller); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }

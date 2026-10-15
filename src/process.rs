@@ -34,6 +34,7 @@ pub fn augmented_path() -> String {
     if let Some(h) = dirs::home_dir() {
         extra.push(h.join(".cargo/bin").to_string_lossy().into_owned());
         extra.push(h.join(".local/bin").to_string_lossy().into_owned());
+        extra.push(h.join(".deno/bin").to_string_lossy().into_owned());
     }
     let sep = if cfg!(windows) { ";" } else { ":" };
     let mut parts: Vec<String> = base.split(sep).filter(|s| !s.is_empty()).map(String::from).collect();

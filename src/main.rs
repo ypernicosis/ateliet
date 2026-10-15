@@ -3,6 +3,7 @@
 //! Ateliet desktop shell: Tauri glue around `ateliet_core`.
 
 mod process;
+mod update;
 
 use ateliet_core::{metadata, render, search, vault};
 use base64::Engine;
@@ -727,6 +728,9 @@ fn main() {
             process::proc_write,
             process::proc_close_stdin,
             process::proc_kill,
+            update::update_check,
+            update::update_apply,
+            update::update_restart,
         ])
         .setup(|app| {
             // `ateliet <vault-path>` opens that vault; otherwise reopen the last one.
