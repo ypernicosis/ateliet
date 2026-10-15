@@ -24,6 +24,14 @@ cargo install tauri-cli --version "^2"
 ./build.sh && cargo tauri build
 ```
 
+## Atualizando
+
+O Ateliet se atualiza a partir do clone do repositório onde foi compilado. Ele roda `git fetch` ao abrir e a cada 30 minutos. Quando o branch upstream tem commits que a build atual não tem, aparece uma seta na parte de baixo da barra lateral (há também o comando *Check for updates*). O botão mostra os commits novos e, ao confirmar, faz `git pull --ff-only`, `./build.sh` e `cargo build --release`, troca o executável (dentro do `.app`, quando instalado) e reinicia. Se o clone mudou de lugar, aponte `ATELIET_SOURCE` para ele.
+
+## Benchmark
+
+`scripts/bench.sh ~/caminho/do/vault` (macOS) abre o mesmo vault no Ateliet e no Obsidian e mede tamanho do app, tempo até a janela aparecer, memória e CPU parado.
+
 ## Usando o mesmo vault no Obsidian e no Ateliet
 
 | O quê | Onde fica | Compartilhado? |
