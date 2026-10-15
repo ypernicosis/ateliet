@@ -219,12 +219,40 @@ fn environment() -> Result<Environment, String> {
     ENV.get_or_init(|| ort::init().with_name("ateliet").build().map_err(|e| e.to_string())).clone()
 }
 
+/// Threads the picture analysis may use. It runs while the user writes, so it
+/// takes a small share of the machine instead of every core but one.
+pub fn background_threads() -> usize {
+    let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    (cores / 4).clamp(1, 2)
+}
+
+/// Marks the calling thread as background work (macOS: utility QoS, so the
+/// scheduler favours the UI and may use the efficiency cores).
+pub fn lower_thread_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        extern "C" {
+            fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+        }
+        const QOS_CLASS_UTILITY: u32 = 0x11;
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+        }
+    }
+}
+
 fn session(path: &Path, threads: usize) -> Result<Session, String> {
     Session::builder(&environment()?)
         .map_err(|e| e.to_string())?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .map_err(|e| e.to_string())?
         .with_intra_threads(threads)
+        .map_err(|e| e.to_string())?
+        // ONNX Runtime's workers busy-wait after each run by default, burning
+        // CPU between batches while the app is in use.
+        .with_intra_op_spinning(false)
+        .map_err(|e| e.to_string())?
+        .with_inter_op_spinning(false)
         .map_err(|e| e.to_string())?
         .commit_from_file(path)
         .map_err(|e| format!("{}: {e}", path.display()))
@@ -237,10 +265,10 @@ fn normalized(mut v: Vec<f32>) -> Vec<f32> {
 
 impl Clip {
     pub fn load(dir: &Path) -> Result<Clip, String> {
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).saturating_sub(1).max(1);
         let tokenizer = Tokenizer::from_json(&std::fs::read_to_string(dir.join("tokenizer.json")).map_err(|e| e.to_string())?)?;
-        let vision = session(&dir.join("vision_model.onnx"), threads)?;
-        let text = session(&dir.join("text_model.onnx"), threads.min(4))?;
+        let vision = session(&dir.join("vision_model.onnx"), background_threads())?;
+        // Text runs once per search the user types: short, interactive.
+        let text = session(&dir.join("text_model.onnx"), 2)?;
         let vision_io = io_of(&vision, "image_embeds");
         let text_io = io_of(&text, "text_embeds");
         Ok(Clip { vision: Mutex::new(vision), text: Mutex::new(text), vision_io, text_io, tokenizer })

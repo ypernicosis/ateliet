@@ -110,11 +110,12 @@ export const lineClasses = ViewPlugin.fromClass(
 // ── widgets ───────────────────────────────────────────────────────────────
 
 class CheckboxWidget extends WidgetType {
-  constructor(readonly checked: boolean, readonly char: string, readonly pos: number) {
+  constructor(readonly checked: boolean, readonly char: string) {
     super();
   }
+  // Position is read from the DOM on click, so a shifted checkbox keeps its DOM.
   eq(o: CheckboxWidget) {
-    return o.checked === this.checked && o.char === this.char && o.pos === this.pos;
+    return o.checked === this.checked && o.char === this.char;
   }
   toDOM(view: EditorView) {
     const wrap = document.createElement("label");
@@ -127,7 +128,8 @@ class CheckboxWidget extends WidgetType {
     input.addEventListener("mousedown", (e) => e.preventDefault());
     input.addEventListener("click", (e) => {
       e.preventDefault();
-      const at = this.pos + 1; // inside "[ ]"
+      const start = view.posAtDOM(wrap);
+      const at = view.state.doc.sliceString(start, start + 40).indexOf("[") + start + 1; // inside "[ ]"
       const next = this.checked ? " " : "x";
       view.dispatch({ changes: { from: at, to: at + 1, insert: next }, userEvent: "input" });
     });
@@ -268,7 +270,7 @@ function buildLivePreview(view: EditorView): DecorationSet {
             const listMark = item?.getChild("ListMark");
             if (!touched(node.from, node.to)) {
               const start = listMark && listMark.from >= lineFrom ? listMark.from : node.from;
-              deco.push(Decoration.replace({ widget: new CheckboxWidget(ch !== " ", ch, node.from) }).range(start, node.to));
+              deco.push(Decoration.replace({ widget: new CheckboxWidget(ch !== " ", ch) }).range(start, node.to));
             }
             if (ch !== " ") {
               const line = doc.lineAt(node.from);
@@ -419,11 +421,12 @@ function linkClicks(live: boolean): Extension {
 // ── block widgets (callouts, properties) — must come from a StateField ─────
 
 class CalloutWidget extends WidgetType {
-  constructor(readonly text: string, readonly from: number) {
+  constructor(readonly text: string) {
     super();
   }
+  // Typing above a callout shifts `from`; comparing it would re-render every callout below on each keystroke.
   eq(o: CalloutWidget) {
-    return o.text === this.text && o.from === this.from;
+    return o.text === this.text;
   }
   toDOM(view: EditorView) {
     const el = document.createElement("div");
@@ -433,7 +436,7 @@ class CalloutWidget extends WidgetType {
     el.addEventListener("mousedown", (e) => {
       if ((e.target as HTMLElement).closest("a, input, .callout-fold, .callout-title")) return;
       e.preventDefault();
-      view.dispatch({ selection: { anchor: this.from + 2 } });
+      view.dispatch({ selection: { anchor: view.posAtDOM(el) + 2 } });
       view.focus();
     });
     return el;
@@ -486,7 +489,7 @@ function buildBlocks(state: EditorState): DecorationSet {
         const first = doc.lineAt(node.from).text;
         if (/^\s*>\s*\[![^\]]+\]/.test(first) && !inside(node.from, node.to) && host?.renderMarkdown) {
           const end = doc.lineAt(node.to).to;
-          out.push(Decoration.replace({ widget: new CalloutWidget(doc.sliceString(node.from, end), node.from), block: true }).range(doc.lineAt(node.from).from, end));
+          out.push(Decoration.replace({ widget: new CalloutWidget(doc.sliceString(node.from, end)), block: true }).range(doc.lineAt(node.from).from, end));
         }
         return false;
       }

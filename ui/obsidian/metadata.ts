@@ -20,6 +20,10 @@ export class MetadataCache extends Events {
   resolved = false;
   inProgressTaskCount = 0;
   private byName = new Map<string, TFile[]>(); // lower basename (md) or name → files
+  /** lower last segment of each link target → source paths, so a file appearing or
+   *  disappearing only re-resolves the notes that could link to it */
+  private linkSources = new Map<string, Set<string>>();
+  private sourceKeys = new Map<string, string[]>();
   private queue = new Map<string, Promise<void>>();
 
   constructor(app: any, vault: Vault) {
@@ -194,7 +198,7 @@ export class MetadataCache extends Events {
       if (!(f instanceof TFile)) return;
       this.indexName(f, true);
       if (f.extension === "md") this.reparse(f);
-      else this.resolveAll(); // new attachment may resolve pending links
+      this.resolveLinksTo([f.path]); // pending links may resolve to the new file
     });
     v.on("modify", (f: any) => f instanceof TFile && f.extension === "md" && this.reparse(f));
     v.on("delete", (f: any) => {
@@ -205,8 +209,9 @@ export class MetadataCache extends Events {
       delete this.metadataCache[f.path];
       delete this.resolvedLinks[f.path];
       delete this.unresolvedLinks[f.path];
+      this.forgetSource(f.path);
       this.trigger("deleted", f, prev);
-      this.resolveAll();
+      this.resolveLinksTo([f.path]);
     });
     v.on("rename", (f: any, oldPath: string) => {
       if (!(f instanceof TFile)) return;
@@ -223,8 +228,10 @@ export class MetadataCache extends Events {
       }
       delete this.resolvedLinks[oldPath];
       delete this.unresolvedLinks[oldPath];
+      this.forgetSource(oldPath);
       if (f.extension === "md" && !this.fileCache[f.path]) this.reparse(f);
-      this.resolveAll();
+      else if (this.fileCache[f.path]) this.resolveFile(f.path); // its relative links moved with it
+      this.resolveLinksTo([oldPath, f.path]);
     });
   }
 
@@ -255,15 +262,47 @@ export class MetadataCache extends Events {
   private resolveFile(path: string) {
     const resolved: Record<string, number> = {};
     const unresolved: Record<string, number> = {};
+    const keys = new Set<string>();
     iterateCacheRefs(this.getCache(path), (ref: any) => {
       const lp = getLinkpath(ref.link);
       if (!lp) return;
+      keys.add(linkKey(lp));
       const dest = this.getFirstLinkpathDest(lp, path);
       if (dest) resolved[dest.path] = (resolved[dest.path] || 0) + 1;
       else unresolved[lp] = (unresolved[lp] || 0) + 1;
     });
     this.resolvedLinks[path] = resolved;
     this.unresolvedLinks[path] = unresolved;
+    this.forgetSource(path);
+    this.sourceKeys.set(path, [...keys]);
+    for (const k of keys) {
+      const set = this.linkSources.get(k);
+      if (set) set.add(path);
+      else this.linkSources.set(k, new Set([path]));
+    }
+  }
+
+  private forgetSource(path: string) {
+    for (const k of this.sourceKeys.get(path) || []) {
+      const set = this.linkSources.get(k);
+      set?.delete(path);
+      if (set && !set.size) this.linkSources.delete(k);
+    }
+    this.sourceKeys.delete(path);
+  }
+
+  /** Re-resolves the notes whose links could point at these (added, removed or renamed) paths. */
+  private resolveLinksTo(paths: string[]) {
+    const sources = new Set<string>();
+    for (const p of paths) {
+      const name = p.split("/").pop()!.toLowerCase();
+      for (const k of name.endsWith(".md") ? [name, name.slice(0, -3)] : [name]) {
+        for (const src of this.linkSources.get(k) || []) sources.add(src);
+      }
+    }
+    for (const src of sources) if (this.fileCache[src]) this.resolveFile(src);
+    this.resolved = true;
+    this.trigger("resolved");
   }
 
   /** @internal */ resolveAll() {
@@ -271,6 +310,15 @@ export class MetadataCache extends Events {
     this.resolved = true;
     this.trigger("resolved");
   }
+}
+
+/** Key a link target is indexed under: its last path segment, lower-cased, without `.md`. */
+function linkKey(linkpath: string): string {
+  let name = linkpath.split("/").pop()!.toLowerCase();
+  try {
+    name = decodeURIComponent(name);
+  } catch { /* keep raw */ }
+  return name.endsWith(".md") ? name.slice(0, -3) : name;
 }
 
 function guessType(v: any): string {

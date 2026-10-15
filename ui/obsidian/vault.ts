@@ -155,6 +155,8 @@ export class Vault extends Events {
   adapter: FileSystemAdapter;
   configDir = ".obsidian";
   fileMap: Record<string, TAbstractFile> = {};
+  /** @internal lower-cased path → entries, so case-insensitive lookups don't scan the vault */
+  private lowerMap = new Map<string, TAbstractFile[]>();
   root: TFolder;
   config: Record<string, any> = {};
   /** @internal */ private contentCache = new Map<string, { mtime: number; data: string }>();
@@ -166,7 +168,26 @@ export class Vault extends Events {
     this.root = new TFolder();
     this.root.vault = this;
     this.root.setPath("/");
-    this.fileMap["/"] = this.root;
+    this.setEntry("/", this.root);
+  }
+
+  private setEntry(path: string, f: TAbstractFile) {
+    this.fileMap[path] = f;
+    const k = path.toLowerCase();
+    const list = this.lowerMap.get(k);
+    if (list) list.push(f);
+    else this.lowerMap.set(k, [f]);
+  }
+
+  private deleteEntry(path: string) {
+    const f = this.fileMap[path];
+    delete this.fileMap[path];
+    const k = path.toLowerCase();
+    const list = this.lowerMap.get(k);
+    if (!list) return;
+    const rest = list.filter((x) => x !== f);
+    if (rest.length) this.lowerMap.set(k, rest);
+    else this.lowerMap.delete(k);
   }
 
   static recurseChildren(root: TFolder, cb: (file: TAbstractFile) => any): void {
@@ -189,9 +210,7 @@ export class Vault extends Events {
     return this.fileMap[p] || null;
   }
   getAbstractFileByPathInsensitive(path: string): TAbstractFile | null {
-    const p = normalizePath(path).toLowerCase();
-    for (const k in this.fileMap) if (k.toLowerCase() === p) return this.fileMap[k];
-    return null;
+    return this.lowerMap.get(normalizePath(path).toLowerCase())?.[0] || null;
   }
   getFileByPath(path: string): TFile | null {
     const f = this.getAbstractFileByPath(path);
@@ -249,13 +268,13 @@ export class Vault extends Events {
     f.vault = this;
     f.parent = parent;
     parent.children.push(f);
-    this.fileMap[path] = f;
+    this.setEntry(path, f);
     return f;
   }
 
   /** @internal */ removeEntry(file: TAbstractFile): void {
     if (file instanceof TFolder) for (const c of file.children.slice()) this.removeEntry(c);
-    delete this.fileMap[file.path];
+    this.deleteEntry(file.path);
     if (file.parent) file.parent.children.remove(file);
     if (file instanceof TFile) {
       file.deleted = true;
@@ -265,14 +284,14 @@ export class Vault extends Events {
 
   /** @internal */ movePath(file: TAbstractFile, newPath: string): void {
     const oldPath = file.path;
-    delete this.fileMap[oldPath];
+    this.deleteEntry(oldPath);
     file.parent?.children.remove(file);
     (file as any).setPath(newPath);
     const parentPath = dirname(newPath) || "/";
     const parent = (this.fileMap[parentPath] as TFolder) || (this.addEntry(parentPath, true) as TFolder);
     file.parent = parent;
     parent.children.push(file);
-    this.fileMap[newPath] = file;
+    this.setEntry(newPath, file);
     const cached = this.contentCache.get(oldPath);
     if (cached) {
       this.contentCache.delete(oldPath);
