@@ -16,7 +16,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
@@ -24,6 +24,21 @@ type Res<T> = Result<T, String>;
 
 const BATCH: usize = 8;
 const THUMB_SIZE: u32 = 480;
+
+/// Scanning, hashing and decoding pictures get their own small pool: on
+/// rayon's global pool they would hold up the notes side (`vault_metadata_all`,
+/// search) for as long as a batch of large pictures takes.
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(clip::background_threads())
+            .thread_name(|i| format!("images-{i}"))
+            .start_handler(|_| clip::lower_thread_priority())
+            .build()
+            .expect("image thread pool")
+    })
+}
 
 pub fn model_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("ATELIET_CLIP_DIR") {
@@ -258,7 +273,7 @@ impl Gallery {
     /// or edited files have their headers read.
     fn rescan(&self) {
         let sources = self.lib.lock().unwrap().sources.clone();
-        let found = images::scan(&sources);
+        let found = pool().install(|| images::scan(&sources));
         {
             let mut lib = self.lib.lock().unwrap();
             let entries = lib.index.update_from_scan(&found);
@@ -382,6 +397,7 @@ impl Gallery {
     /// The indexer: analyses pending pictures a batch at a time while the
     /// model is available and automatic indexing is on.
     fn work(self: Arc<Self>) {
+        clip::lower_thread_priority();
         let mut announced_idle = false;
         loop {
             if self.stop.load(Ordering::Relaxed) {
@@ -434,7 +450,7 @@ impl Gallery {
     fn process(&self, model: &Clip, batch: Vec<ImageEntry>) {
         // Content digests first: a renamed or moved picture gets its old
         // vector back without being analysed again.
-        let digests: Vec<Option<[u8; 32]>> = batch.par_iter().map(|e| images::file_digest(Path::new(&e.abs)).ok()).collect();
+        let digests: Vec<Option<[u8; 32]>> = pool().install(|| batch.par_iter().map(|e| images::file_digest(Path::new(&e.abs)).ok()).collect());
         let mut todo = Vec::new();
         {
             let mut lib = self.lib.lock().unwrap();
@@ -462,7 +478,7 @@ impl Gallery {
             return;
         }
         let thumbs = thumb_dir();
-        let prepared: Vec<Option<Vec<f32>>> = todo
+        let prepared: Vec<Option<Vec<f32>>> = pool().install(|| todo
             .par_iter()
             .map(|(e, _)| {
                 let img = images::open_oriented(Path::new(&e.abs)).ok()?;
@@ -477,7 +493,7 @@ impl Gallery {
                 }
                 Some(clip::pixel_values(&img))
             })
-            .collect();
+            .collect());
         let inputs: Vec<Vec<f32>> = prepared.iter().flatten().cloned().collect();
         let vectors = match model.embed_images(&inputs) {
             Ok(v) => v,
