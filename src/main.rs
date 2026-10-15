@@ -193,26 +193,27 @@ fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<AppStat
     let label = window.label().to_string();
     let root2 = root.clone();
     let app2 = app.clone();
-    std::thread::spawn(move || loop {
-        let Ok(first) = rx.recv() else { break };
-        let mut batch: HashSet<PathBuf> = HashSet::from([first]);
-        let deadline = std::time::Instant::now() + Duration::from_millis(80);
-        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
-            match rx.recv_timeout(left) {
-                Ok(p) => {
-                    batch.insert(p);
+    std::thread::spawn(move || {
+        while let Ok(first) = rx.recv() {
+            let mut batch: HashSet<PathBuf> = HashSet::from([first]);
+            let deadline = std::time::Instant::now() + Duration::from_millis(80);
+            while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(p) => {
+                        batch.insert(p);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => break,
+                    Err(_) => return,
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => break,
-                Err(_) => return,
             }
-        }
-        let rels: Vec<String> = batch
-            .iter()
-            .map(|p| vault::rel_path(&root2, p))
-            .filter(|r| !r.is_empty() && !r.starts_with(".git/") && r != ".git" && !r.starts_with(".trash"))
-            .collect();
-        if !rels.is_empty() && app2.emit_to(label.as_str(), "vault-fs", rels).is_err() {
-            break;
+            let rels: Vec<String> = batch
+                .iter()
+                .map(|p| vault::rel_path(&root2, p))
+                .filter(|r| !r.is_empty() && !r.starts_with(".git/") && r != ".git" && !r.starts_with(".trash"))
+                .collect();
+            if !rels.is_empty() && app2.emit_to(label.as_str(), "vault-fs", rels).is_err() {
+                break;
+            }
         }
     });
     state.watchers.lock().unwrap().insert(window.label().to_string(), watcher);
@@ -766,7 +767,7 @@ fn main() {
             if let Some(t) = &target {
                 remember_vault(t);
             }
-            open_window(app.handle(), target.as_deref()).map_err(|e| Box::<dyn std::error::Error>::from(e))?;
+            open_window(app.handle(), target.as_deref()).map_err(Box::<dyn std::error::Error>::from)?;
             Ok(())
         })
         .on_window_event(|window, event| {

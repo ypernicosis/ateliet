@@ -250,4 +250,128 @@ W.ajax = (o: any) => {
 };
 W.ajaxPromise = (o: any) => new Promise((resolve, reject) => W.ajax({ ...o, success: resolve, error: reject }));
 
+// ── types (same shape as the `declare global` block of obsidian.d.ts) ────
+declare global {
+  interface DomElementInfo {
+    cls?: string | string[];
+    text?: string | DocumentFragment;
+    attr?: Record<string, string | number | boolean | null>;
+    title?: string;
+    parent?: Node;
+    value?: string;
+    type?: string;
+    prepend?: boolean;
+    placeholder?: string;
+    href?: string;
+  }
+  interface SvgElementInfo {
+    cls?: string | string[];
+    attr?: Record<string, string | number | boolean | null>;
+    parent?: Node;
+    prepend?: boolean;
+  }
+  interface ObjectConstructor {
+    isEmpty(object: Record<string, any>): boolean;
+    each<T>(object: Record<string, T>, callback: (value: T, key?: string) => boolean | void, context?: any): boolean;
+  }
+  interface ArrayConstructor {
+    combine<T>(arrays: T[][]): T[];
+  }
+  interface Array<T> {
+    first(): T | undefined;
+    last(): T | undefined;
+    contains(target: T): boolean;
+    remove(target: T): void;
+    shuffle(): this;
+    unique(): T[];
+  }
+  interface Math {
+    clamp(value: number, min: number, max: number): number;
+    square(value: number): number;
+  }
+  interface StringConstructor {
+    isString(obj: any): obj is string;
+  }
+  interface String {
+    contains(target: string): boolean;
+    format(...args: string[]): string;
+  }
+  interface NumberConstructor {
+    isNumber(obj: any): obj is number;
+  }
+  interface Node {
+    createEl<K extends keyof HTMLElementTagNameMap>(tag: K, o?: DomElementInfo | string, callback?: (el: HTMLElementTagNameMap[K]) => void): HTMLElementTagNameMap[K];
+    createDiv(o?: DomElementInfo | string, callback?: (el: HTMLDivElement) => void): HTMLDivElement;
+    createSpan(o?: DomElementInfo | string, callback?: (el: HTMLSpanElement) => void): HTMLSpanElement;
+    createSvg<K extends keyof SVGElementTagNameMap>(tag: K, o?: SvgElementInfo | string, callback?: (el: SVGElementTagNameMap[K]) => void): SVGElementTagNameMap[K];
+    detach(): void;
+    empty(): void;
+    insertAfter<T extends Node>(node: T, child: Node | null): T;
+    indexOf(other: Node): number;
+    setChildrenInPlace(children: Node[]): void;
+    appendText(val: string): void;
+    instanceOf<T>(type: { new (): T }): this is T;
+  }
+  interface Element {
+    getText(): string;
+    setText(val: string | DocumentFragment): void;
+    addClass(...classes: string[]): void;
+    addClasses(classes: string[]): void;
+    removeClass(...classes: string[]): void;
+    removeClasses(classes: string[]): void;
+    toggleClass(classes: string | string[], value: boolean): void;
+    hasClass(cls: string): boolean;
+    setAttr(qualifiedName: string, value: string | number | boolean | null): void;
+    setAttrs(obj: Record<string, string | number | boolean | null>): void;
+    getAttr(qualifiedName: string): string | null;
+    matchParent(selector: string, lastParent?: Element): Element | null;
+    getCssPropertyValue(property: string, pseudoElement?: string): string;
+    isActiveElement(): boolean;
+    find(selector: string): Element | null;
+    findAll(selector: string): HTMLElement[];
+    findAllSelf(selector: string): HTMLElement[];
+  }
+  interface DocumentFragment {
+    find(selector: string): HTMLElement | null;
+    findAll(selector: string): HTMLElement[];
+  }
+  interface HTMLElement {
+    show(): void;
+    hide(): void;
+    toggle(show: boolean): void;
+    toggleVisibility(visible: boolean): void;
+    isShown(): boolean;
+    setCssStyles(styles: Partial<CSSStyleDeclaration>): void;
+    setCssProps(props: Record<string, string>): void;
+    on(type: string, selector: string, listener: (ev: any, delegateTarget: HTMLElement) => any, options?: boolean | AddEventListenerOptions): void;
+    off(type: string, selector: string, listener: (ev: any, delegateTarget: HTMLElement) => any, options?: boolean | AddEventListenerOptions): void;
+    onClickEvent(listener: (ev: MouseEvent) => any, options?: boolean | AddEventListenerOptions): void;
+    onNodeInserted(listener: () => any, once?: boolean): () => void;
+    onWindowMigrated(listener: (win: Window) => any): () => void;
+    trigger(eventType: string): void;
+  }
+  interface Document {
+    on(type: string, selector: string, listener: (ev: any, delegateTarget: HTMLElement) => any, options?: boolean | AddEventListenerOptions): void;
+    off(type: string, selector: string, listener: (ev: any, delegateTarget: HTMLElement) => any, options?: boolean | AddEventListenerOptions): void;
+  }
+  interface UIEvent {
+    readonly targetNode: Node | null;
+    readonly win: Window;
+    readonly doc: Document;
+    instanceOf<T>(type: { new (...data: any[]): T }): this is T;
+  }
+  function createEl<K extends keyof HTMLElementTagNameMap>(tag: K, o?: DomElementInfo | string, callback?: (el: HTMLElementTagNameMap[K]) => void): HTMLElementTagNameMap[K];
+  function createDiv(o?: DomElementInfo | string, callback?: (el: HTMLDivElement) => void): HTMLDivElement;
+  function createSpan(o?: DomElementInfo | string, callback?: (el: HTMLSpanElement) => void): HTMLSpanElement;
+  function createSvg<K extends keyof SVGElementTagNameMap>(tag: K, o?: SvgElementInfo | string, callback?: (el: SVGElementTagNameMap[K]) => void): SVGElementTagNameMap[K];
+  function createFragment(callback?: (el: DocumentFragment) => void): DocumentFragment;
+  function fish(selector: string): HTMLElement | null;
+  function fishAll(selector: string): HTMLElement[];
+  function sleep(ms: number): Promise<void>;
+  function nextFrame(): Promise<void>;
+  function isBoolean(obj: any): obj is boolean;
+  var activeWindow: Window;
+  var activeDocument: Document;
+}
+
 export {};

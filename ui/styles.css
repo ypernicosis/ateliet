@@ -1173,3 +1173,17 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .image-insert-modal .modal-content { flex: 1 1 auto; display: flex; flex-direction: column; gap: var(--size-4-2); min-height: 0; }
 .image-insert-modal .image-search-box { flex: 0 0 auto; }
 .images-status { cursor: var(--cursor); }
+
+/* ── self-update ──────────────────────────────────────────────────────── */
+.side-dock-ribbon-action.mod-update { position: relative; }
+.side-dock-ribbon-action.mod-update.is-available { color: var(--interactive-accent); opacity: 1; }
+.side-dock-ribbon-action.mod-update.is-available::after {
+  content: ""; position: absolute; top: 4px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--interactive-accent);
+}
+.mod-ateliet-update { width: 560px; max-width: 90vw; }
+.mod-ateliet-update .mod-muted { color: var(--text-muted); }
+.ateliet-update-commits { max-height: 30vh; overflow-y: auto; padding-inline-start: 1.2em; user-select: text; -webkit-user-select: text; font-size: var(--font-ui-small); }
+.ateliet-update-commits li { margin-block: 2px; }
+.ateliet-update-commits .mod-muted { list-style: none; }
+.ateliet-update-step { margin-top: var(--size-4-3); color: var(--text-muted); font-size: var(--font-ui-small); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+.ateliet-update-log { max-height: 180px; overflow: auto; margin: var(--size-4-2) 0 0; padding: var(--size-4-2); background: var(--background-secondary); border-radius: var(--radius-s); font-size: var(--font-ui-smaller); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }

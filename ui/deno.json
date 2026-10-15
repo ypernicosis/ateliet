@@ -6,7 +6,8 @@
       "esnext"
     ],
     "strict": false,
-    "noImplicitAny": false
+    "noImplicitAny": false,
+    "noImplicitOverride": false
   },
   "imports": {
     "@codemirror/autocomplete": "npm:@codemirror/autocomplete@^6.18.0",

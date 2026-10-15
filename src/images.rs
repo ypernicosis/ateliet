@@ -311,7 +311,7 @@ impl Index {
         let fresh: Vec<(usize, (u32, u32))> = found
             .par_iter()
             .enumerate()
-            .filter(|(_, f)| self.records.get(&f.key).map_or(true, |r| r.mtime != f.mtime || r.size != f.size))
+            .filter(|(_, f)| self.records.get(&f.key).is_none_or(|r| r.mtime != f.mtime || r.size != f.size))
             .map(|(i, f)| (i, dimensions(&f.abs).unwrap_or((0, 0))))
             .collect();
         for (i, (width, height)) in fresh {

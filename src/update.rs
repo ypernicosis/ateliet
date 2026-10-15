@@ -10,12 +10,15 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 const BUILT_COMMIT: &str = env!("ATELIET_GIT_COMMIT");
 const SOURCE_DIR: &str = env!("ATELIET_SOURCE_DIR");
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
+/// Every window checks on its own schedule; two `git fetch` at once fight over the ref locks.
+static CHECKING: Mutex<()> = Mutex::new(());
 
 /// The checkout to update from: `ATELIET_SOURCE` overrides the build path.
 fn source_dir() -> Result<PathBuf, String> {
@@ -29,7 +32,13 @@ fn source_dir() -> Result<PathBuf, String> {
 
 fn command(dir: &Path, prog: &str, args: &[&str]) -> Command {
     let mut c = Command::new(prog);
-    c.args(args).current_dir(dir).env("PATH", augmented_path()).env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+    // No terminal to answer a prompt: fail instead of waiting forever for a password.
+    c.args(args)
+        .current_dir(dir)
+        .env("PATH", augmented_path())
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
+        .stdin(Stdio::null());
     c
 }
 
@@ -53,6 +62,7 @@ pub struct UpdateStatus {
 }
 
 fn check() -> Result<UpdateStatus, String> {
+    let _one_at_a_time = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
     check_in(&source_dir()?, BUILT_COMMIT)
 }
 
@@ -137,10 +147,12 @@ fn install(new: &Path, exe: &Path) -> Result<(), String> {
 fn apply(app: &AppHandle, dir: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|e| e.to_string())?;
     let target = fs::canonicalize(dir.join("target")).unwrap_or_else(|_| dir.join("target"));
-    // `cargo run` binaries live in the checkout and are rebuilt in place with
-    // their own profile; an installed app gets a release build copied over it.
-    let in_checkout = exe.starts_with(&target);
-    let release = !in_checkout || exe.components().any(|c| c.as_os_str() == "release");
+    // A `cargo run`/`cargo build` binary (target/debug/ateliet, target/release/ateliet)
+    // is rebuilt in place with its own profile. Anything else, including the
+    // .app that `cargo tauri build` leaves in target/release/bundle, gets a
+    // release build copied over its executable.
+    let in_checkout = exe.parent().is_some_and(|p| p == target.join("debug") || p == target.join("release"));
+    let release = !in_checkout || exe.parent() == Some(target.join("release").as_path());
 
     run(app, dir, "Pulling changes", "git", &["pull", "--ff-only"])?;
     run(app, dir, "Building interface", "sh", &["build.sh"])?;
