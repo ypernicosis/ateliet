@@ -7,7 +7,14 @@ import { TFile } from "../obsidian/vault.ts";
 import { debounce, getAllTags, getLinkpath, iterateCacheRefs, parseLinktext } from "../obsidian/util.ts";
 
 abstract class ActiveFilePane extends ItemView {
-  file: TFile | null = null;
+  // View declares `file` as a read-only getter; panes track the note they describe.
+  private shownFile: TFile | null = null;
+  override get file(): TFile | null {
+    return this.shownFile;
+  }
+  override set file(f: TFile | null) {
+    this.shownFile = f;
+  }
   protected update = debounce(() => this.render(), 200, true);
 
   async onOpen() {

@@ -78,13 +78,7 @@ pub fn parse(text: &str) -> Value {
                         Tag::Table(_) => "table",
                         Tag::HtmlBlock => "html",
                         Tag::FootnoteDefinition(_) => "footnoteDefinition",
-                        Tag::Paragraph => {
-                            if src[r.clone()].trim_start().starts_with("$$") {
-                                "math"
-                            } else {
-                                "paragraph"
-                            }
-                        }
+                        Tag::Paragraph if src[r.clone()].trim_start().starts_with("$$") => "math",
                         _ => "paragraph",
                     };
                     top = Some((kind, r.start));

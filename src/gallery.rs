@@ -523,7 +523,7 @@ impl Gallery {
                 }
             }
         }
-        if lib.last_save.map_or(true, |t| t.elapsed() > Duration::from_secs(10)) {
+        if lib.last_save.is_none_or(|t| t.elapsed() > Duration::from_secs(10)) {
             self.save(&mut lib);
         }
     }
@@ -795,7 +795,7 @@ pub fn images_folders(window: tauri::Window, state: State<Galleries>) -> Res<Vec
         }
     }
     let mut out: Vec<FolderInfo> = map.into_values().collect();
-    out.sort_by(|a, b| a.folder.to_lowercase().cmp(&b.folder.to_lowercase()));
+    out.sort_by_key(|a| a.folder.to_lowercase());
     Ok(out)
 }
 

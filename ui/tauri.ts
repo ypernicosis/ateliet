@@ -34,7 +34,7 @@ export function currentWindow(): any {
 export async function readBytes(path: string): Promise<ArrayBuffer> {
   const r = await invoke<any>("fs_read_bytes", { path });
   if (r instanceof ArrayBuffer) return r;
-  if (r instanceof Uint8Array) return r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength);
+  if (r instanceof Uint8Array) return r.buffer.slice(r.byteOffset, r.byteOffset + r.byteLength) as ArrayBuffer;
   return new Uint8Array(r).buffer;
 }
 

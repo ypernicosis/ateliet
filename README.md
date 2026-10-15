@@ -24,6 +24,56 @@ cargo install tauri-cli --version "^2"
 ./build.sh && cargo tauri build
 ```
 
+## Instalando no macOS
+
+O Ateliet é compilado a partir deste repositório, e o botão de atualizar usa o mesmo clone depois. Por isso, guarde o clone num lugar fixo (o exemplo usa `~/Developer/ateliet`) e não o apague nem mova depois de instalar.
+
+```sh
+# 1. Ferramentas da Apple (git, compilador). Pule se já estiverem instaladas.
+xcode-select --install
+
+# 2. Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 3. Deno (empacota a interface)
+curl -fsSL https://deno.land/install.sh | sh -s -- -y
+export PATH="$HOME/.deno/bin:$PATH"
+
+# 4. CLI do Tauri (gera o .app)
+cargo install tauri-cli --version "^2" --locked
+
+# 5. O código
+mkdir -p ~/Developer && cd ~/Developer
+git clone https://github.com/ypernicosis/ateliet.git
+cd ateliet
+
+# 6. Compilar (a primeira vez leva alguns minutos)
+./build.sh && cargo tauri build --bundles app
+
+# 7. Instalar e abrir
+rm -rf /Applications/Ateliet.app
+cp -R target/release/bundle/macos/Ateliet.app /Applications/
+open /Applications/Ateliet.app
+```
+
+Se você já tem um clone, troque os passos 5 a 7 por: feche o Ateliet, entre na pasta do clone, rode `git checkout main && git pull` e depois os passos 6 e 7.
+
+## Atualizando
+
+Na parte de baixo da faixa lateral esquerda fica o botão de atualizar (uma seta para baixo num círculo, também disponível como comando *Update Ateliet*). O Ateliet roda `git fetch` no clone ao abrir e a cada 30 minutos; quando há commits novos no branch acompanhado, o botão fica colorido com um ponto. Ao clicar, ele lista os commits novos e, em *Update and restart*:
+
+1. roda `git pull --ff-only` no clone;
+2. empacota a interface (`./build.sh`);
+3. compila (`cargo build --release`);
+4. troca o executável do app instalado (dentro do `.app`) e reinicia, salvando as notas abertas antes.
+
+O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou. Sem commits novos, o mesmo botão oferece *Rebuild anyway*. O app guarda o caminho do clone em que foi compilado: se você mover o clone, compile e instale de novo a partir do novo lugar (passos 6 e 7).
+
+## Benchmark
+
+`scripts/bench.sh ~/caminho/do/vault` (macOS) abre o mesmo vault no Ateliet e no Obsidian e mede tamanho do app, tempo até a janela aparecer, memória e CPU parado.
+
 ## Escrita e imagens
 
 O Ateliet tem dois modos sobre o mesmo vault, alternados pelos dois botões no topo da faixa lateral esquerda ou por `Ctrl/Cmd + Shift + I`:
