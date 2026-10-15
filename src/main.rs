@@ -135,7 +135,8 @@ fn open_window(app: &tauri::AppHandle, vault_path: Option<&str>) -> Res<()> {
         .min_inner_size(480.0, 360.0)
         .disable_drag_drop_handler();
     #[cfg(target_os = "macos")]
-    let b = b.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
+    // Centre the traffic lights in the 40px header row (`--header-height`).
+    let b = b.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true).traffic_light_position(tauri::LogicalPosition::new(16.0, 20.0));
     b.build().map_err(e2s)?;
     Ok(())
 }

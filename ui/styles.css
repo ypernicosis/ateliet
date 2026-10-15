@@ -485,10 +485,16 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
   background: var(--ribbon-background); border-right: 1px solid var(--divider-color); padding: var(--ribbon-padding);
   padding-top: calc(var(--header-height) + var(--size-4-1)); position: relative; gap: 2px;
 }
-.is-hidden-frameless .workspace-ribbon.mod-left { padding-top: calc(var(--header-height) + 4px); }
 .workspace-ribbon.mod-left .sidebar-toggle-button { position: absolute; top: 6px; }
+/* Frameless: the ribbon's top is part of the title bar row that holds the traffic lights,
+   so it continues the tab header (same background and bottom border, no divider through it). */
+.is-hidden-frameless .workspace-ribbon.mod-left { padding-top: calc(var(--header-height) + 4px); border-right: none; }
+.is-hidden-frameless .workspace-ribbon.mod-left::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: var(--header-height);
+  background-color: var(--tab-container-background); border-bottom: 1px solid var(--tab-outline-color);
+}
+.is-hidden-frameless .workspace-ribbon.mod-left::after { content: ""; position: absolute; top: var(--header-height); bottom: 0; right: 0; width: 1px; background-color: var(--divider-color); }
 .is-hidden-frameless .workspace-ribbon.mod-left .sidebar-toggle-button { top: auto; position: static; margin-top: -2px; margin-bottom: 8px; }
-.is-hidden-frameless .workspace-ribbon.mod-left { padding-top: 40px; }
 .workspace-ribbon.mod-right { display: none; }
 .side-dock-actions, .side-dock-settings { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; }
 .side-dock-actions { flex: 1 1 auto; }
