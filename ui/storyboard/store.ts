@@ -127,6 +127,12 @@ export class TileStore {
     }
   }
 
+  /** Whether every tile of a layer is decoded. */
+  isLoaded(layer: string): boolean {
+    for (const k of this.index.get(layer) || []) if (!this.live.has(`${layer}/${k}`) && this.encoded.has(`${layer}/${k}`)) return false;
+    return true;
+  }
+
   /** Decodes every tile of these layers. */
   async load(layers: string[]) {
     const jobs: Promise<void>[] = [];

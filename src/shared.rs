@@ -67,7 +67,7 @@ pub(crate) fn shared_of(g: &Gallery) -> Res<Home> {
 // ── collections and importing ─────────────────────────────────────────────
 
 #[tauri::command]
-pub fn shared_info(window: tauri::Window, state: State<Galleries>) -> Res<Value> {
+pub async fn shared_info(window: tauri::Window, state: State<'_, Galleries>) -> Res<Value> {
     let g = state.get(window.label())?;
     let lib = g.lib.lock().unwrap();
     let Some(home) = lib.shared.clone() else { return Ok(json!({ "home": null })) };
@@ -104,7 +104,7 @@ fn copy_cancel() -> &'static std::sync::atomic::AtomicBool {
 /// What copying a Pictogrep library would take: the folder (given, in use, or
 /// found), what it holds, and where the copy goes by default.
 #[tauri::command]
-pub fn pictogrep_copy_plan(window: tauri::Window, state: State<Galleries>, from: Option<String>) -> Res<Value> {
+pub async fn pictogrep_copy_plan(window: tauri::Window, state: State<'_, Galleries>, from: Option<String>) -> Res<Value> {
     let from = match from.filter(|f| !f.trim().is_empty()) {
         Some(f) => Some(Home::new(PathBuf::from(f))),
         None => state.get(window.label()).ok().and_then(|g| g.lib.lock().unwrap().shared.clone()).filter(|h| pictogrep::copied_from(h).is_none()).or_else(pictogrep::detect),
@@ -154,7 +154,7 @@ pub struct CollectionAction {
 /// create / rename / delete a collection; add / remove pictures (absolute
 /// paths). Pictures from outside the shared library are copied into it first.
 #[tauri::command]
-pub fn shared_collection(window: tauri::Window, state: State<Galleries>, request: CollectionAction) -> Res<Value> {
+pub async fn shared_collection(window: tauri::Window, state: State<'_, Galleries>, request: CollectionAction) -> Res<Value> {
     let g = state.get(window.label())?;
     let home = shared_of(&g)?;
     let out = match request.action.as_str() {
@@ -264,7 +264,7 @@ pub fn shared_import_bytes(window: tauri::Window, state: State<Galleries>, reque
 // ── plugins ───────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn plugin_list(window: tauri::Window, state: State<Galleries>) -> Res<Vec<pictogrep::Plugin>> {
+pub async fn plugin_list(window: tauri::Window, state: State<'_, Galleries>) -> Res<Vec<pictogrep::Plugin>> {
     let g = state.get(window.label())?;
     Ok(pictogrep::plugins(&shared_of(&g)?))
 }
@@ -587,7 +587,7 @@ fn run_plan(app: AppHandle, g: Arc<Gallery>, downloads: Arc<Downloads>, plan: Pl
 }
 
 #[tauri::command]
-pub fn pinterest_start(app: AppHandle, window: tauri::Window, state: State<Galleries>, downloads: State<Arc<Downloads>>, request: PinterestRequest) -> Res<pinterest::Job> {
+pub async fn pinterest_start(app: AppHandle, window: tauri::Window, state: State<'_, Galleries>, downloads: State<'_, Arc<Downloads>>, request: PinterestRequest) -> Res<pinterest::Job> {
     let g = state.get(window.label())?;
     let url = pinterest::validate_url(&request.url)?;
     let source = url.to_string();
@@ -652,7 +652,7 @@ pub fn pinterest_cancel(app: AppHandle, downloads: State<Arc<Downloads>>) -> Res
 /// Followed Pinterest boards (pages Pictogrep follows on other sites are
 /// left to it).
 #[tauri::command]
-pub fn pinterest_followed(window: tauri::Window, state: State<Galleries>) -> Res<Value> {
+pub async fn pinterest_followed(window: tauri::Window, state: State<'_, Galleries>) -> Res<Value> {
     let g = state.get(window.label())?;
     let home = g.lib.lock().unwrap().shared.clone();
     let list: Vec<Followed> = pinterest::followed(&data_dir_for(&g, &home)).into_iter().filter(|f| pinterest::validate_url(&f.url).is_ok()).collect();
@@ -660,7 +660,7 @@ pub fn pinterest_followed(window: tauri::Window, state: State<Galleries>) -> Res
 }
 
 #[tauri::command]
-pub fn pinterest_forget(window: tauri::Window, state: State<Galleries>, url: String) -> Res<()> {
+pub async fn pinterest_forget(window: tauri::Window, state: State<'_, Galleries>, url: String) -> Res<()> {
     let g = state.get(window.label())?;
     let home = g.lib.lock().unwrap().shared.clone();
     pinterest::forget(&data_dir_for(&g, &home), &url)
@@ -668,7 +668,7 @@ pub fn pinterest_forget(window: tauri::Window, state: State<Galleries>, url: Str
 
 /// Checks one followed board now (its newest pins).
 #[tauri::command]
-pub fn pinterest_check(app: AppHandle, window: tauri::Window, state: State<Galleries>, downloads: State<Arc<Downloads>>, url: String) -> Res<()> {
+pub async fn pinterest_check(app: AppHandle, window: tauri::Window, state: State<'_, Galleries>, downloads: State<'_, Arc<Downloads>>, url: String) -> Res<()> {
     let g = state.get(window.label())?;
     check_followed(&app, &g, downloads.inner().clone(), &url, false)
 }

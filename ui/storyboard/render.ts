@@ -5,7 +5,7 @@
 // transform change.
 
 import { Board, Frame, Layer, TILE, Transform, isPageKind } from "./model.ts";
-import { drawPage } from "./pages.ts";
+import { drawPage, isJoined } from "./pages.ts";
 import { StoryDoc, context } from "./store.ts";
 import { traced } from "./trace.ts";
 
@@ -183,7 +183,8 @@ export class Compositor {
     const b = this.board;
     if (!isPageKind(b.kind) || !b.page) return;
     const m = ctx.getTransform();
-    drawPage(ctx, b, frame, { numbers: screen || b.kind === "thumbnails", px: 1 / Math.hypot(m.a, m.b) });
+    // A spread drawn as one shows what crosses the margins; separated again, the paper covers it (nothing is erased).
+    drawPage(ctx, b, frame, { numbers: screen || b.kind === "thumbnails", px: 1 / Math.hypot(m.a, m.b), mask: !isJoined(b, b.frames.indexOf(frame)) });
   }
 
   visibleLayers(frame: Frame, o: DrawOptions): Layer[] {

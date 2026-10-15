@@ -58,8 +58,14 @@ pub fn list(root: &Path) -> Vec<Entry> {
         if e.depth() == 0 {
             continue;
         }
-        let Some(s) = stat(e.path()) else { continue };
-        out.push(Entry { path: rel_path(root, e.path()), folder: s.kind == "folder", size: s.size, ctime: s.ctime, mtime: s.mtime });
+        // walkdir already has the metadata (following links, like `stat`).
+        let Ok(m) = e.metadata() else { continue };
+        let mtime = ms(m.modified());
+        let ctime = match ms(m.created()) {
+            0 => mtime,
+            c => c,
+        };
+        out.push(Entry { path: rel_path(root, e.path()), folder: m.is_dir(), size: if m.is_dir() { 0 } else { m.len() }, ctime, mtime });
     }
     out
 }

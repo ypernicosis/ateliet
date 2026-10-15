@@ -79,7 +79,8 @@ O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e d�
 O Ateliet tem dois modos sobre o mesmo vault, alternados pelos dois botões no topo da faixa lateral esquerda ou por `Ctrl/Cmd + Shift + I`:
 
 - **Modo escrita**: as notas no centro. O painel **Pictures** na barra lateral direita busca imagens do vault; clicar insere a imagem no cursor e arrastar solta em qualquer ponto da nota. O comando **Insert picture…** abre a mesma busca num diálogo.
-- **Modo imagens**: a biblioteca no centro (mosaico com todas as imagens do vault), as **coleções** à esquerda (as pastas que têm imagens, com capa e contagem) e, à direita, a nota em que você estava escrevendo, editável ali mesmo.
+- **Modo imagens**: a biblioteca no centro (mosaico com todas as imagens do vault), as **coleções** à esquerda (as pastas que têm imagens, com capa e contagem) e, à direita, as **notas**: a nota em que você estava escrevendo, editável ali mesmo, com uma barra própria. O nome da nota abre a troca de nota (as abertas, as recentes, "Find a note…", uma nota nova, a nota da coleção aberta na biblioteca). Os botões criam uma nota, colocam na nota as imagens selecionadas na biblioteca (ou arraste-as) e levam a nota para o modo escrita. Sem nota aberta, o lado direito mostra as notas recentes e os atalhos. Nesse modo o lado direito só tem notas; backlinks, sumário e o painel de imagens ficam no modo escrita.
+- **Páginas unidas** (storyboards de páginas): o botão do livro aberto une as duas páginas de um par. Unidas, os pincéis, a borracha, o balde e as formas desenham através da lombada e das margens, sem recorte nos quadros e sem papel por cima; cada página guarda a sua parte, e desfazer volta as duas. A ferramenta de quadros corta as duas páginas com a mesma linha. Separadas de novo, o papel volta a cobrir as margens, sem apagar o que passou por elas.
 
 Cada modo guarda seu próprio layout (`.obsidian/ateliet/workspace.json` e `workspace-images.json`).
 

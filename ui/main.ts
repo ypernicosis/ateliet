@@ -94,6 +94,15 @@ async function boot() {
   if (!vaultPath) return showLauncher();
 
   document.body.addClass("is-loading");
+  // How long each step of opening the vault takes (in the console, and in
+  // ATELIET_DEBUG's console.log), to find what makes a launch slow.
+  const t0 = performance.now();
+  let tPrev = t0;
+  const step = (name: string) => {
+    const now = performance.now();
+    console.info(`[ateliet] boot ${name}: ${Math.round(now - tPrev)} ms`);
+    tPrev = now;
+  };
   let vinfo: any;
   try {
     vinfo = await invoke("vault_init", { path: vaultPath });
@@ -102,10 +111,12 @@ async function boot() {
     return showLauncher(String(e));
   }
 
+  step(`vault listing (${vinfo.files.length} entries)`);
   const app = new App(vinfo.path, makeRequire) as any;
   app.version = info.version;
   W.app = app;
   app.vault.load(vinfo.files);
+  app.metadataCache.prefetch();
   installCompat(app);
   await app.loadConfig();
   app.setting = new SettingsModal(app);
@@ -114,9 +125,12 @@ async function boot() {
   await app.customCss.reload();
   document.body.toggleClass("show-inline-title", !!app.vault.getConfig("showInlineTitle"));
   document.body.toggleClass("show-view-header", app.vault.getConfig("showViewHeader") !== false);
+  step("config and core plugins registered");
   await app.metadataCache.initialize();
+  step("note metadata");
   await app.metadataTypeManager.load();
   await app.internalPlugins.enableAll();
+  step("core plugins enabled");
   buildRibbon(app);
 
   // External changes (Obsidian running on the same vault, sync, git …).
@@ -124,6 +138,7 @@ async function boot() {
 
   await app.hotkeyManager.load();
   await app.plugins.initialize();
+  step("community plugins");
 
   const layout = (await app.loadWorkspaceLayout()) || DEFAULT_LAYOUT;
   try {
@@ -134,6 +149,8 @@ async function boot() {
   }
   ensureCoreLeaves(app);
   app.hotkeyManager.bake();
+  step("layout");
+  console.info(`[ateliet] boot total: ${Math.round(performance.now() - t0)} ms`);
   document.body.removeClass("is-loading");
   app.workspace.setLayoutReady();
   app.workspace.updateTitle();
@@ -161,7 +178,10 @@ function buildRibbon(app: any) {
 function ensureCoreLeaves(app: any) {
   const ws = app.workspace;
   const need: [string, "left" | "right"][] = [["file-explorer", "left"], ["search", "left"], ["backlink", "right"], ["outline", "right"]];
+  // Image mode's right side holds only notes.
+  const images = document.body.hasClass("mode-images");
   for (const [type, side] of need) {
+    if (images && side === "right") continue;
     if (!ws.viewRegistry.viewByType[type] || ws.getLeavesOfType(type).length) continue;
     const leaf = side === "left" ? ws.getLeftLeaf(false) : ws.getRightLeaf(false);
     leaf.setViewState({ type, state: {} });

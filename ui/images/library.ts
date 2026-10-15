@@ -75,6 +75,11 @@ export class ImageLibraryView extends ItemView {
     return { ...this.state };
   }
 
+  /** The pictures selected in the wall. */
+  selectedItems(): ImageItem[] {
+    return this.grid?.selectedItems() || [];
+  }
+
   async setState(state: any, result: any) {
     const next = { ...this.state, ...(state || {}) };
     const changed = JSON.stringify(next) !== JSON.stringify(this.state);

@@ -16,6 +16,7 @@ import { ImageSearchView, InsertImageModal, PANEL_VIEW } from "./panel.ts";
 import { PLUGIN_VIEW, SharedPluginView } from "./plugins.ts";
 import { PinterestModal, describeJob, renderFollowed } from "./pinterest.ts";
 import { CopyLibraryModal } from "./copylibrary.ts";
+import { NotesDock } from "./notesdock.ts";
 import { MarkdownView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Notice, Setting } from "../obsidian/ui.ts";
@@ -38,6 +39,7 @@ export class ImagesPlugin implements ImagesHost {
   private pending = new Set<string>();
   private flushTimer = 0;
   private viewsRegistered = false;
+  private notes: NotesDock | null = null;
   private switching = false;
 
   /** `defaultWriteLayout`: the layout of a vault opened for the first time. */
@@ -88,14 +90,14 @@ export class ImagesPlugin implements ImagesHost {
       this.touched(f?.path);
     });
     app.workspace.on("file-menu", this.fileMenu);
+    this.notes = new NotesDock(app, this);
     app.workspace.onLayoutReady(() => this.afterLayout());
 
-    try {
-      const st = await api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto, this.settings.shared);
-      this.onStatus(st);
-    } catch (e) {
-      console.error("images", e);
-    }
+    // The library opens in the background: the window does not wait for it
+    // (its status arrives as soon as it is known).
+    api.open(app.vault.adapter.getBasePath(), app.vault.configDir, this.settings.external, this.settings.auto, this.settings.shared)
+      .then((st) => this.onStatus(st))
+      .catch((e) => console.error("images", e));
   }
 
   onDisable() {
@@ -104,6 +106,8 @@ export class ImagesPlugin implements ImagesHost {
     this.unlisten = [];
     this.switchEl?.remove();
     this.statusEl?.remove();
+    this.notes?.unmount();
+    this.notes = null;
     this.app.workspace.off("file-menu", this.fileMenu);
     this.app.imageDropHandler = null;
     this.app.layoutFallback = null;
@@ -246,6 +250,7 @@ export class ImagesPlugin implements ImagesHost {
         if (!open) await this.openNote(fromNote, false, false);
       }
       if (mode === "write") this.ensurePanel();
+      else this.notes?.tidy();
       this.updateSwitch();
       ws.trigger("layout-change");
       ws.requestSaveLayout();
@@ -274,6 +279,8 @@ export class ImagesPlugin implements ImagesHost {
 
   private afterLayout() {
     if (this.settings.mode === "write") this.ensurePanel();
+    else this.notes?.tidy();
+    this.notes?.mount();
   }
 
   /** The picture panel joins the writing sidebar once; closing it is respected. */

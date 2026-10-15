@@ -8,8 +8,17 @@
 // Layers deleted by a structural step keep their pixels while a step still
 // refers to them (see StoryDoc.retain).
 
-import { Board } from "./model.ts";
+import { Board, Frame, Layer } from "./model.ts";
 import { StoryDoc } from "./store.ts";
+
+/** The other page of a spread drawn as one, seen from the page being drawn. */
+export interface SpreadTarget {
+  frame: Frame;
+  /** Offset of the other page from this one, in canvas pixels. */
+  dx: number;
+  /** The layer on the other page that receives the stroke. */
+  layer: Layer;
+}
 
 export interface Step {
   label: string;
@@ -25,6 +34,8 @@ export class TileStep implements Step {
   before = new Map<string, HTMLCanvasElement | null>();
   after = new Map<string, HTMLCanvasElement | null>();
   weight = 0;
+  /** Set when the stroke is on a spread drawn as one: the other page's layer and its own step. */
+  spread?: { target: SpreadTarget; step: TileStep; handled: boolean };
   constructor(public label: string, private doc: StoryDoc, public layer: string) {}
 
   /** Records a tile's state before it is first changed. */
@@ -58,6 +69,23 @@ export class TileStep implements Step {
   }
   layers() {
     return [this.layer];
+  }
+}
+
+/** Several steps undone and redone as one (a stroke across a spread touches two layers). */
+export class GroupStep implements Step {
+  weight: number;
+  constructor(public label: string, private steps: Step[]) {
+    this.weight = steps.reduce((n, s) => n + s.weight, 0);
+  }
+  undo() {
+    for (const s of [...this.steps].reverse()) s.undo();
+  }
+  redo() {
+    for (const s of this.steps) s.redo();
+  }
+  layers() {
+    return this.steps.flatMap((s) => s.layers());
   }
 }
 

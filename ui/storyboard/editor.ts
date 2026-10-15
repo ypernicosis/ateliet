@@ -14,10 +14,10 @@
 
 import { Board, Frame, Layer, Panel, Transform, frameLabel, isPageKind, newLayer } from "./model.ts";
 import { addPage } from "./kinds.ts";
-import { facingIndex, inside, isLeftPage, trimRect } from "./pages.ts";
-import { StoryDoc } from "./store.ts";
+import { facingIndex, inside, isJoined, isLeftPage, spreadId, trimRect } from "./pages.ts";
+import { StoryDoc, context } from "./store.ts";
 import { Compositor, DrawOptions, Floating, Scratch, StrokeOverlay, ViewState, corners, pixelBounds, sourceSize, viewMatrix } from "./render.ts";
-import { BoardStep, History, Step, TileStep, cloneBoard } from "./history.ts";
+import { BoardStep, History, Step, TileStep, cloneBoard, GroupStep, SpreadTarget } from "./history.ts";
 import { Events } from "../obsidian/events.ts";
 
 export interface Selection {
@@ -140,9 +140,9 @@ export class Editor extends Events {
     this.commitFloating();
     const changed = f !== this.frame;
     this.frame = f;
-    this.facingPic = null;
+    this.facingCache.key = "";
     this.wantPictures();
-    const need = this.comp.layersFor(f, true);
+    const need = this.needed();
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
     if (this.frame !== f) return;
@@ -157,7 +157,7 @@ export class Editor extends Events {
     else this.frame = this.board.frames.find((f) => f.id === this.frame.id)!;
     if (!this.frame.layers.includes(this.frame.active)) this.frame.active = this.frame.layers[this.frame.layers.length - 1];
     this.wantPictures();
-    const need = this.comp.layersFor(this.frame, true);
+    const need = this.needed();
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
     this.invalidate();
@@ -178,20 +178,119 @@ export class Editor extends Events {
     return { frame: b.frames[j], dx: isLeftPage(b, this.frameIndex) ? step : -step };
   }
 
-  private facingPic: { id: string; pic: HTMLCanvasElement | null; pending: boolean } | null = null;
+  /** The facing page as drawn on screen, kept until something changes. */
+  private facingCache: { key: string; canvas: HTMLCanvasElement | null } = { key: "", canvas: null };
 
-  /** The facing page as a picture (made once per page switch or change). */
-  private facingPicture(f: Frame): HTMLCanvasElement | null {
-    if (this.facingPic?.id === f.id) return this.facingPic.pic;
-    const entry: { id: string; pic: HTMLCanvasElement | null; pending: boolean } = (this.facingPic = { id: f.id, pic: null, pending: true });
-    const scale = Math.min(1, this.view.scale * this.dpr * 1.5);
-    this.comp.picture(f, scale, { exporting: false, area: { x: 0, y: 0, w: this.board.width, h: this.board.height } }).then((pic) => {
-      if (this.facingPic !== entry) return;
-      entry.pic = pic;
-      entry.pending = false;
-      this.invalidate();
+  /** Layers to keep loaded: this frame, its onion-skin neighbours and the facing page. */
+  private needed(): string[] {
+    const need = this.comp.layersFor(this.frame, true);
+    const f = this.facing();
+    if (f) need.push(...this.comp.layersFor(f.frame, false));
+    return need;
+  }
+
+  /** The facing page drawn at screen resolution (null while its tiles load). */
+  private facingCanvas(f: { frame: Frame; dx: number }, m: DOMMatrix): HTMLCanvasElement | null {
+    const ids = this.comp.layersFor(f.frame, false);
+    if (!ids.every((id) => this.doc.tiles.isLoaded(id))) {
+      this.doc.tiles.load(ids).then(() => this.invalidate());
+      return null;
+    }
+    const key = `${this.version}|${this.canvas.width}x${this.canvas.height}|${f.frame.id}|${f.dx}`;
+    if (this.facingCache.key === key) return this.facingCache.canvas;
+    const r = this.visibleRegion();
+    this.facingCache.canvas = this.buildCache(this.facingCache.canvas, (c) => {
+      c.setTransform(m.translate(f.dx, 0));
+      this.comp.drawFrame(c, f.frame, { region: { x: r.x - f.dx, y: r.y, w: r.w, h: r.h }, background: true, onion: false, hidden: this.hidden });
     });
-    return null;
+    this.facingCache.key = key;
+    return this.facingCache.canvas;
+  }
+
+  // ── spreads drawn as one ────────────────────────────────────────────────
+
+  /** The facing page when this spread is drawn as one. */
+  joinedFacing(): { frame: Frame; dx: number } | null {
+    const f = this.facing();
+    return f && isJoined(this.board, this.frameIndex) ? f : null;
+  }
+
+  /** Where drawing may reach: the page, or both pages of a spread drawn as one. */
+  drawArea(): { x: number; y: number; w: number; h: number } {
+    const b = this.board;
+    const f = this.joinedFacing();
+    const t = f && this.spreadTarget();
+    if (!f || !t || !this.doc.tiles.isLoaded(t.layer.id)) return { x: 0, y: 0, w: b.width, h: b.height };
+    return { x: Math.min(0, f.dx), y: 0, w: b.width + Math.abs(f.dx), h: b.height };
+  }
+
+  /**
+   * The layer on the facing page that receives what is drawn on `l` across
+   * the spine: the one with the same name, else that page's active layer,
+   * else its top drawing layer. None for a layer shown on every page.
+   */
+  spreadTarget(l: Layer | null | undefined = this.active): SpreadTarget | null {
+    const f = this.joinedFacing();
+    if (!f || !l || l.kind !== "raster") return null;
+    const layers = f.frame.layers.map((id) => this.board.layers[id]).filter((x): x is Layer => !!x && x.kind === "raster");
+    if (layers.some((x) => x.id === l.id)) return null;
+    const target = layers.find((x) => x.name === l.name) || layers.find((x) => x.id === f.frame.active) || layers[layers.length - 1];
+    if (!target || target.locked) return null;
+    return { frame: f.frame, dx: f.dx, layer: target };
+  }
+
+  /** Joins this spread into one drawing surface, or separates it again. Nothing drawn is lost either way. */
+  toggleJoined() {
+    const id = spreadId(this.board, this.frameIndex);
+    if (!id || !this.board.page) return;
+    const on = isJoined(this.board, this.frameIndex);
+    this.mutate(on ? "Separate pages" : "Join pages", (b) => {
+      const list = new Set(b.page!.joined || []);
+      if (on) list.delete(id);
+      else list.add(id);
+      b.page!.joined = [...list];
+    });
+    this.doc.tiles.pin(this.needed());
+  }
+
+  /**
+   * After a stroke on a spread drawn as one: what went past this page's edge
+   * moves to the facing page (tools that already painted both pages only
+   * clear it), so each page holds exactly its own part.
+   */
+  private settleSpread(step: TileStep) {
+    const sp = step.spread!;
+    const l = this.board.layers[step.layer];
+    const fl = sp.target.layer;
+    if (!l) return;
+    const b = this.board;
+    const dx = sp.target.dx;
+    // Past this page's edge, in this layer's coordinates.
+    const over = { x: (dx < 0 ? dx : b.width) - l.x, y: -l.y, w: Math.abs(dx), h: b.height };
+    const T = 512;
+    for (const k of [...step.before.keys()]) {
+      const [tx, ty] = k.split("_").map(Number);
+      const x0 = Math.max(tx * T, over.x), y0 = Math.max(ty * T, over.y);
+      const x1 = Math.min((tx + 1) * T, over.x + over.w), y1 = Math.min((ty + 1) * T, over.y + over.h);
+      if (x1 <= x0 || y1 <= y0) continue;
+      const tile = this.doc.tiles.get(l.id, tx, ty);
+      if (!tile) continue;
+      if (!sp.handled) {
+        // Into the facing layer (its coordinates: + this layer's offset − dx − its offset).
+        const ox = l.x - dx - fl.x, oy = l.y - fl.y;
+        this.eachTile(x0 + ox, y0 + oy, x1 - x0, y1 - y0, (fx, fy) => sp.step.touch(fx, fy));
+        this.doc.tiles.paint(fl.id, x0 + ox, y0 + oy, x1 - x0, y1 - y0, (ctx) => {
+          ctx.beginPath();
+          ctx.rect(0, 0, x1 - x0, y1 - y0);
+          ctx.clip();
+          if (fl.alphaLock) ctx.globalCompositeOperation = "source-atop";
+          ctx.drawImage(tile, tx * T - x0, ty * T - y0);
+        });
+      }
+      const ctx = context(tile);
+      ctx.clearRect(x0 - tx * T, y0 - ty * T, x1 - x0, y1 - y0);
+      this.doc.tiles.markDirty(l.id, tx, ty);
+    }
   }
 
   /** Clicking the facing page makes it the page being drawn, without the view jumping. */
@@ -207,8 +306,8 @@ export class Editor extends Events {
   }
 
   /** The panel under a canvas point (the last drawn wins). */
-  panelAt(x: number, y: number): Panel | undefined {
-    const panels = this.frame?.panels || [];
+  panelAt(x: number, y: number, frame: Frame = this.frame): Panel | undefined {
+    const panels = frame?.panels || [];
     for (let i = panels.length - 1; i >= 0; i--) if (inside(panels[i].points, { x, y })) return panels[i];
     return undefined;
   }
@@ -231,7 +330,7 @@ export class Editor extends Events {
   mutate(label: string, fn: (b: Board) => void, extra: Step[] = []) {
     const before = cloneBoard(this.board);
     fn(this.board);
-    this.facingPic = null;
+    this.facingCache.key = "";
     const after = cloneBoard(this.board);
     this.history.push(new BoardStep(label, this.doc, before, after, extra));
     this.changed(true);
@@ -247,14 +346,24 @@ export class Editor extends Events {
 
   /** Records a pixel change; call `done()` when it is finished. */
   pixels(label: string, layer: string): TileStep {
-    return new TileStep(label, this.doc, layer);
+    const step = new TileStep(label, this.doc, layer);
+    let target = layer === this.active?.id ? this.spreadTarget() : null;
+    // Drawing into tiles that are not decoded yet would replace them.
+    if (target && !this.doc.tiles.isLoaded(target.layer.id)) {
+      this.doc.tiles.load([target.layer.id]);
+      target = null;
+    }
+    if (target) step.spread = { target, step: new TileStep(label, this.doc, target.layer.id), handled: false };
+    return step;
   }
 
   commitPixels(step: TileStep) {
-    if (step.finish()) {
-      this.history.push(step);
-      this.changed(true);
-    }
+    if (step.spread) this.settleSpread(step);
+    const done = [step, step.spread?.step].filter((s): s is TileStep => !!s && s.finish());
+    if (!done.length) return;
+    this.history.push(done.length > 1 ? new GroupStep(step.label, done) : done[0]);
+    this.changed(true);
+    if (step.spread) this.scheduleThumb(step.spread.target.frame);
   }
 
   async undo() {
@@ -529,14 +638,14 @@ export class Editor extends Events {
     const m = this.matrix();
     const facing = this.playing ? null : this.facing();
     if (facing) {
-      const pic = this.facingPicture(facing.frame);
-      ctx.setTransform(m);
-      if (pic) ctx.drawImage(pic, facing.dx, 0, this.board.width, this.board.height);
+      const pic = this.facingCanvas(facing, m);
+      if (pic) ctx.drawImage(pic, 0, 0);
       else {
+        ctx.setTransform(m);
         ctx.fillStyle = this.board.background === "transparent" ? "#fff" : this.board.background;
         ctx.fillRect(facing.dx, 0, this.board.width, this.board.height);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
       }
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     const finish = () => {
       if (facing) this.spine(ctx, m, facing);
@@ -611,7 +720,7 @@ export class Editor extends Events {
 
   /** Pages meet at the trim: the facing page covers this page's bleed on the spine side, which would be cut away. */
   private spine(ctx: CanvasRenderingContext2D, m: DOMMatrix, f: { frame: Frame; dx: number }) {
-    const pic = this.facingPicture(f.frame);
+    const pic = this.facingCanvas(f, m);
     const bleed = this.board.page?.bleed || 0;
     if (!pic || !bleed) return;
     const w = this.board.width, h = this.board.height;
@@ -621,14 +730,17 @@ export class Editor extends Events {
     ctx.beginPath();
     ctx.rect(x, 0, bleed, h);
     ctx.clip();
-    ctx.drawImage(pic, f.dx, 0, w, h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(pic, 0, 0);
     ctx.restore();
   }
 
   private clipToCanvas(c: CanvasRenderingContext2D) {
     if (this.board.infinite) return;
+    // A spread drawn as one: a stroke in progress shows across both pages.
+    const r = this.drawArea();
     c.beginPath();
-    c.rect(0, 0, this.board.width, this.board.height);
+    c.rect(r.x, r.y, r.w, r.h);
     c.clip();
   }
 
