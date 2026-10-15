@@ -8,6 +8,7 @@ import { LinkSuggest, TagSuggest, registerCoreCommands } from "./commands.ts";
 import { Setting } from "../obsidian/ui.ts";
 import { installPagePreview } from "../obsidian/renderer.ts";
 import { registerFileViews } from "./media.ts";
+import { ImagesPlugin, imagesSettingsTab } from "../images/index.ts";
 
 export function registerCorePlugins(app: any) {
   registerFileViews(app);
@@ -31,6 +32,7 @@ export function registerCorePlugins(app: any) {
   reg("word-count", "Word count", new WordCountPlugin(), "Show word and character counts in the status bar.");
   reg("random-note", "Random note", new RandomNotePlugin(), "Open a random note.", false);
   reg("backlink-count", "Backlink count", Object.assign(new BacklinkCountStatus(), { hidden: true }), "", true);
+  reg("images", "Images", new ImagesPlugin(DEFAULT_LAYOUT), "The picture library: image mode, search by description, pictures in notes.");
 
   registerCoreCommands(app);
   app.workspace.editorSuggest.addSuggest(new LinkSuggest(app));
@@ -46,6 +48,7 @@ export function registerCorePlugins(app: any) {
     new Setting(el).setName("Template file location").addText((t) => t.setValue(inst.options.template || "").onChange((v) => { inst.options.template = v; save(); }));
     new Setting(el).setName("Open daily note on startup").addToggle((t) => t.setValue(!!inst.options.autorun).onChange((v) => { inst.options.autorun = v; save(); }));
   });
+  s.addCorePluginTab("images", "Images", "images", imagesSettingsTab(app));
   s.addCorePluginTab("templates", "Templates", "files", (el: HTMLElement) => {
     const inst = ip.getPluginById("templates").instance;
     const save = () => app.writeJson("templates.json", inst.options);

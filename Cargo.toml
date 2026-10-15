@@ -13,6 +13,14 @@ path = "src/lib.rs"
 name = "ateliet"
 path = "src/main.rs"
 
+[features]
+# ONNX Runtime (used by the image search) is linked statically from prebuilt
+# binaries fetched at build time. `ort-dynamic` loads a system library instead
+# (set ORT_DYLIB_PATH), for platforms or sandboxes without those binaries.
+default = ["ort-bundled"]
+ort-bundled = ["ort/download-binaries", "ort/tls-native"]
+ort-dynamic = ["ort/load-dynamic"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -34,6 +42,10 @@ percent-encoding = "2"
 dirs = "6"
 trash = "5"
 open = "5"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "rayon"] }
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "ndarray"] }
+sha2 = "0.10"
+unicode-normalization = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

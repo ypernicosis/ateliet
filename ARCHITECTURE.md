@@ -6,6 +6,7 @@
 │                                   ──require("@codemirror/*")──▶ mesmas instâncias do editor   │
 │                                   ──require("fs"|"path"|…)──▶  ui/obsidian/nodeshim.ts         │
 │  ui/app.ts (App) · ui/core/ (core plugins) · ui/editor/ (CM6: sintaxe + Live Preview)          │
+│  ui/images/ (biblioteca de imagens: modos escrita/imagens, galeria, coleções, painel)          │
 └──────────────────────────────┬───────────────────────────────────┬─────────────────────────────┘
                      invoke (IPC Tauri)                  ateliet:// (protocolo próprio)
 ┌──────────────────────────────▼───────────────────────────────────▼─────────────────────────────┐
@@ -17,7 +18,10 @@
 │   render.rs    markdown → blocos HTML com linhas de origem (reading view / post-processors)    │
 │   search.rs    busca paralela (rayon) com a sintaxe do Obsidian                                │
 │   vault.rs     listagem, stat, cópia                                                           │
+│   images.rs    biblioteca de imagens: varredura, índice persistente, busca vetorial e por nome │
+│   clip.rs      CLIP: tokenizer BPE, pré-processamento, inferência ONNX (ort)                   │
 │ src/process.rs child_process para plugins (spawn/exec, stdout em eventos)                      │
+│ src/gallery.rs indexador em segundo plano por janela, download do modelo, comandos images_*    │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,6 +57,16 @@ A ordem de tentativa é a mesma do Obsidian:
 - `blockWidgets` (StateField): callouts e propriedades como widgets de bloco. Decorações que atravessam linhas precisam vir de um StateField.
 - A gramática (`ui/editor/syntax.ts`) estende o lezer-markdown e anota cada nó com `tokenClassNodeProp`, usando as classes HyperMD do Obsidian (`inline-code`, `formatting formatting-code`…). Código inline vira nós irmãos planos, como no parser do Obsidian.
 - O DOM do editor reproduz o do Obsidian: `.cm-scroller > .cm-sizer > (.inline-title, .cm-contentContainer > (.cm-gutters, .cm-content))`.
+
+## Biblioteca de imagens (`src/images.rs`, `src/clip.rs`, `src/gallery.rs`, `ui/images/`)
+
+- **O vault é a biblioteca.** Toda imagem do vault (jpg, png, webp, gif) faz parte dela; as coleções são as pastas. Pastas externas entram por configuração e são lidas no lugar, com chaves em caminho absoluto.
+- **Índice** (`.obsidian/ateliet/images/index.bin`, formato `ATI1`): por imagem, mtime, tamanho, dimensões, digest SHA-256 e o vetor CLIP de 512 dimensões. Ele é gravado de forma atômica. Vetores de outro modelo são descartados na leitura. Um arquivo novo cujo digest bate com o de um registro órfão (renomeado ou movido) herda o vetor.
+- **Indexador** (`Gallery::work`): uma thread por janela analisa as imagens pendentes em lotes de 8. Para cada imagem: decodificação com orientação EXIF, miniatura de 480 px gravada no cache, 224×224 normalizado e o modelo de visão. A varredura inicial reaproveita as dimensões já gravadas. Mudanças no vault chegam pelos eventos do `Vault` (JS → `images_refresh`); as pastas externas têm um watcher próprio.
+- **Busca**: a frase vira vetor pelo modelo de texto (com cache), e o ranking é o produto escalar com um pequeno bônus para nomes de arquivo que batem. Imagens ainda não analisadas aparecem no fim quando o nome bate. "Semelhantes" usa o vetor da própria imagem.
+- **Miniaturas**: `ateliet://…/__thumb?path=…&w=…`, com cache em disco cujo nome inclui mtime e tamanho (mudou, invalida).
+- **Modos**: `App.layoutFile` aponta para o layout do modo atual. A troca salva as notas abertas e o layout do modo que sai, depois carrega o do outro.
+- **Modelo**: `Xenova/clip-vit-base-patch32` (q8) numa revisão fixa, baixado para `<dados do app>/ateliet/models/`. `ATELIET_CLIP_DIR` aponta para outra pasta com `tokenizer.json`, `text_model.onnx` e `vision_model.onnx`. Os testes de `clip.rs` rodam contra arquivos reais quando `ATELIET_CLIP_TEST_DIR` está definido.
 
 ## Depuração
 

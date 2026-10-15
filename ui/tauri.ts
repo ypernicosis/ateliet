@@ -19,8 +19,9 @@ export function fileUrl(absPath: string): string {
 
 /** Base URL of the `ateliet://` protocol (platform dependent). */
 export function protocolBase(): string {
-  const u = fileUrl("/x");
-  return u.slice(0, u.length - 2);
+  // convertFileSrc percent-encodes the whole path ("…/%2Fx"), so the suffix
+  // is not always two characters long.
+  return fileUrl("/x").replace(/\/(%2F)?x$/i, "");
 }
 
 export const isMac = navigator.userAgent.includes("Mac");
