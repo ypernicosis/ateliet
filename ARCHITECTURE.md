@@ -59,7 +59,7 @@ A ordem de tentativa é a mesma do Obsidian:
 
 - `lineClasses` (ViewPlugin): classes de linha `HyperMD-header-N`, `HyperMD-list-line`, `HyperMD-quote`, `HyperMD-codeblock`… nos dois modos.
 - `livePreviewPlugin` (ViewPlugin, `Prec.low`): esconde a marcação fora do cursor e adiciona widgets de checkbox, bullet, linha horizontal e imagem. A precedência baixa garante que decorações de plugins (por exemplo, as queries inline do Dataview) vençam.
-- `blockWidgets` (StateField): callouts e propriedades como widgets de bloco. Decorações que atravessam linhas precisam vir de um StateField.
+- `blockWidgets` (StateField): callouts, propriedades e tabelas como widgets de bloco (renderizados como na reading view). Um clique na tabela põe o cursor na célula correspondente do texto, e a tabela volta a ser texto enquanto o cursor estiver nela. Decorações que atravessam linhas precisam vir de um StateField.
 - A gramática (`ui/editor/syntax.ts`) estende o lezer-markdown e anota cada nó com `tokenClassNodeProp`, usando as classes HyperMD do Obsidian (`inline-code`, `formatting formatting-code`…). Código inline vira nós irmãos planos, como no parser do Obsidian.
 - O DOM do editor reproduz o do Obsidian: `.cm-scroller > .cm-sizer > (.inline-title, .cm-contentContainer > (.cm-gutters, .cm-content))`.
 
