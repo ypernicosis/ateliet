@@ -762,7 +762,6 @@ body:not(.show-inline-title) .inline-title { display: none; }
 .HyperMD-codeblock .cm-operator { color: var(--code-operator); }
 .HyperMD-codeblock .cm-type, .HyperMD-codeblock .cm-tag { color: var(--code-tag); }
 .HyperMD-codeblock .cm-bracket { color: var(--code-punctuation); }
-.HyperMD-table-row { font-family: var(--font-monospace); font-size: var(--code-size); }
 .cm-line.is-checked { color: var(--checklist-done-color); }
 .cm-line.is-checked[data-task="x"], .cm-line.is-checked[data-task="X"] { text-decoration: var(--checklist-done-decoration); }
 .task-list-label { display: inline-flex; vertical-align: middle; margin-inline-end: 0.4em; }

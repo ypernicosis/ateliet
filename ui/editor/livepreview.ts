@@ -216,6 +216,26 @@ function touches(state: EditorState, from: number, to: number, wholeLines = fals
   return false;
 }
 
+const normalizeLabel = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+
+/** The URL of a "[label]: url" definition in the document, or null. */
+function linkReference(state: EditorState, label: string): string | null {
+  const want = normalizeLabel(label);
+  if (!want) return null;
+  let found: string | null = null;
+  syntaxTree(state).iterate({
+    enter: (n) => {
+      if (found !== null) return false;
+      if (n.name !== "LinkReference") return n.name === "Document" || n.name === "Blockquote" || n.name.endsWith("List") || n.name === "ListItem";
+      const l = n.node.getChild("LinkLabel");
+      const u = n.node.getChild("URL");
+      if (l && normalizeLabel(state.doc.sliceString(l.from + 1, l.to - 1)) === want) found = u ? state.doc.sliceString(u.from, u.to) : "";
+      return false;
+    },
+  });
+  return found;
+}
+
 function buildLivePreview(view: EditorView): DecorationSet {
   const state = view.state;
   const host = state.facet(livePreviewHost);
@@ -342,7 +362,15 @@ function buildLivePreview(view: EditorView): DecorationSet {
             if (marks.length < 2) break;
             const textFrom = marks[0].to;
             const textTo = marks[1].from;
-            const href = url ? doc.sliceString(url.from, url.to) : "";
+            let href = url ? doc.sliceString(url.from, url.to) : "";
+            if (!url) {
+              // Lezer makes every "[text]" a reference link; it is one only if "[text]: url" is defined.
+              const label = node.node.getChild("LinkLabel");
+              const key = label ? doc.sliceString(label.from + 1, label.to - 1) : doc.sliceString(textFrom, textTo);
+              const def = linkReference(state, key);
+              if (def === null) break;
+              href = def;
+            }
             if (textTo > textFrom) deco.push(Decoration.mark({ class: "cm-underline", attributes: { "data-href": href, "data-external": /^[a-z][a-z0-9+.-]*:/i.test(href) ? "1" : "" } }).range(textFrom, textTo));
             if (!touched(node.from, node.to)) {
               deco.push(hide.range(node.from, textFrom));
@@ -423,7 +451,7 @@ function linkClicks(live: boolean): Extension {
   });
 }
 
-// ── block widgets (callouts, properties) — must come from a StateField ─────
+// ── block widgets (callouts, properties, tables) — must come from a StateField ─────
 
 class CalloutWidget extends WidgetType {
   constructor(readonly text: string) {
@@ -476,6 +504,56 @@ class PropertiesWidget extends WidgetType {
   }
 }
 
+/** Offset of the start of cell `col` in a table row (inside its leading space). */
+function cellOffset(text: string, col: number): number {
+  const pipes: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === "|") pipes.push(i);
+  }
+  const lead = /^\s*\|/.test(text) ? 1 : 0;
+  const pipe = pipes[col + lead - 1];
+  let at = col + lead === 0 ? text.search(/\S|$/) : pipe === undefined ? text.length : pipe + 1;
+  if (text[at] === " ") at++;
+  return at;
+}
+
+class TableWidget extends WidgetType {
+  constructor(readonly text: string) {
+    super();
+  }
+  eq(o: TableWidget) {
+    return o.text === this.text;
+  }
+  toDOM(view: EditorView) {
+    const el = document.createElement("div");
+    el.className = "cm-embed-block cm-table-widget markdown-rendered";
+    view.state.facet(livePreviewHost)?.renderMarkdown?.(this.text, el);
+    // A click puts the cursor in the clicked cell of the source, which shows the table as text.
+    el.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest("a, input")) return;
+      e.preventDefault();
+      const start = view.posAtDOM(el);
+      const cell = (e.target as HTMLElement).closest("td, th") as HTMLTableCellElement | null;
+      const tr = cell?.parentElement as HTMLTableRowElement | null;
+      let pos = start;
+      if (cell && tr) {
+        const body = tr.parentElement?.tagName === "TBODY" ? Array.prototype.indexOf.call(tr.parentElement.children, tr) + 2 : 0;
+        const doc = view.state.doc;
+        const lineNo = Math.min(doc.lineAt(start).number + body, doc.lines);
+        const line = doc.line(lineNo);
+        pos = line.from + cellOffset(line.text, Array.prototype.indexOf.call(tr.children, cell));
+      }
+      view.dispatch({ selection: { anchor: pos } });
+      view.focus();
+    });
+    return el;
+  }
+  ignoreEvent() {
+    return true;
+  }
+}
+
 function buildBlocks(state: EditorState): DecorationSet {
   const out: Range<Decoration>[] = [];
   const doc = state.doc;
@@ -495,6 +573,13 @@ function buildBlocks(state: EditorState): DecorationSet {
         if (/^\s*>\s*\[![^\]]+\]/.test(first) && !inside(node.from, node.to) && host?.renderMarkdown) {
           const end = doc.lineAt(node.to).to;
           out.push(Decoration.replace({ widget: new CalloutWidget(doc.sliceString(node.from, end)), block: true }).range(doc.lineAt(node.from).from, end));
+        }
+        return false;
+      }
+      if (node.name === "Table") {
+        const from = doc.lineAt(node.from).from, to = doc.lineAt(node.to).to;
+        if (!inside(from, to) && host?.renderMarkdown) {
+          out.push(Decoration.replace({ widget: new TableWidget(doc.sliceString(from, to)), block: true }).range(from, to));
         }
         return false;
       }
