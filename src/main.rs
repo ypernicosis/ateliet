@@ -2,6 +2,7 @@
 
 //! Ateliet desktop shell: Tauri glue around `ateliet_core`.
 
+mod gallery;
 mod process;
 mod update;
 
@@ -633,6 +634,20 @@ fn serve(req: HttpRequest<Vec<u8>>) -> HttpResponse<Vec<u8>> {
     if let Some(op) = raw_path.strip_prefix("/__fs/") {
         return sync_fs(op, q, req.body());
     }
+    if raw_path == "/__thumb" {
+        let path = query_param(q, "path").unwrap_or_default();
+        let width = query_param(q, "w").and_then(|w| w.parse().ok()).unwrap_or(480);
+        return match gallery::serve_thumbnail(&path, width) {
+            Some((bytes, ctype)) => HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, ctype)
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(header::CACHE_CONTROL, "max-age=31536000, immutable")
+                .body(bytes)
+                .unwrap(),
+            None => respond(StatusCode::NOT_FOUND, "text/plain", b"not found".to_vec()),
+        };
+    }
     let path = percent_encoding::percent_decode_str(raw_path).decode_utf8_lossy().into_owned();
     // Windows: `/C:/…` → `C:/…`
     #[cfg(windows)]
@@ -686,6 +701,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .manage(process::Procs::default())
+        .manage(gallery::Galleries::default())
         .register_asynchronous_uri_scheme_protocol("ateliet", |_ctx, req, responder| {
             std::thread::spawn(move || responder.respond(serve(req)));
         })
@@ -728,9 +744,15 @@ fn main() {
             process::proc_write,
             process::proc_close_stdin,
             process::proc_kill,
-            update::update_check,
-            update::update_apply,
-            update::update_restart,
+            gallery::images_open,
+            gallery::images_configure,
+            gallery::images_refresh,
+            gallery::images_rescan,
+            gallery::images_status,
+            gallery::images_model_download,
+            gallery::images_reindex,
+            gallery::images_query,
+            gallery::images_folders,
         ])
         .setup(|app| {
             // `ateliet <vault-path>` opens that vault; otherwise reopen the last one.
@@ -747,6 +769,9 @@ fn main() {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(state) = window.try_state::<AppState>() {
                     state.watchers.lock().unwrap().remove(window.label());
+                }
+                if let Some(galleries) = window.try_state::<gallery::Galleries>() {
+                    galleries.close(window.label());
                 }
             }
         })

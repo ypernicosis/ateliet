@@ -8,7 +8,7 @@ Um clone minimalista do Obsidian, com núcleo em **Rust**, que abre **o mesmo va
 
 ## Rodando
 
-Requisitos: Rust (stable) e [Deno](https://deno.com) (só para empacotar o frontend; não precisa de Node).
+Requisitos: Rust (stable) e [Deno](https://deno.com) (só para empacotar o frontend; não precisa de Node). Na primeira compilação, o crate `ort` baixa o ONNX Runtime (usado pela busca de imagens) e o liga estaticamente ao binário. Sem acesso a esses binários, compile com `--no-default-features --features ort-dynamic` e aponte `ORT_DYLIB_PATH` para uma `libonnxruntime` instalada no sistema.
 
 ```sh
 ./build.sh            # empacota ui/ → dist/
@@ -24,13 +24,20 @@ cargo install tauri-cli --version "^2"
 ./build.sh && cargo tauri build
 ```
 
-## Atualizando
+## Escrita e imagens
 
-O Ateliet se atualiza a partir do clone do repositório onde foi compilado. Ele roda `git fetch` ao abrir e a cada 30 minutos. Quando o branch upstream tem commits que a build atual não tem, aparece uma seta na parte de baixo da barra lateral (há também o comando *Check for updates*). O botão mostra os commits novos e, ao confirmar, faz `git pull --ff-only`, `./build.sh` e `cargo build --release`, troca o executável (dentro do `.app`, quando instalado) e reinicia. Se o clone mudou de lugar, aponte `ATELIET_SOURCE` para ele.
+O Ateliet tem dois modos sobre o mesmo vault, alternados pelos dois botões no topo da faixa lateral esquerda ou por `Ctrl/Cmd + Shift + I`:
 
-## Benchmark
+- **Modo escrita**: as notas no centro. O painel **Pictures** na barra lateral direita busca imagens do vault; clicar insere a imagem no cursor e arrastar solta em qualquer ponto da nota. O comando **Insert picture…** abre a mesma busca num diálogo.
+- **Modo imagens**: a biblioteca no centro (mosaico com todas as imagens do vault), as **coleções** à esquerda (as pastas que têm imagens, com capa e contagem) e, à direita, a nota em que você estava escrevendo, editável ali mesmo.
 
-`scripts/bench.sh ~/caminho/do/vault` (macOS) abre o mesmo vault no Ateliet e no Obsidian e mede tamanho do app, tempo até a janela aparecer, memória e CPU parado.
+Cada modo guarda seu próprio layout (`.obsidian/ateliet/workspace.json` e `workspace-images.json`).
+
+**Busca por descrição.** Escreva o que a imagem mostra ("mãos segurando uma xícara", "rua à noite com chuva") e as mais parecidas aparecem primeiro. Usa o modelo CLIP (`Xenova/clip-vit-base-patch32`, quantizado em 8 bits), baixado uma única vez (cerca de 150 MB) para a pasta de dados do app. A análise roda neste computador, em segundo plano, poucas imagens por vez, e nenhuma imagem sai da máquina. Os vetores ficam em `.obsidian/ateliet/images/index.bin`. Imagens renomeadas ou movidas são reconhecidas pelo conteúdo e não são analisadas de novo. Antes do download, a busca procura pelos nomes dos arquivos.
+
+**Imagens e notas se cruzam.** O visualizador mostra as notas que usam a imagem e as imagens parecidas com ela. Também dá para inserir a imagem na nota aberta ou criar uma nota nova com ela, e cada coleção pode ter uma nota própria (`<pasta>/<pasta>.md`). No explorador de arquivos, o menu de uma imagem tem "Find similar pictures".
+
+**Trazer imagens.** Arrastar arquivos do sistema ou imagens de um navegador para a biblioteca, ou colar uma imagem ou um link de imagem, salva tudo na pasta aberta (ou na pasta configurada). Pastas fora do vault podem entrar na biblioteca (Settings → Images). Elas ficam onde estão e só são copiadas para o vault quando a imagem é usada numa nota. Arrastar imagens para uma coleção move os arquivos, e os links nas notas são atualizados.
 
 ## Usando o mesmo vault no Obsidian e no Ateliet
 
@@ -45,6 +52,7 @@ O Ateliet se atualiza a partir do clone do repositório onde foi compilado. Ele 
 | Temas e snippets | `.obsidian/themes/`, `.obsidian/snippets/` | sim |
 | Favoritos, notas diárias, templates, tipos de propriedade | `bookmarks.json`, `daily-notes.json`, `templates.json`, `types.json` | sim |
 | Layout de abas | `.obsidian/ateliet/workspace.json` | **não**: o Ateliet só *lê* o `workspace.json` do Obsidian na primeira abertura |
+| Biblioteca de imagens (layout do modo imagens, ajustes, índice da busca) | `.obsidian/ateliet/workspace-images.json`, `images.json`, `images/index.bin` | **não**: só o Ateliet usa |
 
 Mudanças feitas por um app aparecem ao vivo no outro: o watcher em Rust detecta e o vault concilia criação, edição, remoção e renomeação. Quando o Obsidian altera o `data.json` de um plugin, o Ateliet chama `onExternalSettingsChange()` nesse plugin.
 

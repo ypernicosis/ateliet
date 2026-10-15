@@ -122,7 +122,15 @@ export class App extends Events {
   }
 
   // ── workspace layout ─────────────────────────────────────────────────────
+  /** Where the layout on screen is saved (writing and image mode each have one). */
+  layoutFile = "ateliet/workspace.json";
+  /** Layout for a mode that has none saved yet. */
+  layoutFallback: (() => any) | null = null;
+  /** Lets the image library handle pictures dropped into a note. */
+  imageDropHandler: ((e: DragEvent, view: MarkdownView) => boolean) | null = null;
+
   async loadWorkspaceLayout(): Promise<any> {
+    if (this.layoutFile !== "ateliet/workspace.json") return (await this.readJson(this.layoutFile, null)) || this.layoutFallback?.() || null;
     // Ateliet keeps its own layout so the two apps don't fight over
     // workspace.json; on first run, start from Obsidian's last session.
     const own = await this.readJson("ateliet/workspace.json", null);
@@ -133,7 +141,7 @@ export class App extends Events {
   }
 
   async saveWorkspaceLayout(layout: any) {
-    await this.writeJson("ateliet/workspace.json", layout);
+    await this.writeJson(this.layoutFile, layout);
   }
 
   // ── shell helpers ────────────────────────────────────────────────────────
@@ -228,6 +236,7 @@ export class App extends Events {
   }
 
   handleDrop(e: DragEvent, view: MarkdownView): boolean {
+    if (this.imageDropHandler?.(e, view)) return true;
     const files = Array.from(e.dataTransfer?.files || []);
     const internal = e.dataTransfer?.getData("text/x-ateliet-path");
     if (internal) {
@@ -235,7 +244,9 @@ export class App extends Events {
       const f = this.vault.getAbstractFileByPath(internal);
       if (f instanceof TFile) {
         const pos = view.editMode.cm.posAtCoords({ x: e.clientX, y: e.clientY });
-        const link = this.fileManager.generateMarkdownLink(f, view.file?.path || "");
+        let link = this.fileManager.generateMarkdownLink(f, view.file?.path || "");
+        // Pictures are embedded, like Obsidian does when dragging them in.
+        if (/^(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(f.extension) && !link.startsWith("!")) link = "!" + link;
         view.editMode.cm.dispatch({ changes: { from: pos ?? view.editMode.cm.state.selection.main.head, insert: link } });
       }
       return true;

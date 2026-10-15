@@ -1088,11 +1088,82 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .pdf-container { width: 100%; height: 100%; border: none; }
 .view-content:has(> .pdf-container) { padding: 0; }
 
-/* ── self-update ──────────────────────────────────────────────────────── */
-.side-dock-ribbon-action.mod-update { color: var(--interactive-accent); opacity: 1; }
-.mod-ateliet-update { width: 560px; max-width: 90vw; }
-.ateliet-update-commits { max-height: 30vh; overflow-y: auto; padding-inline-start: 1.2em; user-select: text; -webkit-user-select: text; font-size: var(--font-ui-small); }
-.ateliet-update-commits li { margin-block: 2px; }
-.ateliet-update-commits .mod-muted { color: var(--text-muted); list-style: none; }
-.ateliet-update-step { margin-top: var(--size-4-3); color: var(--text-muted); font-size: var(--font-ui-small); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
-.ateliet-update-log { max-height: 180px; overflow: auto; margin: var(--size-4-2) 0 0; padding: var(--size-4-2); background: var(--background-secondary); border-radius: var(--radius-s); font-size: var(--font-ui-smaller); white-space: pre-wrap; user-select: text; -webkit-user-select: text; }
+/* ── Images: mode switch, library, collections, picture panel ───────────── */
+.ateliet-mode-switch { display: flex; flex-direction: column; gap: 2px; padding: 3px; margin-bottom: var(--size-4-2); border-radius: var(--radius-m); background: var(--background-modifier-hover); }
+.ateliet-mode-switch .side-dock-ribbon-action.is-active { background: var(--background-primary); color: var(--text-accent); --icon-color: var(--text-accent); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
+
+.image-grid { position: relative; width: 100%; }
+.image-tile { position: absolute; top: 0; left: 0; border-radius: var(--radius-s); overflow: hidden; background: var(--background-modifier-hover); cursor: var(--cursor); transition: box-shadow 120ms ease; }
+.image-tile img { display: block; width: 100%; height: calc(100% - var(--tile-label, 0px)); object-fit: cover; opacity: 0; transition: opacity 160ms ease; }
+.image-tile.is-loaded img { opacity: 1; }
+.image-tile:hover { box-shadow: 0 0 0 2px var(--background-modifier-border-hover, var(--text-faint)); }
+.image-tile.is-selected { box-shadow: 0 0 0 3px var(--interactive-accent); }
+.image-tile.is-broken::after { content: "?"; position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-faint); }
+.image-tile:has(.image-tile-name) { --tile-label: 22px; }
+.image-tile-name { height: 22px; line-height: 22px; padding: 0 6px; font-size: var(--font-ui-smaller); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: var(--background-primary); }
+
+.image-library { display: flex; flex-direction: column; padding: 0 !important; position: relative; overflow: hidden !important; }
+.image-library-toolbar { display: flex; align-items: center; gap: var(--size-4-2); padding: var(--size-4-3) var(--size-4-4) var(--size-4-2); flex-wrap: wrap; }
+.image-search-box { position: relative; flex: 1 1 260px; display: flex; align-items: center; }
+.image-search-box .image-search-icon { position: absolute; left: 10px; color: var(--text-faint); display: flex; pointer-events: none; }
+.image-search-box .image-search-icon svg { width: 16px; height: 16px; }
+.image-search-box input { width: 100%; padding-inline-start: 34px; height: 34px; border-radius: var(--radius-m); font-size: var(--font-ui-medium); }
+.image-chips { display: flex; gap: var(--size-4-1); flex-wrap: wrap; }
+.image-chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 9px; border-radius: 999px; background: var(--background-modifier-hover); font-size: var(--font-ui-small); color: var(--text-normal); }
+.image-chip-icon, .image-chip-clear { display: flex; }
+.image-chip-icon svg, .image-chip-clear svg { width: 13px; height: 13px; }
+.image-chip-clear { padding: 2px; border-radius: 50%; cursor: var(--cursor); color: var(--text-muted); }
+.image-chip-clear:hover { background: var(--background-modifier-active-hover); color: var(--text-normal); }
+.image-library-status { padding: 0 var(--size-4-4) var(--size-4-2); font-size: var(--font-ui-smaller); color: var(--text-faint); }
+.image-library-notice { margin: 0 var(--size-4-4) var(--size-4-3); padding: var(--size-4-3); border-radius: var(--radius-m); background: var(--background-secondary); font-size: var(--font-ui-small); color: var(--text-muted); display: flex; flex-wrap: wrap; gap: var(--size-4-2); align-items: center; }
+.image-library-notice button { margin-inline-start: auto; }
+.image-library-error { width: 100%; color: var(--text-error); }
+.image-library-empty { width: 100%; text-align: center; padding: var(--size-4-8) 0; color: var(--text-faint); }
+.image-library-scroll { flex: 1 1 auto; overflow-y: auto; padding: 0 var(--size-4-4) var(--size-4-8); }
+.image-library.is-drop-target::after { content: "Drop to add to the library"; position: absolute; inset: 8px; border: 2px dashed var(--interactive-accent); border-radius: var(--radius-l); display: grid; place-items: center; background: rgba(var(--mono-rgb-0), 0.6); color: var(--text-normal); font-size: var(--font-ui-large); pointer-events: none; z-index: 3; }
+
+.image-viewer { position: absolute; inset: 0; z-index: 2; display: flex; flex-direction: column; background: var(--background-primary); outline: none; }
+.image-viewer-bar { display: flex; align-items: center; gap: var(--size-4-2); padding: var(--size-4-2) var(--size-4-3); border-bottom: 1px solid var(--background-modifier-border); }
+.image-viewer-title { flex: 1 1 auto; font-weight: var(--font-medium); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.image-viewer-counter { font-size: var(--font-ui-smaller); color: var(--text-faint); }
+.image-viewer-body { flex: 1 1 auto; display: flex; min-height: 0; }
+.image-viewer-stage { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; padding: var(--size-4-4); background: var(--background-secondary); overflow: hidden; }
+.image-viewer-stage img { max-width: 100%; max-height: 100%; object-fit: contain; cursor: zoom-in; border-radius: var(--radius-s); }
+.image-viewer-stage.is-zoomed { overflow: auto; align-items: flex-start; justify-content: flex-start; }
+.image-viewer-stage.is-zoomed img { max-width: none; max-height: none; cursor: zoom-out; }
+.image-viewer-info { flex: 0 0 320px; overflow-y: auto; padding: var(--size-4-4); border-left: 1px solid var(--background-modifier-border); display: flex; flex-direction: column; gap: var(--size-4-2); }
+.image-viewer-name { font-size: var(--font-ui-medium); font-weight: var(--font-semibold); word-break: break-word; }
+.image-viewer-where a { font-size: var(--font-ui-small); color: var(--text-accent); cursor: var(--cursor); word-break: break-all; }
+.image-viewer-meta { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.image-viewer-actions { display: flex; flex-wrap: wrap; gap: var(--size-4-1); margin: var(--size-4-2) 0; }
+.image-viewer-actions button { display: inline-flex; align-items: center; gap: 6px; }
+.image-viewer-actions button svg { width: 15px; height: 15px; }
+.image-viewer-section { margin-top: var(--size-4-3); }
+.image-viewer-heading { font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: var(--size-4-2); }
+.image-viewer-note { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-radius: var(--radius-s); }
+.image-viewer-hint { font-size: var(--font-ui-smaller); color: var(--text-faint); }
+@media (max-width: 760px) { .image-viewer-body { flex-direction: column; } .image-viewer-info { flex: 0 0 auto; max-height: 45%; border-left: none; border-top: 1px solid var(--background-modifier-border); } }
+
+.image-collections { padding: 0 !important; display: flex; flex-direction: column; }
+.image-collections-list { flex: 1 1 auto; overflow-y: auto; padding: 0 var(--size-4-2) var(--size-4-4); }
+.image-collections-section { margin: var(--size-4-4) 0 var(--size-4-1) var(--size-4-2); font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.04em; }
+.image-collection { display: flex; align-items: center; gap: 8px; padding-block: 3px; padding-inline-end: 8px; border-radius: var(--radius-s); }
+.image-collection.is-active { background: var(--background-modifier-active-hover); }
+.image-collection-toggle { width: 14px; flex: 0 0 14px; display: flex; color: var(--text-faint); }
+.image-collection-toggle svg { width: 12px; height: 12px; transition: transform 100ms ease; transform: rotate(90deg); }
+.image-collection-toggle.is-collapsed svg { transform: rotate(0deg); }
+.image-collection-cover { width: 28px; height: 28px; flex: 0 0 28px; border-radius: var(--radius-s); overflow: hidden; background: var(--background-modifier-hover); display: grid; place-items: center; color: var(--text-muted); }
+.image-collection-cover img { width: 100%; height: 100%; object-fit: cover; }
+.image-collection-cover svg { width: 15px; height: 15px; }
+.image-collection-name { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--font-ui-small); }
+.image-collection-count { font-size: var(--font-ui-smaller); color: var(--text-faint); }
+
+.image-search-panel { display: flex; flex-direction: column; gap: var(--size-4-2); padding: var(--size-4-2) !important; overflow: hidden !important; }
+.image-search-panel .image-search-box { flex: 0 0 auto; }
+.image-search-hint { font-size: var(--font-ui-smaller); color: var(--text-faint); padding: 0 2px; }
+.image-search-results { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
+.image-search-footer { flex: 0 0 auto; display: flex; justify-content: center; padding-bottom: 28px; }
+.image-insert-modal { width: min(900px, 92vw); height: min(680px, 86vh); display: flex; flex-direction: column; }
+.image-insert-modal .modal-content { flex: 1 1 auto; display: flex; flex-direction: column; gap: var(--size-4-2); min-height: 0; }
+.image-insert-modal .image-search-box { flex: 0 0 auto; }
+.images-status { cursor: var(--cursor); }
