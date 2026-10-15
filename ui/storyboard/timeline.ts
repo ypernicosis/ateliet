@@ -5,6 +5,7 @@
 // number of frames; for film, shots held for seconds. Same thing.
 
 import { Editor } from "./editor.ts";
+import { isJoined } from "./pages.ts";
 import { Frame, Layer, frameStarts, isPageKind, newLayer, timecode, totalFrames, uid, unitName } from "./model.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
@@ -183,7 +184,8 @@ export class Timeline {
     let x = 4;
     b.frames.forEach((_, i) => {
       if (mode === "time") return;
-      const spreadGap = b.page?.spreads ? (i === 1 || (i > 1 && i % 2 === 1) ? 18 : 2) : 10;
+      // Joined spreads touch.
+      const spreadGap = b.page?.spreads ? (i === 1 || (i > 1 && i % 2 === 1) ? 18 : isJoined(b, i) ? 0 : 2) : 10;
       if (i > 0) x += spreadGap;
       pos.push(x);
       x += boxW;
@@ -203,6 +205,10 @@ export class Timeline {
         clip.style.width = `${boxW}px`;
       }
       clip.toggleClass("is-active", f === this.ed.frame);
+      if (mode === "pages" && isJoined(b, i)) {
+        clip.addClass("is-joined");
+        clip.setAttr("aria-label", "Joined with its facing page");
+      }
       const cur = this.ed.frameIndex, on = b.onion;
       if (on.enabled && ((i < cur && cur - i <= on.before) || (i > cur && i - cur <= on.after))) {
         clip.addClass("in-onion");

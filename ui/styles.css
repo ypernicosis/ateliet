@@ -1462,3 +1462,7 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .copy-library-progress { height: 6px; border-radius: 3px; background: var(--background-modifier-border); overflow: hidden; margin: 12px 0 6px; }
 .copy-library-fill { height: 100%; width: 0; background: var(--interactive-accent); transition: width 0.15s; }
 .copy-library-status { min-height: 1.4em; }
+
+/* Spreads drawn as one */
+.sb-clip.is-joined { border-radius: 0; box-shadow: inset 0 -3px 0 var(--interactive-accent); }
+.sb-opt-label { font-size: var(--font-ui-smaller); color: var(--text-muted); white-space: nowrap; }

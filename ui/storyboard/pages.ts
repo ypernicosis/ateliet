@@ -191,11 +191,11 @@ export function newBalloon(kind: BalloonKind, r: Rect, vertical: boolean, size: 
 const FONT = `"Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Yu Gothic", "Meiryo", system-ui, sans-serif`;
 
 /** Panels (paper outside them, borders), balloons, and reading-order numbers. */
-export function drawPage(ctx: CanvasRenderingContext2D, b: Board, f: Frame, o: { numbers: boolean; px: number }) {
+export function drawPage(ctx: CanvasRenderingContext2D, b: Board, f: Frame, o: { numbers: boolean; px: number; mask?: boolean }) {
   const page = b.page;
   if (!page) return;
   const panels = f.panels || [];
-  if (panels.length && page.mask) {
+  if (panels.length && page.mask && o.mask !== false) {
     ctx.save();
     const p = new Path2D();
     p.rect(-1, -1, b.width + 2, b.height + 2);
@@ -421,6 +421,18 @@ export function facingIndex(b: Board, i: number): number {
   if (!b.page?.spreads || i < 0) return -1;
   const j = i === 0 ? -1 : i % 2 === 1 ? i + 1 : i - 1;
   return j >= 0 && j < b.frames.length ? j : -1;
+}
+
+/** The id that names the spread of page i (its first page), or "" without a facing page. */
+export function spreadId(b: Board, i: number): string {
+  const j = facingIndex(b, i);
+  return j < 0 ? "" : b.frames[Math.min(i, j)].id;
+}
+
+/** Whether page i is in a spread drawn as one. */
+export function isJoined(b: Board, i: number): boolean {
+  const id = spreadId(b, i);
+  return !!id && !!b.page?.joined?.includes(id);
 }
 
 /** Whether page i sits on the left of its spread. */

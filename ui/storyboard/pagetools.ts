@@ -119,13 +119,20 @@ export class PanelTool implements ToolHandler {
     if (d.shift) b = Math.abs(b.x - a.x) > Math.abs(b.y - a.y) ? { x: b.x, y: a.y } : { x: a.x, y: b.y };
     const page = ed.board.page!;
     const cuts = d.alt ? [] : this.panels.filter((pn) => lineCuts(pn.points, a, b) && !inside(pn.points, a) && !inside(pn.points, b));
-    if (cuts.length) {
+    // A spread drawn as one: the same line cuts the facing page's panels too.
+    const other = d.alt ? null : this.facingCuts(a, b);
+    if (cuts.length || other?.cuts.length) {
       // A mostly horizontal cut separates tiers (vertical gutter), and the other way round.
       const horiz = Math.abs(b.x - a.x) > Math.abs(b.y - a.y);
       const gap = horiz ? page.gutterY : page.gutterX;
       ed.mutate("Cut panel", () => {
         const f = ed.frame;
         f.panels = (f.panels || []).flatMap((pn) => (cuts.includes(pn) ? cutPanel(pn, a, b, gap) : [pn]));
+        if (other?.cuts.length) {
+          const fa = { x: a.x - other.dx, y: a.y }, fb = { x: b.x - other.dx, y: b.y };
+          other.frame.panels = (other.frame.panels || []).flatMap((pn) => (other.cuts.includes(pn) ? cutPanel(pn, fa, fb, gap) : [pn]));
+          ed.scheduleThumb(other.frame);
+        }
       });
       this.selected = null;
       return;
@@ -136,6 +143,15 @@ export class PanelTool implements ToolHandler {
     const panel = rectPanel({ x: Math.round(p0.x), y: Math.round(p0.y), w: Math.round(p1.x - p0.x), h: Math.round(p1.y - p0.y) });
     ed.mutate("New panel", () => (ed.frame.panels ||= []).push(panel));
     this.selected = panel.id;
+  }
+
+  /** On a spread drawn as one, the facing page's panels a cut line crosses. */
+  private facingCuts(a: Pt, b: Pt): { frame: import("./model.ts").Frame; dx: number; cuts: import("./model.ts").Panel[] } | null {
+    const f = this.ed.joinedFacing();
+    if (!f) return null;
+    const fa = { x: a.x - f.dx, y: a.y }, fb = { x: b.x - f.dx, y: b.y };
+    const cuts = (f.frame.panels || []).filter((pn) => lineCuts(pn.points, fa, fb) && !inside(pn.points, fa) && !inside(pn.points, fb));
+    return { frame: f.frame, dx: f.dx, cuts };
   }
 
   /** Corners stick to the inner frame and to other panels' edges. */
@@ -219,7 +235,7 @@ export class PanelTool implements ToolHandler {
       if (d.shift) b = Math.abs(b.x - d.a.x) > Math.abs(b.y - d.a.y) ? { x: b.x, y: d.a.y } : { x: d.a.x, y: b.y };
       const cuts = d.alt ? [] : this.panels.filter((pn) => lineCuts(pn.points, d.a, b) && !inside(pn.points, d.a) && !inside(pn.points, b));
       ctx.lineWidth = 2 * px;
-      if (cuts.length) {
+      if (cuts.length || (!d.alt && this.facingCuts(d.a, b)?.cuts.length)) {
         ctx.strokeStyle = "#e5534b";
         ctx.setLineDash([8 * px, 5 * px]);
         ctx.beginPath();

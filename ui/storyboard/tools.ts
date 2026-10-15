@@ -76,16 +76,18 @@ function drawable(ed: Editor, raster = true): Layer | null {
 /** Clips drawing in layer coordinates to the canvas (bounded) and the selection. */
 function clipper(ed: Editor, l: Layer, at?: { x: number; y: number }): (ctx: CanvasRenderingContext2D) => void {
   const b = ed.board;
+  const joined = !!ed.joinedFacing();
   let sel = ed.selection ? translated(ed.selection.path, -l.x, -l.y) : null;
-  // Pages: a stroke stays in the panel it starts in (like drawing inside a frame).
-  if (!sel && at && b.page?.clipToPanel) {
+  // Pages: a stroke stays in the panel it starts in (like drawing inside a frame), except on a spread drawn as one.
+  if (!sel && at && b.page?.clipToPanel && !joined) {
     const panel = ed.panelAt(at.x, at.y);
     if (panel) sel = translated(polyPath(panel.points), -l.x, -l.y);
   }
+  const r = ed.drawArea();
   return (ctx) => {
     if (!b.infinite) {
       ctx.beginPath();
-      ctx.rect(-l.x, -l.y, b.width, b.height);
+      ctx.rect(r.x - l.x, r.y - l.y, r.w, r.h);
       ctx.clip();
     }
     if (sel) ctx.clip(sel);
@@ -93,8 +95,30 @@ function clipper(ed: Editor, l: Layer, at?: { x: number; y: number }): (ctx: Can
 }
 
 function outsideCanvas(ed: Editor, l: Layer, x: number, y: number, w: number, h: number) {
-  const b = ed.board;
-  return !b.infinite && (x + w < -l.x || y + h < -l.y || x > b.width - l.x || y > b.height - l.y);
+  const r = ed.drawArea();
+  return !ed.board.infinite && (x + w < r.x - l.x || y + h < r.y - l.y || x > r.x + r.w - l.x || y > r.y + r.h - l.y);
+}
+
+/**
+ * On a spread drawn as one, paints the same marks into the facing page's
+ * layer, clipped to that page. (x, y, w, h) and `draw` are in the coordinates
+ * of `l`, the layer being drawn on.
+ */
+function paintFacing(ed: Editor, l: Layer, step: TileStep, x: number, y: number, w: number, h: number, draw: (ctx: CanvasRenderingContext2D) => void) {
+  const sp = step.spread;
+  if (!sp) return;
+  const fl = sp.target.layer;
+  const page = { x: sp.target.dx - l.x, y: -l.y, w: ed.board.width, h: ed.board.height };
+  if (x + w < page.x || x > page.x + page.w || y + h < page.y || y > page.y + page.h) return;
+  const ox = l.x - sp.target.dx - fl.x, oy = l.y - fl.y;
+  ed.eachTile(x + ox, y + oy, w, h, (tx, ty) => sp.step.touch(tx, ty));
+  ed.doc.tiles.paint(fl.id, x + ox, y + oy, w, h, (ctx) => {
+    ctx.translate(-x, -y);
+    ctx.beginPath();
+    ctx.rect(page.x, page.y, page.w, page.h);
+    ctx.clip();
+    draw(ctx);
+  });
 }
 
 // ── brushes ───────────────────────────────────────────────────────────────
@@ -130,6 +154,10 @@ export class BrushTool implements ToolHandler {
           ctx.translate(-x, -y);
           clip(ctx);
           if (l.alphaLock) ctx.globalCompositeOperation = "source-atop";
+          draw(ctx);
+        });
+        paintFacing(ed, l, this.step!, x, y, w, h, (ctx) => {
+          if (this.step!.spread!.target.layer.alphaLock) ctx.globalCompositeOperation = "source-atop";
           draw(ctx);
         });
       });
@@ -183,8 +211,17 @@ export class BrushTool implements ToolHandler {
     if (this.buffer) {
       const c = s.composite;
       const atop = !!l.alphaLock && this.id !== "eraser";
+      const fl = this.step!.spread?.target.layer;
       for (const [k, tile] of this.buffer.tiles) {
         const [tx, ty] = k.split("_").map(Number);
+        // The same stroke on the facing page of a spread drawn as one.
+        if (fl) {
+          paintFacing(ed, l, this.step!, tx * TILE, ty * TILE, TILE, TILE, (fctx) => {
+            fctx.globalAlpha = c.alpha;
+            fctx.globalCompositeOperation = fl.alphaLock && this.id !== "eraser" ? "source-atop" : c.op;
+            fctx.drawImage(tile, tx * TILE, ty * TILE);
+          });
+        }
         if (c.op === "destination-out" && !ed.doc.tiles.has(l.id, tx, ty)) continue;
         this.step!.touch(tx, ty);
         const ctx = context(ed.doc.tiles.ensure(l.id, tx, ty));
@@ -196,6 +233,7 @@ export class BrushTool implements ToolHandler {
         ed.doc.tiles.markDirty(l.id, tx, ty);
       }
     }
+    if (this.step!.spread) this.step!.spread.handled = true;
     ed.stroke = null;
     ed.commitPixels(this.step!);
     this.stroke = null;

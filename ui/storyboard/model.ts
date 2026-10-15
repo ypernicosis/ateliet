@@ -190,6 +190,12 @@ export interface PageSetup {
   clipToPanel: boolean;
   /** Webtoon: height of an uploaded slice (lines are shown at each). */
   slice: number;
+  /**
+   * Spreads drawn as one (by the id of the spread's first page): strokes
+   * cross the spine into both pages, and nothing is clipped or masked at the
+   * panels. Each page keeps its own part.
+   */
+  joined?: string[];
 }
 
 export interface Board {

@@ -73,6 +73,7 @@ export class StoryboardView extends FileView {
   private focusBar!: HTMLElement;
   private focusBtn!: HTMLElement;
   private onionBtn!: HTMLElement;
+  private joinBtn: HTMLElement | null = null;
   private side!: HTMLElement;
 
   getViewType() {
@@ -179,6 +180,8 @@ export class StoryboardView extends FileView {
     ed.on("onion", () => this.updateOnion());
     ed.on("board", () => this.updateOnion());
     ed.on("frame", () => this.renderFocusBar());
+    ed.on("board", () => this.updateJoin());
+    ed.on("frame", () => this.updateJoin());
     ed.on("history", () => this.renderFocusBar());
     // Another tab coming forward leaves focus mode (it covers the whole window).
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf: any) => {
@@ -276,6 +279,9 @@ export class StoryboardView extends FileView {
       this.onionBtn = this.button(bar, "layers-3", "Onion skin (O): the frames before and after, faint", () => this.timeline?.toggleOnion());
       const onionMore = this.button(bar, "chevron-down", "Onion skin settings", () => this.timeline?.onionPanel(onionMore));
       onionMore.addClass("sb-caret");
+    }
+    if (isPageKind(ed.board.kind) && ed.board.kind !== "webtoon" && ed.board.kind !== "thumbnails") {
+      this.joinBtn = this.button(bar, "book-open", "Join the two pages: draw across the spine and the margins (separate again any time; nothing drawn is lost)", () => this.toggleJoined());
     }
     bar.createDiv("sb-sep");
     this.focusBtn = this.button(bar, "focus", "Focus (Tab): only the drawing and the reference", () => this.setFocus(!this.focus));
@@ -434,6 +440,25 @@ export class StoryboardView extends FileView {
       }
     });
     b(this.focus.osFullscreen ? "shrink" : "expand", this.focus.osFullscreen ? "Leave full screen" : "Full screen", () => this.toggleOsFullscreen(), this.focus.osFullscreen);
+  }
+
+  private toggleJoined() {
+    const ed = this.ed!;
+    if (!ed.facing()) {
+      new Notice(ed.board.page?.spreads ? "This page has no facing page (the first page stands alone)." : "Turn on spreads in the storyboard settings to see two pages side by side.");
+      return;
+    }
+    ed.toggleJoined();
+  }
+
+  private updateJoin() {
+    const ed = this.ed;
+    if (!ed || !this.joinBtn) return;
+    const joined = !!ed.joinedFacing();
+    this.joinBtn.toggleClass("is-active", joined);
+    this.joinBtn.toggleClass("is-disabled", !ed.facing());
+    this.joinBtn.setAttr("aria-label", joined ? "Separate the pages: panels and margins come back (what was drawn across them stays, hidden under the paper)" : "Join the two pages: draw across the spine and the margins (separate again any time; nothing drawn is lost)");
+    this.root.toggleClass("is-joined", joined);
   }
 
   private updateOnion() {
@@ -644,6 +669,12 @@ export class StoryboardView extends FileView {
       page.border = v;
       ed.changed();
     });
+    if (this.joinBtn) {
+      const joined = !!ed.joinedFacing();
+      const jb = this.button(el, "book-open", joined ? "Separate the pages" : "Join the two pages", () => this.toggleJoined());
+      jb.toggleClass("is-active", joined);
+      el.createSpan({ cls: "sb-opt-label", text: joined ? "Joined: cuts go through both pages" : "Join pages" });
+    }
     this.check(el, "Strokes stay in their panel", page.clipToPanel, (v) => this.setPage("Strokes in panels", (p) => (p.clipToPanel = v)), "A stroke that starts in a panel cannot leave it (like drawing in a frame)");
     this.check(el, "Paper outside panels", page.mask, (v) => this.setPage("Paper outside panels", (p) => (p.mask = v)), "Hide what is drawn in the gutters and margins");
     if (mt.selected) {
@@ -867,7 +898,9 @@ export class StoryboardView extends FileView {
         const q = ed.eventPoint(e);
         const inCurrent = q.x >= 0 && q.x <= ed.board.width && q.y >= 0 && q.y <= ed.board.height;
         const inFacing = q.x >= facing.dx && q.x <= facing.dx + ed.board.width && q.y >= 0 && q.y <= ed.board.height;
-        if (inFacing && !inCurrent) {
+        // A spread drawn as one: drawing tools draw there too; panels and balloons belong to their page.
+        const drawsAcross = !!ed.joinedFacing() && !["panel", "balloon", "move", "select"].includes(this.toolId);
+        if (inFacing && !inCurrent && !drawsAcross && !(this.toolId === "panel" && ed.joinedFacing() && !ed.panelAt(q.x - facing.dx, q.y, facing.frame))) {
           ed.switchToFacing();
           e.preventDefault();
           return;
