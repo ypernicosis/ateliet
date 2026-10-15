@@ -69,6 +69,32 @@ export interface FrameNotes {
   sound: string;
 }
 
+/** A panel (koma) on a page: a polygon in page coordinates. */
+export interface Panel {
+  id: string;
+  points: { x: number; y: number }[];
+  /** Picked as a keeper (thumbnails). */
+  star?: boolean;
+}
+
+export type BalloonKind = "speech" | "thought" | "shout" | "whisper" | "narration" | "sfx";
+
+/** A speech balloon, caption or sound effect on a page. */
+export interface Balloon {
+  id: string;
+  kind: BalloonKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  text: string;
+  /** Japanese-style vertical text, columns right to left. */
+  vertical: boolean;
+  size: number;
+  /** Where the tail points (page coordinates), if it has one. */
+  tail: { x: number; y: number } | null;
+}
+
 export interface Frame {
   id: string;
   name: string;
@@ -82,6 +108,11 @@ export interface Frame {
   reference?: string;
   /** A colour label on the timeline. */
   color?: string;
+  /** Page kinds: panels and balloons, drawn over the layers. */
+  panels?: Panel[];
+  balloons?: Balloon[];
+  /** Page kinds: the script or notes of this page. */
+  script?: string;
 }
 
 export interface Reference {
@@ -111,10 +142,62 @@ export interface Onion {
   opacity: number;
   /** Earlier frames reddish, later ones greenish. */
   tint: boolean;
+  colorBefore: string;
+  colorAfter: string;
+  /** Farther frames fainter. */
+  fade: boolean;
+  /** Picture layers too (not only drawing). */
+  pictures: boolean;
+}
+
+/**
+ * What kind of storyboard this is. They share frames, layers and tools; the
+ * kind decides the workspace:
+ * - animatic: timed frames, playback, onion skin (film and animation);
+ * - presentation: frames as cards with their notes, printed as pages;
+ * - thumbnails: sheets of small panels for fast exploration;
+ * - name: manga pages (ネーム): panels, balloons, right to left, spreads;
+ * - comic: comic pages, left to right;
+ * - webtoon: a vertical strip read by scrolling.
+ */
+export type BoardKind = "animatic" | "presentation" | "thumbnails" | "name" | "comic" | "webtoon";
+
+export const PAGE_KINDS: BoardKind[] = ["thumbnails", "name", "comic", "webtoon"];
+
+export function isPageKind(k: BoardKind | undefined): boolean {
+  return !!k && PAGE_KINDS.includes(k);
+}
+
+/** Page geometry, in pixels of the page canvas (which includes the bleed). */
+export interface PageSetup {
+  dpi: number;
+  /** Bleed on each side; the trim is the canvas minus the bleed. */
+  bleed: number;
+  /** The inner frame (safe area) where panels and text belong. */
+  inner: { x: number; y: number; w: number; h: number };
+  /** Read right to left (manga). */
+  rtl: boolean;
+  /** Show facing pages side by side (page 1 alone, then pairs). */
+  spreads: boolean;
+  /** Space between panels: beside each other / one above the other. */
+  gutterX: number;
+  gutterY: number;
+  /** Panel border width. */
+  border: number;
+  /** Paper over what is drawn outside the panels. */
+  mask: boolean;
+  /** Strokes stay inside the panel they start in. */
+  clipToPanel: boolean;
+  /** Webtoon: height of an uploaded slice (lines are shown at each). */
+  slice: number;
 }
 
 export interface Board {
   format: number;
+  kind: BoardKind;
+  page?: PageSetup;
+  /** Thumbnails: the aspect of the cells. */
+  thumbAspect?: number;
   width: number;
   height: number;
   infinite: boolean;
@@ -193,6 +276,8 @@ export function newLayer(name: string, kind: LayerKind = "raster", extra: Partia
 }
 
 export interface NewBoardOptions {
+  kind?: BoardKind;
+  page?: PageSetup;
   width: number;
   height: number;
   infinite: boolean;
@@ -204,6 +289,8 @@ export function newBoard(o: NewBoardOptions): Board {
   const now = Date.now();
   const board: Board = {
     format: FORMAT,
+    kind: o.kind || "animatic",
+    page: o.page,
     width: o.width,
     height: o.height,
     infinite: o.infinite,
@@ -215,7 +302,7 @@ export function newBoard(o: NewBoardOptions): Board {
     palette: [...DEFAULT_PALETTE],
     recent: [],
     guides: { thirds: false, center: false, safe: false, grid: 0, mirror: false },
-    onion: { enabled: false, before: 1, after: 1, opacity: 0.3, tint: true },
+    onion: { enabled: false, before: 1, after: 1, opacity: 0.3, tint: true, colorBefore: "#d0453b", colorAfter: "#2f9e5a", fade: true, pictures: false },
     created: now,
     modified: now,
   };
@@ -256,8 +343,14 @@ export function sharedLayers(board: Board): Layer[] {
   return out;
 }
 
+const UNIT: Record<BoardKind, string> = { animatic: "Frame", presentation: "Shot", thumbnails: "Sheet", name: "Page", comic: "Page", webtoon: "Part" };
+
+export function unitName(board: Board): string {
+  return UNIT[board.kind] || "Frame";
+}
+
 export function frameLabel(board: Board, frame: Frame): string {
-  return frame.name || `Frame ${board.frames.indexOf(frame) + 1}`;
+  return frame.name || `${unitName(board)} ${board.frames.indexOf(frame) + 1}`;
 }
 
 /** Where each frame starts on the timeline, in frames. */
@@ -289,7 +382,7 @@ export function unusedLayers(board: Board): string[] {
 
 /** Fills in what an older or hand-edited board.json lacks. */
 export function normalizeBoard(raw: any): Board {
-  const base = newBoard({ width: raw?.width || 1920, height: raw?.height || 1080, infinite: !!raw?.infinite, background: raw?.background ?? PAPER, fps: raw?.fps || 24 });
+  const base = newBoard({ kind: raw?.kind || "animatic", page: raw?.page, width: raw?.width || 1920, height: raw?.height || 1080, infinite: !!raw?.infinite, background: raw?.background ?? PAPER, fps: raw?.fps || 24 });
   const board: Board = { ...base, ...raw, guides: { ...base.guides, ...(raw?.guides || {}) }, onion: { ...base.onion, ...(raw?.onion || {}) } };
   if (!Array.isArray(board.frames) || !board.frames.length) {
     board.frames = [];
@@ -306,7 +399,12 @@ export function normalizeBoard(raw: any): Board {
     }
     if (!f.layers.includes(f.active)) f.active = f.layers[f.layers.length - 1];
     f.duration = Math.max(1, Math.round(f.duration || board.fps));
+    if (isPageKind(board.kind)) {
+      f.panels ||= [];
+      f.balloons ||= [];
+    }
   }
+  board.kind ||= "animatic";
   for (const l of Object.values(board.layers)) {
     l.x ||= 0;
     l.y ||= 0;

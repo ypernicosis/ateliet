@@ -2,7 +2,8 @@
 // and size: open, rename, duplicate, change settings, delete. New ones start
 // here (blank, from a Clip Studio file, or from Pictogrep's drawings).
 
-import { Board, frameStarts, timecode, totalFrames } from "./model.ts";
+import { Board, frameStarts, isPageKind, timecode, totalFrames } from "./model.ts";
+import { kindInfo } from "./kinds.ts";
 import { peek } from "./store.ts";
 import { STORYBOARD_VIEW } from "./view.ts";
 import { ItemView } from "../obsidian/views.ts";
@@ -142,9 +143,12 @@ export class StoryboardListView extends ItemView {
 }
 
 export function describe(b: Board): string {
-  const total = totalFrames(b);
+  const k = kindInfo(b.kind);
+  const n = b.frames.length;
+  const count = `${n} ${n === 1 ? k.unit : k.units}`;
   void frameStarts;
-  return `${b.frames.length} ${b.frames.length === 1 ? "frame" : "frames"} · ${timecode(total, b.fps)} · ${b.infinite ? "infinite canvas" : `${b.width} × ${b.height}`}`;
+  if (isPageKind(b.kind)) return `${k.name} · ${count}${b.page?.rtl ? " · right to left" : ""}`;
+  return `${k.name} · ${count} · ${timecode(totalFrames(b), b.fps)} · ${b.infinite ? "infinite canvas" : `${b.width} × ${b.height}`}`;
 }
 
 export async function confirmDelete(app: any, file: TFile) {

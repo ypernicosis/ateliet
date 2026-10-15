@@ -37,6 +37,9 @@ export class ReferencePanel {
   private empty!: HTMLElement;
   current: Reference | null = null;
   private mirrored = false;
+  private actions!: HTMLElement;
+  private mirrorBtn!: HTMLElement;
+  private stripKey = "";
   private off: (() => void)[] = [];
 
   constructor(private app: any, private ed: Editor, parent: HTMLElement, private host: ReferenceHost) {
@@ -44,12 +47,6 @@ export class ReferencePanel {
     const head = this.el.createDiv("sb-panel-head");
     head.createDiv({ cls: "sb-panel-title", text: "References" });
     this.counter = head.createDiv("sb-refs-counter");
-    const prev = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Previous reference (←)" } });
-    setIcon(prev, "chevron-left");
-    prev.addEventListener("click", () => this.step(-1));
-    const next = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Next reference (→)" } });
-    setIcon(next, "chevron-right");
-    next.addEventListener("click", () => this.step(1));
     const add = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Add references (moodboard, folder, note, search…)" } });
     setIcon(add, "image-plus");
     add.addEventListener("click", (e) => this.addMenu(e));
@@ -68,7 +65,28 @@ export class ReferencePanel {
     b.addEventListener("click", (e) => this.addMenu(e));
     this.empty.createDiv({ cls: "sb-hint", text: "Bring a collection, a folder, a note's pictures or a canvas; or drop and paste pictures here." });
     this.zoom = new PanZoom(this.stage, this.content, { margin: 8 });
-    this.title = this.el.createDiv("sb-refs-title");
+    // A reference is there to be looked at: small pictures are enlarged to the panel.
+    this.zoom.upscale = true;
+    // Previous / next over the picture, where the eye already is.
+    for (const [cls, icon, label, d] of [["sb-refs-prev", "chevron-left", "Previous reference (←)", -1], ["sb-refs-next", "chevron-right", "Next reference (→)", 1]] as const) {
+      const b = this.stage.createDiv({ cls: `sb-refs-nav ${cls} pz-ignore`, attr: { "aria-label": label } });
+      setIcon(b, icon);
+      b.addEventListener("click", () => this.step(d));
+      b.addEventListener("dblclick", (e) => e.stopPropagation());
+    }
+    this.actions = this.el.createDiv("sb-refs-actions");
+    const act = (icon: string, label: string, fn: () => void) => {
+      const b = this.actions.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
+      setIcon(b, icon);
+      b.addEventListener("click", fn);
+      return b;
+    };
+    act("scan-line", "Trace this picture (adds a trace layer and a layer to draw on)", () => this.current && this.host.trace(this.current));
+    act("image-plus", "Place it on the frame as a picture layer", () => this.current && this.host.place(this.current));
+    this.mirrorBtn = act("flip-horizontal", "Mirror the reference", () => this.toggleMirror());
+    act("maximize", "Whole picture (double click: real size)", () => this.zoom?.fit());
+    act("pipette", "Alt+click the picture takes its colour", () => this.ed.trigger("notice", "Alt+click the reference (or use the colour picker tool, I) to take a colour from it."));
+    this.title = this.actions.createDiv("sb-refs-title");
     this.strip = this.el.createDiv("sb-refs-strip");
 
     // Alt+click (or the colour picker tool) takes a colour from the reference.
@@ -117,16 +135,28 @@ export class ReferencePanel {
     this.content.toggle(!!list.length);
     if (!this.current && list.length) this.show(list[0], false);
     this.counter.setText(list.length ? `${this.current ? list.indexOf(this.current) + 1 : 0} / ${list.length}` : "");
+    this.actions.toggle(!!list.length);
+    this.stage.toggleClass("has-many", list.length > 1);
+    // The strip is rebuilt only when the list changes (it can hold hundreds).
+    const key = list.map((r) => r.id + r.path).join("|");
+    if (key === this.stripKey) return;
+    this.stripKey = key;
     this.strip.empty();
     for (const r of list) {
       const t = this.strip.createDiv({ cls: "sb-refs-thumb", attr: { draggable: "true", "aria-label": r.name } });
       t.toggleClass("is-active", r === this.current);
       const im = t.createEl("img", { attr: { src: r.path.startsWith("refs/") ? this.ed.doc.refs.url(r) : thumbnailUrl(r.path, 160), loading: "lazy", draggable: "false" } });
       im.onerror = () => t.addClass("is-missing");
-      t.addEventListener("click", () => this.show(r));
+      // Looked up when used: undo replaces the board's objects.
+      const now = () => this.list.find((x) => x.id === r.id);
+      t.addEventListener("click", () => {
+        const x = now();
+        if (x) this.show(x);
+      });
       t.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        this.refMenu(r).showAtMouseEvent(e);
+        const x = now();
+        if (x) this.refMenu(x).showAtMouseEvent(e);
       });
       t.addEventListener("dragstart", (e) => e.dataTransfer?.setData("text/x-ateliet-ref", r.id));
     }
@@ -138,10 +168,17 @@ export class ReferencePanel {
       this.ed.frame.reference = r.id;
       this.ed.changed();
     }
-    this.title.setText(r.name + (r.from ? ` · ${r.from}` : ""));
+    this.title.setText(displayName(r, this.list.indexOf(r)));
+    this.title.setAttr("aria-label", r.name + (r.from ? ` · ${r.from}` : ""));
     this.strip.querySelectorAll(".sb-refs-thumb").forEach((el, i) => {
-      el.toggleClass("is-active", this.list[i] === r);
-      if (this.list[i] === r) (el as HTMLElement).scrollIntoView({ block: "nearest", inline: "nearest" });
+      const on = this.list[i]?.id === r.id;
+      el.toggleClass("is-active", on);
+      // Scroll the strip only (scrollIntoView would also move clipped ancestors).
+      if (on) {
+        const t = el as HTMLElement, s = this.strip;
+        if (t.offsetLeft < s.scrollLeft) s.scrollLeft = t.offsetLeft - 8;
+        else if (t.offsetLeft + t.offsetWidth > s.scrollLeft + s.clientWidth) s.scrollLeft = t.offsetLeft + t.offsetWidth - s.clientWidth + 8;
+      }
     });
     this.counter.setText(`${this.list.indexOf(r) + 1} / ${this.list.length}`);
     const img = await this.ed.doc.refs.image(r);
@@ -160,7 +197,7 @@ export class ReferencePanel {
   step(delta: number) {
     const list = this.list;
     if (!list.length) return;
-    const i = this.current ? list.indexOf(this.current) : -1;
+    const i = this.current ? list.findIndex((x) => x.id === this.current!.id) : -1;
     const next = list[(i + delta + list.length) % list.length];
     this.show(next);
   }
@@ -168,6 +205,7 @@ export class ReferencePanel {
   toggleMirror() {
     this.mirrored = !this.mirrored;
     this.zoom?.setFlip(this.mirrored);
+    this.mirrorBtn.toggleClass("is-active", this.mirrored);
   }
 
   /** The canvas grid over the reference too (the grid method of drawing from a picture). */
@@ -508,4 +546,11 @@ class SearchRefsModal extends Modal {
   onClose() {
     this.contentEl.empty();
   }
+}
+
+/** A readable name: pictures named by a hash (Pinterest, the shared library) show where they came from instead. */
+export function displayName(r: Reference, index: number): string {
+  const stem = r.name.replace(/\.[a-z0-9]+$/i, "");
+  if (/^[0-9a-f_-]{16,}$/i.test(stem) || /^pin[-_]?\d+$/i.test(stem)) return `${r.from || "Picture"} · ${index + 1}`;
+  return r.name + (r.from ? ` · ${r.from}` : "");
 }

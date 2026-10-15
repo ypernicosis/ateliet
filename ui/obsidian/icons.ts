@@ -65,6 +65,8 @@ const LEGACY: Record<string, string> = {
   "left-arrow-with-tail": "arrow-left",
   "left-chevron-glyph": "chevron-left",
   "lines-of-text": "align-left",
+  "links-coming-in": "arrow-down-left",
+  "links-going-out": "arrow-up-right",
   "link": "link",
   "link-glyph": "link",
   "logo-crystal": "gem",

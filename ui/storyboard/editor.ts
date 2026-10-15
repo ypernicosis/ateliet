@@ -12,7 +12,9 @@
 //   "selection"
 //   "saved" / "dirty"
 
-import { Board, Frame, Layer, Transform, addFrame, frameLabel, newLayer } from "./model.ts";
+import { Board, Frame, Layer, Panel, Transform, frameLabel, isPageKind, newLayer } from "./model.ts";
+import { addPage } from "./kinds.ts";
+import { facingIndex, inside, isLeftPage, trimRect } from "./pages.ts";
 import { StoryDoc } from "./store.ts";
 import { Compositor, DrawOptions, Floating, Scratch, StrokeOverlay, ViewState, corners, pixelBounds, sourceSize, viewMatrix } from "./render.ts";
 import { BoardStep, History, Step, TileStep, cloneBoard } from "./history.ts";
@@ -138,7 +140,8 @@ export class Editor extends Events {
     this.commitFloating();
     const changed = f !== this.frame;
     this.frame = f;
-    this.comp.want(f);
+    this.facingPic = null;
+    this.wantPictures();
     const need = this.comp.layersFor(f, true);
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
@@ -153,13 +156,69 @@ export class Editor extends Events {
     if (!this.board.frames.includes(this.frame)) this.frame = this.board.frames.find((f) => f.id === this.frame?.id) || this.board.frames[0];
     else this.frame = this.board.frames.find((f) => f.id === this.frame.id)!;
     if (!this.frame.layers.includes(this.frame.active)) this.frame.active = this.frame.layers[this.frame.layers.length - 1];
-    this.comp.want(this.frame);
+    this.wantPictures();
     const need = this.comp.layersFor(this.frame, true);
     this.doc.tiles.pin(need);
     await this.doc.tiles.load(need);
     this.invalidate();
     this.trigger("frame", this.frame);
     this.trigger("board");
+  }
+
+  // ── pages ───────────────────────────────────────────────────────────────
+
+  /** The facing page of a spread and its offset from this page, or null. */
+  facing(): { frame: Frame; dx: number } | null {
+    const b = this.board;
+    if (!isPageKind(b.kind) || !this.frame) return null;
+    const j = facingIndex(b, this.frameIndex);
+    if (j < 0) return null;
+    // Pages meet at their trim: the bleed of the inner edges overlaps.
+    const step = b.width - 2 * (b.page?.bleed || 0);
+    return { frame: b.frames[j], dx: isLeftPage(b, this.frameIndex) ? step : -step };
+  }
+
+  private facingPic: { id: string; pic: HTMLCanvasElement | null; pending: boolean } | null = null;
+
+  /** The facing page as a picture (made once per page switch or change). */
+  private facingPicture(f: Frame): HTMLCanvasElement | null {
+    if (this.facingPic?.id === f.id) return this.facingPic.pic;
+    const entry: { id: string; pic: HTMLCanvasElement | null; pending: boolean } = (this.facingPic = { id: f.id, pic: null, pending: true });
+    const scale = Math.min(1, this.view.scale * this.dpr * 1.5);
+    this.comp.picture(f, scale, { exporting: false, area: { x: 0, y: 0, w: this.board.width, h: this.board.height } }).then((pic) => {
+      if (this.facingPic !== entry) return;
+      entry.pic = pic;
+      entry.pending = false;
+      this.invalidate();
+    });
+    return null;
+  }
+
+  /** Clicking the facing page makes it the page being drawn, without the view jumping. */
+  async switchToFacing() {
+    const f = this.facing();
+    if (!f) return;
+    const at = this.toStage(f.dx, 0);
+    await this.setFrame(f.frame);
+    const now = this.toStage(0, 0);
+    this.view.x += at.x - now.x;
+    this.view.y += at.y - now.y;
+    this.viewChanged();
+  }
+
+  /** The panel under a canvas point (the last drawn wins). */
+  panelAt(x: number, y: number): Panel | undefined {
+    const panels = this.frame?.panels || [];
+    for (let i = panels.length - 1; i >= 0; i--) if (inside(panels[i].points, { x, y })) return panels[i];
+    return undefined;
+  }
+
+  /** Starts loading the pictures of the frame and of its onion-skin neighbours. */
+  private wantPictures() {
+    const b = this.board, i = this.frameIndex;
+    this.comp.want(this.frame);
+    if (!b.onion.enabled || !b.onion.pictures) return;
+    for (let k = -b.onion.before; k <= b.onion.after; k++) if (k && b.frames[i + k]) this.comp.want(b.frames[i + k]);
   }
 
   frameName(f: Frame = this.frame) {
@@ -172,6 +231,7 @@ export class Editor extends Events {
   mutate(label: string, fn: (b: Board) => void, extra: Step[] = []) {
     const before = cloneBoard(this.board);
     fn(this.board);
+    this.facingPic = null;
     const after = cloneBoard(this.board);
     this.history.push(new BoardStep(label, this.doc, before, after, extra));
     this.changed(true);
@@ -236,6 +296,8 @@ export class Editor extends Events {
     if (this.destroyed || !this.board.frames.includes(frame)) return;
     try {
       const area = this.comp.area(frame);
+      // A webtoon strip is summed up by its top, the way a reader first meets it.
+      if (this.board.kind === "webtoon") area.h = Math.min(area.h, Math.round(area.w * 1.6));
       const scale = Math.min(1, 320 / Math.max(area.w, area.h));
       const pic = await this.comp.picture(frame, scale, { exporting: false, area });
       const blob: Blob | null = await new Promise((r) => pic.toBlob(r, "image/png"));
@@ -311,10 +373,23 @@ export class Editor extends Events {
     const r = this.stage.getBoundingClientRect();
     if (!r.width || !r.height || !this.frame) return;
     const area = this.board.infinite ? this.comp.area(this.frame, false) : { x: 0, y: 0, w: this.board.width, h: this.board.height };
+    // A spread: both pages in view.
+    const f = this.facing();
+    if (f) {
+      area.x = Math.min(0, f.dx);
+      area.w = this.board.width + Math.abs(f.dx);
+    }
     const margin = 32;
+    this.view.rotation = 0;
+    if (this.board.kind === "webtoon" && area.h > area.w * 2) {
+      // A long strip is read by scrolling: fit its width (up to the phone-ish size) and start at the top.
+      this.view.scale = Math.max(0.02, Math.min(1, (r.width - 2 * margin) / area.w));
+      this.centerOn(area.w / 2, (r.height / 2 - margin) / this.view.scale);
+      this.autoFit = true;
+      return;
+    }
     const s = Math.min((r.width - 2 * margin) / area.w, (r.height - 2 * margin) / area.h);
     this.view.scale = Math.max(0.02, Math.min(8, s));
-    this.view.rotation = 0;
     this.centerOn(area.x + area.w / 2, area.y + area.h / 2);
     this.autoFit = true;
   }
@@ -452,6 +527,21 @@ export class Editor extends Events {
     ctx.fillStyle = this.outside;
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
     const m = this.matrix();
+    const facing = this.playing ? null : this.facing();
+    if (facing) {
+      const pic = this.facingPicture(facing.frame);
+      ctx.setTransform(m);
+      if (pic) ctx.drawImage(pic, facing.dx, 0, this.board.width, this.board.height);
+      else {
+        ctx.fillStyle = this.board.background === "transparent" ? "#fff" : this.board.background;
+        ctx.fillRect(facing.dx, 0, this.board.width, this.board.height);
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    const finish = () => {
+      if (facing) this.spine(ctx, m, facing);
+      this.drawOverlay();
+    };
     if (this.playing) {
       // Playback shows prepared pictures of whole frames.
       const area = this.playing.area;
@@ -464,7 +554,7 @@ export class Editor extends Events {
       }
       ctx.drawImage(this.playing.pic, area.x, area.y, area.w, area.h);
       if (!this.board.infinite) ctx.restore();
-      this.drawOverlay();
+      finish();
       return;
     }
     const o = this.options();
@@ -477,7 +567,7 @@ export class Editor extends Events {
       ctx.setTransform(m);
       this.comp.drawFrame(ctx, this.frame, o);
       this.cache.key = "";
-      this.drawOverlay();
+      finish();
       return;
     }
     const key = `${this.version}|${this.canvas.width}x${this.canvas.height}|${active!.id}|${active!.opacity}|${active!.blend}|${active!.visible}`;
@@ -511,7 +601,28 @@ export class Editor extends Events {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(this.cache.above, 0, 0);
     }
-    this.drawOverlay();
+    ctx.setTransform(m);
+    ctx.save();
+    this.clipToCanvas(ctx);
+    this.comp.decor(ctx, this.frame, true);
+    ctx.restore();
+    finish();
+  }
+
+  /** Pages meet at the trim: the facing page covers this page's bleed on the spine side, which would be cut away. */
+  private spine(ctx: CanvasRenderingContext2D, m: DOMMatrix, f: { frame: Frame; dx: number }) {
+    const pic = this.facingPicture(f.frame);
+    const bleed = this.board.page?.bleed || 0;
+    if (!pic || !bleed) return;
+    const w = this.board.width, h = this.board.height;
+    const x = f.dx < 0 ? 0 : w - bleed;
+    ctx.save();
+    ctx.setTransform(m);
+    ctx.beginPath();
+    ctx.rect(x, 0, bleed, h);
+    ctx.clip();
+    ctx.drawImage(pic, f.dx, 0, w, h);
+    ctx.restore();
   }
 
   private clipToCanvas(c: CanvasRenderingContext2D) {
@@ -545,7 +656,8 @@ export class Editor extends Events {
       ctx.lineWidth = px;
       ctx.strokeStyle = "rgba(0,0,0,.35)";
       ctx.strokeRect(0, 0, b.width, b.height);
-      this.guides(ctx, { x: 0, y: 0, w: b.width, h: b.height }, px);
+      if (isPageKind(b.kind)) this.pageGuides(ctx, px);
+      this.guides(ctx, isPageKind(b.kind) ? trimRect(b) : { x: 0, y: 0, w: b.width, h: b.height }, px);
     } else if (b.guides.thirds || b.guides.center || b.guides.safe || b.guides.grid) {
       // Infinite canvas: guides frame the starting size, centred on the origin area.
       ctx.lineWidth = px;
@@ -568,6 +680,48 @@ export class Editor extends Events {
     }
     if (this.floating) this.handles(ctx, this.floating.t, this.floating.canvas.width, this.floating.canvas.height, px);
     this.tool?.overlay?.(ctx);
+  }
+
+  /** Trim, inner frame, the facing page's edge and (webtoon) the upload slices. */
+  private pageGuides(ctx: CanvasRenderingContext2D, px: number) {
+    const b = this.board, p = b.page!;
+    ctx.save();
+    ctx.lineWidth = px;
+    if (p.bleed) {
+      const t = trimRect(b);
+      ctx.strokeStyle = "rgba(0,0,0,.55)";
+      ctx.strokeRect(t.x, t.y, t.w, t.h);
+    }
+    if (b.kind !== "webtoon" && p.inner.w) {
+      ctx.setLineDash([6 * px, 4 * px]);
+      ctx.strokeStyle = "rgba(47,128,237,.7)";
+      ctx.strokeRect(p.inner.x, p.inner.y, p.inner.w, p.inner.h);
+      ctx.setLineDash([]);
+    }
+    const f = this.facing();
+    if (f) {
+      const t = trimRect(b);
+      ctx.strokeStyle = "rgba(0,0,0,.35)";
+      ctx.strokeRect(t.x + f.dx, t.y, t.w, t.h);
+    }
+    if (b.kind === "webtoon" && p.slice) {
+      // Where the platform cuts the strip: keep faces and balloons off these lines.
+      ctx.setLineDash([10 * px, 6 * px]);
+      ctx.strokeStyle = "rgba(220,90,40,.55)";
+      ctx.font = `${11 * px}px system-ui, sans-serif`;
+      ctx.fillStyle = "rgba(220,90,40,.8)";
+      for (let y = p.slice, n = 1; y < b.height; y += p.slice, n++) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(b.width, y);
+        ctx.stroke();
+        ctx.fillText(String(n + 1), b.width + 6 * px, y + 12 * px);
+      }
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(47,128,237,.4)";
+      ctx.strokeRect(p.inner.x, 0, p.inner.w, b.height);
+    }
+    ctx.restore();
   }
 
   /** Thirds, centre, safe areas and the drawing grid over a rectangle. */
@@ -855,7 +1009,7 @@ export class Editor extends Events {
   async newFrame(after = true) {
     let created: Frame | null = null;
     this.mutate("New frame", (b) => {
-      created = addFrame(b, this.frameIndex + (after ? 1 : 0));
+      created = addPage(b, this.frameIndex + (after ? 1 : 0));
     });
     await this.setFrame(created!);
     this.trigger("board");

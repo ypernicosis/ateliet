@@ -6,7 +6,8 @@
 import { BoardOptionsModal } from "./dialogs.ts";
 import { LIST_VIEW, StoryboardEmbed, StoryboardListView, confirmDelete } from "./list.ts";
 import { STORYBOARD_VIEW, StoryboardView } from "./view.ts";
-import { newBoard, PAPER } from "./model.ts";
+import { BoardKind, PAPER } from "./model.ts";
+import { boardForKind } from "./kinds.ts";
 import { StoryDoc } from "./store.ts";
 import { boardFromClip, importSummary, readClip } from "./clipfile.ts";
 import { FileModal } from "./references.ts";
@@ -22,7 +23,7 @@ const SETTINGS_FILE = "ateliet/storyboard.json";
 export class StoryboardPlugin {
   app: any;
   description = "";
-  settings = { folder: "Storyboards", fps: 24, width: 1920, height: 1080, infinite: false, background: PAPER };
+  settings = { folder: "Storyboards", fps: 24, width: 1920, height: 1080, infinite: false, background: PAPER, kind: "animatic" as BoardKind };
   private registered = false;
   private ribbonEl: HTMLElement | null = null;
   private off: (() => void)[] = [];
@@ -141,15 +142,16 @@ export class StoryboardPlugin {
 
   async create(opts: { folder?: string } = {}): Promise<TFile | null> {
     const s = this.settings;
-    const modal = new BoardOptionsModal(this.app, { name: "Storyboard", folder: opts.folder ?? s.folder, width: s.width, height: s.height, infinite: s.infinite, background: s.background, fps: s.fps }, "new");
+    const modal = new BoardOptionsModal(this.app, { kind: s.kind, name: "Storyboard", folder: opts.folder ?? s.folder, ...(s.kind === "animatic" || s.kind === "presentation" ? { width: s.width, height: s.height, infinite: s.infinite, background: s.background, fps: s.fps } : {}) }, "new");
     modal.open();
     const o = await modal.result;
     if (!o) return null;
-    Object.assign(this.settings, { folder: o.folder, width: o.width, height: o.height, infinite: o.infinite, background: o.background, fps: o.fps });
+    Object.assign(this.settings, { kind: o.kind, folder: o.folder });
+    if (o.kind === "animatic" || o.kind === "presentation") Object.assign(this.settings, { width: o.width, height: o.height, infinite: o.infinite, background: o.background, fps: o.fps });
     await this.saveSettings();
     await this.ensureFolder(o.folder);
     const path = this.uniquePath(o.folder, o.name);
-    const doc = StoryDoc.create(this.app.vault.adapter.getFullPath(path), newBoard(o));
+    const doc = StoryDoc.create(this.app.vault.adapter.getFullPath(path), boardForKind(o));
     const file = await this.write(path, doc);
     await this.open(file, true);
     return file;

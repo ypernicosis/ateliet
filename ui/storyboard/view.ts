@@ -12,18 +12,23 @@ import { ColorPanel } from "./color.ts";
 import { LayersPanel } from "./layers.ts";
 import { ReferencePanel } from "./references.ts";
 import { Timeline } from "./timeline.ts";
-import { BrushTool, EyedropperTool, FillTool, HandTool, LassoFillTool, MoveTool, SelectTool, ShapeTool, TOOL_INFO, ToolSettings, defaultToolSettings, fitTransform } from "./tools.ts";
+import { BrushTool, EyedropperTool, FillTool, HandTool, LassoFillTool, MoveTool, SelectTool, ShapeTool, TOOL_INFO, ToolSettings, defaultToolSettings, fitTransform, toolsFor } from "./tools.ts";
+import { BalloonTool, PanelTool } from "./pagetools.ts";
+import { BALLOON_KINDS, LAYOUTS, layoutPanels, readingOrder, rectPanel } from "./pages.ts";
+import { THUMB_ASPECTS, kindInfo, startPanels } from "./kinds.ts";
+import { isPageKind } from "./model.ts";
 import { Layer, Reference, TraceMode, addFrame, newLayer, uid } from "./model.ts";
 import { cloneBoard } from "./history.ts";
 import { StoryDoc } from "./store.ts";
 import { TRACE_MODES, defaultTrace } from "./trace.ts";
 import { addClipLayers, importSummary, readClip } from "./clipfile.ts";
-import { animatedPng, canRecordVideo, canvasPng, exportFrames, exportToPictogrep, recordVideo, saveContactSheet, writeVault } from "./export.ts";
+import { animatedPng, boardPdf, canRecordVideo, canvasPng, exportFrames, exportToPictogrep, pagesPdf, recordVideo, saveContactSheet, webtoonSlices, writeVault } from "./export.ts";
 import { FileView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
 import { TFile } from "../obsidian/vault.ts";
-import { fileUrl, invoke } from "../tauri.ts";
+import { currentWindow, fileUrl, invoke } from "../tauri.ts";
+import { closePopover } from "./popover.ts";
 
 export const STORYBOARD_VIEW = "storyboard";
 const TOOLS_KEY = "ateliet-storyboard-tools";
@@ -32,7 +37,7 @@ function loadToolSettings(): ToolSettings {
   const d = defaultToolSettings();
   try {
     const raw = JSON.parse(localStorage.getItem(TOOLS_KEY) || "{}");
-    return { ...d, ...raw, brushes: { ...d.brushes, ...(raw.brushes || {}) }, fill: { ...d.fill, ...(raw.fill || {}) }, shape: { ...d.shape, ...(raw.shape || {}) }, select: { ...d.select, ...(raw.select || {}) }, lasso: { ...d.lasso, ...(raw.lasso || {}) } };
+    return { ...d, ...raw, brushes: { ...d.brushes, ...(raw.brushes || {}) }, fill: { ...d.fill, ...(raw.fill || {}) }, shape: { ...d.shape, ...(raw.shape || {}) }, select: { ...d.select, ...(raw.select || {}) }, lasso: { ...d.lasso, ...(raw.lasso || {}) }, balloon: { ...d.balloon, ...(raw.balloon || {}) } };
   } catch {
     return d;
   }
@@ -64,6 +69,11 @@ export class StoryboardView extends FileView {
   private activePointer: number | null = null;
   private clipboard: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
   private lastTraceMode: TraceMode = "photo";
+  private focus: { parent: HTMLElement; next: Node | null; osFullscreen: boolean } | null = null;
+  private focusBar!: HTMLElement;
+  private focusBtn!: HTMLElement;
+  private onionBtn!: HTMLElement;
+  private side!: HTMLElement;
 
   getViewType() {
     return STORYBOARD_VIEW;
@@ -112,6 +122,7 @@ export class StoryboardView extends FileView {
   private async close() {
     const ed = this.ed;
     if (!ed) return;
+    if (this.focus) await this.setFocus(false);
     ed.commitFloating();
     await ed.save();
     this.refs?.destroy();
@@ -125,18 +136,21 @@ export class StoryboardView extends FileView {
   // ── building the view ───────────────────────────────────────────────────
 
   private build(doc: StoryDoc) {
-    const root = (this.root = this.contentEl.createDiv("sb-root"));
+    const root = (this.root = this.contentEl.createDiv({ cls: "sb-root", attr: { "data-tauri-drag-region": "" } }));
     const bar = root.createDiv("sb-toolbar");
     const main = root.createDiv("sb-main");
     this.toolsEl = main.createDiv("sb-tools");
     const center = main.createDiv("sb-center");
     this.stage = center.createDiv({ cls: "sb-stage", attr: { tabindex: "0" } });
     const handle = main.createDiv({ cls: "sb-side-handle", attr: { "aria-label": "Drag to resize" } });
-    const side = main.createDiv("sb-side");
+    const side = (this.side = main.createDiv("sb-side"));
     this.dragWidth(handle, side);
+    this.focusBar = center.createDiv("sb-focusbar");
     const ed = (this.ed = new Editor(doc, this.stage));
     ed.app = this.app;
 
+    // Manga balloons read vertically by default; comics and the rest horizontally.
+    this.settings.balloon.vertical = doc.board.kind === "name";
     this.buildToolbar(bar);
     this.buildTools();
     const host = { trace: (r: Reference) => this.trace(r), place: (r: Reference) => this.layers?.placePicture(r.id) };
@@ -160,6 +174,16 @@ export class StoryboardView extends FileView {
     ed.on("board", () => this.updateTraceButton());
     ed.on("frame", () => this.updateTraceButton());
     ed.on("selection", () => this.renderOptions());
+    ed.on("panel", () => this.renderOptions());
+    ed.on("balloon", () => this.renderOptions());
+    ed.on("onion", () => this.updateOnion());
+    ed.on("board", () => this.updateOnion());
+    ed.on("frame", () => this.renderFocusBar());
+    ed.on("history", () => this.renderFocusBar());
+    // Another tab coming forward leaves focus mode (it covers the whole window).
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf: any) => {
+      if (this.focus && leaf && leaf !== this.leaf) this.setFocus(false);
+    }));
 
     this.bindStage();
     this.setTool(this.toolId);
@@ -184,12 +208,20 @@ export class StoryboardView extends FileView {
     handle.addEventListener("pointerdown", (e) => {
       try { handle.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
       const x0 = e.clientX, w0 = side.getBoundingClientRect().width;
-      const move = (ev: PointerEvent) => (side.style.width = `${Math.max(200, Math.min(900, w0 - (ev.clientX - x0)))}px`);
+      // In focus mode the reference can sit on either side and is sized in percent.
+      const dir = this.focus && this.root.hasClass("ref-left") ? 1 : -1;
+      const total = side.parentElement!.getBoundingClientRect().width;
+      const move = (ev: PointerEvent) => {
+        const w = w0 + dir * (ev.clientX - x0);
+        if (this.focus) side.style.width = `${Math.max(15, Math.min(80, (w / total) * 100))}%`;
+        else side.style.width = `${Math.max(200, Math.min(900, w))}px`;
+      };
       const up = () => {
         handle.removeEventListener("pointermove", move);
         handle.removeEventListener("pointerup", up);
         try {
-          localStorage.setItem("ateliet-storyboard-side", String(Math.round(side.getBoundingClientRect().width)));
+          if (this.focus) localStorage.setItem("ateliet-storyboard-focus-ref", side.style.width);
+          else localStorage.setItem("ateliet-storyboard-side", String(Math.round(side.getBoundingClientRect().width)));
         } catch {
           /* private mode */
         }
@@ -240,11 +272,17 @@ export class StoryboardView extends FileView {
     this.button(bar, "grid-3x3", "Guides and grid", (e) => this.guidesMenu(e));
     bar.createDiv("sb-sep");
     this.traceBtn = this.button(bar, "scan-line", "Trace (T shows/hides · hold Q to peek · Shift+T display)", (e) => this.traceMenu(e));
+    if (!isPageKind(ed.board.kind)) {
+      this.onionBtn = this.button(bar, "layers-3", "Onion skin (O): the frames before and after, faint", () => this.timeline?.toggleOnion());
+      const onionMore = this.button(bar, "chevron-down", "Onion skin settings", () => this.timeline?.onionPanel(onionMore));
+      onionMore.addClass("sb-caret");
+    }
     bar.createDiv("sb-sep");
+    this.focusBtn = this.button(bar, "focus", "Focus (Tab): only the drawing and the reference", () => this.setFocus(!this.focus));
     this.button(bar, "import", "Import (Clip Studio, pictures, Pictogrep drawings)", (e) => this.importMenu(e));
     this.button(bar, "share", "Export (PNG frames, contact sheet, Pictogrep, video)", (e) => this.exportMenu(e));
     this.button(bar, "settings", "Storyboard settings (size, infinite canvas, paper, fps)", () => this.editSettings());
-    this.button(bar, "panel-right", "Show or hide references and layers (Tab) · timeline (Shift+Tab)", () => this.root.toggleClass("hide-side", !this.root.hasClass("hide-side")));
+    this.button(bar, "panel-right", "Show or hide references and layers · timeline: Shift+Tab", () => this.root.toggleClass("hide-side", !this.root.hasClass("hide-side")));
     this.statusEl = bar.createDiv("sb-status");
   }
 
@@ -259,8 +297,10 @@ export class StoryboardView extends FileView {
     this.tools.set("move", new MoveTool(ed));
     this.tools.set("eyedropper", new EyedropperTool(ed));
     this.tools.set("hand", new HandTool(ed));
+    this.tools.set("panel", new PanelTool(ed));
+    this.tools.set("balloon", new BalloonTool(ed, s));
     this.toolsEl.empty();
-    for (const t of TOOL_INFO) {
+    for (const t of toolsFor(ed.board.kind)) {
       const b = this.toolsEl.createDiv({ cls: "sb-tool clickable-icon", attr: { "aria-label": `${t.name} (${t.key})`, "data-tool": t.id, "data-tooltip-position": "right" } });
       setIcon(b, t.icon);
       b.addEventListener("click", () => this.setTool(t.id));
@@ -292,6 +332,114 @@ export class StoryboardView extends FileView {
     setIcon(close, "x");
     close.addEventListener("click", () => this.toggleColor());
     this.colorPop = { el, panel };
+  }
+
+  // ── focus mode ──────────────────────────────────────────────────────────
+  //
+  // Only the drawing and the reference, side by side, over the whole window:
+  // Ateliet's tabs and sidebars, the toolbar, the timeline and the layers go
+  // away; the slim tool column and a small floating bar stay. Tab or Esc
+  // come back. The reference can sit left or right and the divider moves.
+
+  get inFocus() {
+    return !!this.focus;
+  }
+
+  async setFocus(on: boolean) {
+    if (on === !!this.focus || !this.ed) return;
+    closePopover();
+    if (on) {
+      this.focus = { parent: this.root.parentElement!, next: this.root.nextSibling, osFullscreen: false };
+      document.body.appendChild(this.root);
+      this.root.addClass("sb-focus");
+      let left = false, width = "42%";
+      try {
+        left = localStorage.getItem("ateliet-storyboard-focus-left") === "1";
+        width = localStorage.getItem("ateliet-storyboard-focus-ref") || width;
+      } catch {
+        /* private mode */
+      }
+      this.root.toggleClass("ref-left", left);
+      this.side.style.width = width;
+    } else {
+      const f = this.focus!;
+      this.focus = null;
+      if (f.osFullscreen) await currentWindow().setFullscreen(false).catch(() => {});
+      this.root.removeClass("sb-focus", "ref-left");
+      if (f.parent.isConnected) f.parent.insertBefore(this.root, f.next && f.next.parentNode === f.parent ? f.next : null);
+      else this.contentEl.appendChild(this.root);
+      let w = 0;
+      try {
+        w = Number(localStorage.getItem("ateliet-storyboard-side") || 0);
+      } catch {
+        /* private mode */
+      }
+      this.side.style.width = w ? `${w}px` : "";
+    }
+    this.focusBtn?.toggleClass("is-active", !!this.focus);
+    this.renderFocusBar();
+    this.stage.focus({ preventScroll: true });
+  }
+
+  private async toggleOsFullscreen() {
+    if (!this.focus) return;
+    const win = currentWindow();
+    const now = await win.isFullscreen().catch(() => false);
+    await win.setFullscreen(!now).catch(() => {});
+    this.focus.osFullscreen = !now;
+    this.renderFocusBar();
+  }
+
+  private renderFocusBar() {
+    const bar = this.focusBar;
+    if (!bar || !this.ed) return;
+    bar.empty();
+    if (!this.focus) return;
+    const ed = this.ed;
+    const b = (icon: string, label: string, fn: () => void, active = false, disabled = false) => {
+      const x = bar.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
+      setIcon(x, icon);
+      x.toggleClass("is-active", active);
+      x.toggleClass("mod-disabled", disabled);
+      x.addEventListener("click", () => !disabled && fn());
+      return x;
+    };
+    b("minimize-2", "Leave focus (Tab or Esc)", () => this.setFocus(false));
+    bar.createDiv("sb-sep");
+    b("undo-2", "Undo (Ctrl/Cmd+Z)", () => ed.undo(), false, !ed.history.canUndo);
+    b("redo-2", "Redo", () => ed.redo(), false, !ed.history.canRedo);
+    const brush = this.settings.brushes[this.toolId as BrushKind];
+    if (brush) {
+      bar.createDiv("sb-sep");
+      this.slider(bar, "", 0.5, 500, brush.size, (v) => (v < 10 ? v.toFixed(1) : String(Math.round(v))), (v) => (brush.size = v), true);
+    }
+    bar.createDiv("sb-sep");
+    const traces = ed.layers.filter((l) => l.kind === "trace");
+    b("scan-line", "Trace (T)", () => this.toggleTrace(), traces.some((l) => l.visible));
+    if (!isPageKind(ed.board.kind)) b("layers-3", "Onion skin (O)", () => this.timeline?.toggleOnion(), ed.board.onion.enabled);
+    b("flip-horizontal-2", "Mirror the view (F)", () => ed.setMirror(!ed.view.mirror), ed.view.mirror);
+    bar.createDiv("sb-sep");
+    b("chevron-left", "Previous frame (↑ or ,)", () => this.timeline?.go(ed.frameIndex - 1), false, ed.frameIndex === 0);
+    bar.createDiv({ cls: "sb-focus-frame", text: `${ed.frameIndex + 1} / ${ed.board.frames.length}` });
+    b("chevron-right", "Next frame (↓ or .)", () => this.timeline?.go(ed.frameIndex + 1), false, ed.frameIndex >= ed.board.frames.length - 1);
+    b("plus", "New frame (Ctrl/Cmd+Enter)", () => ed.newFrame());
+    bar.createDiv("sb-sep");
+    b("arrow-left-right", "Reference on the other side", () => {
+      const left = !this.root.hasClass("ref-left");
+      this.root.toggleClass("ref-left", left);
+      try {
+        localStorage.setItem("ateliet-storyboard-focus-left", left ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+    });
+    b(this.focus.osFullscreen ? "shrink" : "expand", this.focus.osFullscreen ? "Leave full screen" : "Full screen", () => this.toggleOsFullscreen(), this.focus.osFullscreen);
+  }
+
+  private updateOnion() {
+    if (!this.ed || !this.onionBtn) return;
+    this.onionBtn.toggleClass("is-active", this.ed.board.onion.enabled);
+    this.renderFocusBar();
   }
 
   private setStatus(s: string) {
@@ -328,6 +476,7 @@ export class StoryboardView extends FileView {
     this.stage.style.cursor = t.cursor || "";
     this.toolsEl.querySelectorAll(".sb-tool").forEach((b: any) => b.toggleClass("is-active", b.dataset.tool === id));
     this.renderOptions();
+    this.renderFocusBar();
     ed.drawOverlay();
   }
 
@@ -433,7 +582,238 @@ export class StoryboardView extends FileView {
       el.createSpan({ cls: "sb-hint", text: "Click the canvas or a reference · Alt+click does this with any brush" });
     } else if (id === "hand") {
       el.createSpan({ cls: "sb-hint", text: "Drag to move around · Space does this with any tool · wheel zooms" });
+    } else if (id === "panel") {
+      this.panelOptions(el);
+    } else if (id === "balloon") {
+      this.balloonOptions(el);
     }
+  }
+
+  /** Changes the page setup (one undo step). */
+  private setPage(label: string, fn: (p: NonNullable<import("./model.ts").Board["page"]>) => void) {
+    const ed = this.ed!;
+    if (!ed.board.page) return;
+    ed.mutate(label, (b) => fn(b.page!));
+  }
+
+  private panelOptions(el: HTMLElement) {
+    const ed = this.ed!;
+    const b = ed.board, page = b.page!;
+    const mt = this.tools.get("panel") as PanelTool;
+    if (b.kind === "name" || b.kind === "comic") {
+      const sel = el.createEl("select", { cls: "dropdown sb-opt-select", attr: { "aria-label": "Page layout" } });
+      sel.createEl("option", { value: "", text: "Lay out this page…" });
+      for (const l of LAYOUTS) sel.createEl("option", { value: l.id, text: l.name });
+      sel.addEventListener("change", () => {
+        const spec = LAYOUTS.find((l) => l.id === sel.value);
+        if (!spec) return;
+        ed.mutate(`Layout: ${spec.name}`, () => (ed.frame.panels = spec.id === "one" ? [rectPanel(page.inner)] : layoutPanels(page.inner, spec.rows, page.gutterX, page.gutterY, page.rtl)));
+        mt.selected = null;
+        sel.value = "";
+      });
+    }
+    if (b.kind === "thumbnails") {
+      const sel = el.createEl("select", { cls: "dropdown sb-opt-select", attr: { "aria-label": "Cell shape" } });
+      sel.createEl("option", { value: "", text: "New grid on this sheet…" });
+      for (const [v, n] of THUMB_ASPECTS) sel.createEl("option", { value: v, text: n });
+      sel.addEventListener("change", () => {
+        const a = THUMB_ASPECTS.find((x) => x[0] === sel.value);
+        if (!a) return;
+        ed.mutate("New thumbnail grid", (bd) => {
+          bd.thumbAspect = a[2];
+          ed.frame.panels = startPanels(bd, undefined, a[2]);
+        });
+        sel.value = "";
+      });
+    }
+    if (b.kind === "webtoon") {
+      this.button(el, "square-plus", "Add a panel below the last one", () => this.webtoonPanel());
+      this.button(el, "move-vertical", `Make the strip longer (+${page.slice} px)`, () => ed.mutate("Longer strip", (bd) => (bd.height += page.slice)));
+      this.button(el, "smartphone", "Read it on a phone-sized screen", () => this.phonePreview());
+    }
+    this.slider(el, b.kind === "webtoon" ? "Gap" : "Gutters", 0, b.kind === "webtoon" ? 1200 : 120, b.kind === "webtoon" ? page.gutterY : page.gutterX, (v) => `${Math.round(v)}`, (v) => {
+      if (b.kind === "webtoon") page.gutterY = Math.round(v);
+      else {
+        const ratio = page.gutterX ? page.gutterY / page.gutterX : 2;
+        page.gutterX = Math.round(v);
+        page.gutterY = Math.round(v * ratio);
+      }
+      ed.changed();
+    });
+    this.slider(el, "Border", 0, 16, page.border, (v) => v.toFixed(1), (v) => {
+      page.border = v;
+      ed.changed();
+    });
+    this.check(el, "Strokes stay in their panel", page.clipToPanel, (v) => this.setPage("Strokes in panels", (p) => (p.clipToPanel = v)), "A stroke that starts in a panel cannot leave it (like drawing in a frame)");
+    this.check(el, "Paper outside panels", page.mask, (v) => this.setPage("Paper outside panels", (p) => (p.mask = v)), "Hide what is drawn in the gutters and margins");
+    if (mt.selected) {
+      this.button(el, "zoom-in", "Zoom to the panel (double click)", () => {
+        const pn = ed.frame.panels?.find((x) => x.id === mt.selected);
+        if (pn) mt.zoomTo(pn);
+      });
+      if (b.kind === "thumbnails") this.button(el, "star", "Star this panel as a keeper (*)", () => mt.toggleStar());
+      this.button(el, "trash-2", "Delete the panel (Delete)", () => mt.deleteSelected());
+    }
+    if (b.kind === "thumbnails") this.button(el, "send", "Send the panels to an animatic…", () => this.sendToAnimatic());
+    el.createSpan({ cls: "sb-hint", text: b.kind === "webtoon" ? "Drag in empty space for a panel · drag across one to cut it" : "Drag across a panel to cut it (Shift: straight) · drag in empty space for a new one · click, then drag to move" });
+  }
+
+  private balloonOptions(el: HTMLElement) {
+    const bs = this.settings.balloon;
+    const bt = this.tools.get("balloon") as BalloonTool;
+    this.segmented(el, BALLOON_KINDS.map(([k, icon, name]) => [k, icon, name] as [any, string, string]), bs.kind, (v) => {
+      bs.kind = v;
+      bt.applyToSelected({ kind: v });
+    });
+    this.check(el, "Vertical text", bs.vertical, (v) => {
+      bs.vertical = v;
+      bt.applyToSelected({ vertical: v });
+    }, "Japanese style: columns read top to bottom, right to left");
+    this.slider(el, "Text", 8, 140, bs.size, (v) => String(Math.round(v)), (v) => (bs.size = Math.round(v)));
+    const sizeInput = el.lastElementChild?.querySelector("input");
+    sizeInput?.addEventListener("change", () => bt.applyToSelected({ size: bs.size }));
+    el.createSpan({ cls: "sb-hint", text: "Drag or click to place · type · drag the round handle to aim the tail · double click to edit" });
+  }
+
+  /** Webtoon: a full-width panel under the last one (the strip grows when needed). */
+  private webtoonPanel() {
+    const ed = this.ed!;
+    const page = ed.board.page!;
+    const panels = ed.frame.panels || [];
+    const bottom = panels.reduce((m, p) => Math.max(m, ...p.points.map((q) => q.y)), 0);
+    const y = panels.length ? bottom + page.gutterY : 200;
+    const h = Math.round(page.inner.w * 1.1);
+    ed.mutate("Add panel", (b) => {
+      while (y + h + 200 > b.height) b.height += page.slice;
+      (ed.frame.panels ||= []).push(rectPanel({ x: page.inner.x, y, w: page.inner.w, h }));
+    });
+    ed.centerOn(ed.board.width / 2, y + h / 2);
+  }
+
+  /** Webtoon: the strip at phone width, scrolled like a reader would. */
+  private async phonePreview() {
+    const ed = this.ed!;
+    const m = new Modal(this.app);
+    m.setTitle("Phone preview");
+    m.modalEl.addClass("sb-phone-modal");
+    const phone = m.contentEl.createDiv("sb-phone");
+    const screen = phone.createDiv("sb-phone-screen");
+    screen.createDiv({ cls: "sb-hint", text: "Rendering…" });
+    m.open();
+    const pics: HTMLCanvasElement[] = [];
+    for (const f of ed.board.frames) pics.push(await ed.comp.picture(f, Math.min(1, 780 / ed.board.width), { exporting: true }));
+    screen.empty();
+    for (const p of pics) {
+      p.addClass("sb-phone-part");
+      screen.appendChild(p);
+    }
+  }
+
+  /** Thumbnails → animatic: each panel (starred ones, or all) becomes a frame to draw over. */
+  async sendToAnimatic() {
+    const ed = this.ed!;
+    const b = ed.board;
+    const all: { frame: import("./model.ts").Frame; panel: import("./model.ts").Panel }[] = [];
+    for (const f of b.frames) for (const pn of readingOrder(f.panels || [], false)) all.push({ frame: f, panel: pn });
+    if (!all.length) return new Notice("These sheets have no panels.");
+    const starred = all.filter((x) => x.panel.star);
+    const targets: TFile[] = this.app.vault.getFiles().filter((f: TFile) => f.extension === "storyboard" && f !== this.file);
+    const o = { which: starred.length ? "starred" : "all", target: "" };
+    const modal = new Modal(this.app);
+    modal.setTitle("Send panels to an animatic");
+    new Setting(modal.contentEl).setName("Panels").addDropdown((d) => {
+      if (starred.length) d.addOption("starred", `Starred (${starred.length})`);
+      d.addOption("all", `All (${all.length})`);
+      d.setValue(o.which).onChange((v) => (o.which = v));
+    });
+    new Setting(modal.contentEl).setName("Into").setDesc("Each panel becomes a frame: the thumbnail on a faint layer, and an empty layer above to draw the clean version.").addDropdown((d) => {
+      d.addOption("", "A new animatic");
+      for (const f of targets) d.addOption(f.path, f.path.replace(/\.storyboard$/, ""));
+      d.onChange((v) => (o.target = v));
+    });
+    const buttons = modal.modalEl.createDiv("modal-button-container");
+    const go = buttons.createEl("button", { text: "Send", cls: "mod-cta" });
+    go.addEventListener("click", async () => {
+      modal.close();
+      const list = o.which === "starred" ? starred : all;
+      const notice = new Notice(`Sending ${list.length} panels…`, 0);
+      try {
+        await this.panelsToAnimatic(list, o.target);
+        notice.hide();
+      } catch (e) {
+        notice.hide();
+        new Notice(`Could not send the panels: ${e}`);
+      }
+    });
+    modal.open();
+  }
+
+  private async panelsToAnimatic(list: { frame: import("./model.ts").Frame; panel: import("./model.ts").Panel }[], target: string) {
+    const ed = this.ed!;
+    const a = ed.board.thumbAspect || 16 / 9;
+    const size = a > 2 ? [2048, 858] : a > 1.5 ? [1920, 1080] : a > 1.2 ? [1440, 1080] : a > 0.9 ? [1080, 1080] : a > 0.65 ? [1240, 1754] : [1080, 1920];
+    // The target storyboard: a new file, or one opened in its own tab.
+    let file: TFile;
+    if (!target) {
+      const parent = this.file?.parent && !this.file.parent.isRoot() ? this.file.parent.path + "/" : "";
+      let path = `${parent}${this.baseName()} animatic.storyboard`;
+      for (let i = 2; this.app.vault.getAbstractFileByPath(path); i++) path = `${parent}${this.baseName()} animatic ${i}.storyboard`;
+      const { boardForKind, defaultKindOptions } = await import("./kinds.ts");
+      const board = boardForKind({ ...defaultKindOptions("animatic"), width: size[0], height: size[1] });
+      const doc = StoryDoc.create(this.app.vault.adapter.getFullPath(path), board);
+      const bytes = await doc.encode();
+      file = await this.app.vault.createBinary(path, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+    } else file = this.app.vault.getAbstractFileByPath(target);
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    const view = leaf.view as StoryboardView;
+    for (let i = 0; i < 60 && !view.ed?.frame; i++) await new Promise((r) => setTimeout(r, 100));
+    const ted = view.ed;
+    if (!ted) throw new Error("the animatic did not open");
+    const tb = ted.board;
+    const before = (await import("./history.ts")).cloneBoard(tb);
+    const fresh = !target;
+    for (const [n, it] of list.entries()) {
+      const r = (await import("./pages.ts")).bounds(it.panel.points);
+      const k = Math.min(tb.width / r.w, tb.height / r.h);
+      const pic = await ed.comp.picture(it.frame, k, { exporting: true, area: r, background: false });
+      // The first frame of a new animatic is reused.
+      const f = fresh && n === 0 ? tb.frames[0] : (await import("./kinds.ts")).addPage(tb, tb.frames.length);
+      const thumb = (await import("./model.ts")).newLayer("Thumbnail", "raster", { opacity: 0.45 });
+      tb.layers[thumb.id] = thumb;
+      f.layers.unshift(thumb.id);
+      f.name = `${ed.frameName(it.frame)} · ${n + 1}`;
+      const x = Math.round((tb.width - pic.width) / 2), y = Math.round((tb.height - pic.height) / 2);
+      ted.doc.tiles.paint(thumb.id, x, y, pic.width, pic.height, (ctx) => ctx.drawImage(pic, 0, 0));
+      ted.scheduleThumb(f);
+    }
+    ted.recordSince(`Panels from ${this.baseName()}`, before);
+    await ted.refreshFrame();
+    ted.fit();
+    new Notice(`${list.length} panels are now frames of "${file.basename}", ready to draw over.`);
+  }
+
+  private exportPages(kind: "pdf" | "png" | "slices") {
+    const ed = this.ed!;
+    const parent = this.file?.parent && !this.file.parent.isRoot() ? this.file.parent.path + "/" : "";
+    const n = new Notice("Exporting…", 0);
+    (async () => {
+      try {
+        if (kind === "pdf") {
+          const bytes = isPageKind(ed.board.kind) ? await pagesPdf(ed, (i, t) => n.setMessage(`Page ${i + 1}/${t}…`)) : await boardPdf(ed, 6, true, (i, t) => n.setMessage(`Page ${i + 1}/${t}…`));
+          const f = await writeVault(this.app, `${parent}${this.baseName()}.pdf`, bytes);
+          n.hide();
+          new Notice(`Saved ${f.path}.`);
+        } else if (kind === "slices") {
+          const count = await webtoonSlices(ed, `${parent}${this.baseName()} slices`, (s) => n.setMessage(s));
+          n.hide();
+          new Notice(`${count} slices saved in "${this.baseName()} slices".`);
+        }
+      } catch (err) {
+        n.hide();
+        new Notice(`Export failed: ${err}`);
+      }
+    })();
   }
 
   private selectAll() {
@@ -481,6 +861,18 @@ export class StoryboardView extends FileView {
         return;
       }
       if (e.button !== 0 && !(e.pointerType === "pen" && e.buttons)) return;
+      // A click on the facing page of a spread goes to that page.
+      const facing = ed.facing();
+      if (facing && !["hand", "eyedropper"].includes(this.toolId)) {
+        const q = ed.eventPoint(e);
+        const inCurrent = q.x >= 0 && q.x <= ed.board.width && q.y >= 0 && q.y <= ed.board.height;
+        const inFacing = q.x >= facing.dx && q.x <= facing.dx + ed.board.width && q.y >= 0 && q.y <= ed.board.height;
+        if (inFacing && !inCurrent) {
+          ed.switchToFacing();
+          e.preventDefault();
+          return;
+        }
+      }
       // A pen's eraser end erases.
       if (e.pointerType === "pen" && (e.buttons & 32)) this.useTemporary("eraser");
       else if (e.altKey && ["pencil", "pen", "brush", "marker", "fill", "shape"].includes(this.toolId)) {
@@ -489,6 +881,7 @@ export class StoryboardView extends FileView {
         return;
       }
       this.activePointer = e.pointerId;
+      this.root.addClass("is-drawing");
       try { st.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ }
       const p = ed.eventPoint(e);
       ed.pointer = p;
@@ -526,6 +919,7 @@ export class StoryboardView extends FileView {
       }
       if (this.activePointer !== e.pointerId) return;
       this.activePointer = null;
+      this.root.removeClass("is-drawing");
       if (e.type === "pointercancel") ed.tool?.cancel?.();
       else ed.tool?.up?.(e, ed.eventPoint(e));
       if (this.toolBeforeAlt) {
@@ -547,6 +941,11 @@ export class StoryboardView extends FileView {
       const px = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
       if (e.altKey) {
         ed.rotateTo(ed.view.rotation + (e.deltaY * px) / 600, e.clientX - r.left, e.clientY - r.top);
+        return;
+      }
+      // A webtoon strip scrolls like it is read; Ctrl zooms.
+      if (!e.ctrlKey && ed.board.kind === "webtoon") {
+        ed.panBy(-(e.shiftKey ? e.deltaY : e.deltaX) * px, e.shiftKey ? 0 : -e.deltaY * px);
         return;
       }
       if (!e.ctrlKey && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) {
@@ -607,13 +1006,15 @@ export class StoryboardView extends FileView {
     else if (k === "ArrowRight") this.refs?.step(1);
     else if (k === "ArrowUp" || k === ",") this.timeline?.go(ed.frameIndex - 1);
     else if (k === "ArrowDown" || k === ".") this.timeline?.go(ed.frameIndex + 1);
-    else if (k === "Tab") this.root.toggleClass(e.shiftKey ? "hide-timeline" : "hide-side", !this.root.hasClass(e.shiftKey ? "hide-timeline" : "hide-side"));
+    else if (k === "Tab" && e.shiftKey) this.root.toggleClass("hide-timeline", !this.root.hasClass("hide-timeline"));
+    else if (k === "Tab") this.setFocus(!this.focus);
     else if (k === "Home") this.timeline?.go(0);
     else if (k === "End") this.timeline?.go(ed.board.frames.length - 1);
     else if (k === "Enter") this.timeline?.toggle();
     else if (k === "Escape") {
       if (ed.floating) ed.cancelFloating();
       else if (ed.selection) ed.setSelection(null);
+      else if (this.focus) this.setFocus(false);
       else used = false;
     } else if (k === "Delete" || k === "Backspace") ed.clearSelection();
     else if (k === "[" || k === "]" || k === "{" || k === "}") this.adjustBrush(k);
@@ -623,7 +1024,7 @@ export class StoryboardView extends FileView {
       ed.secondary = "#ffffff";
       ed.trigger("color");
     } else if (lower === "f") ed.setMirror(!ed.view.mirror);
-    else if (lower === "o") this.timeline?.toggleOnion();
+    else if (lower === "o" && !isPageKind(ed.board.kind)) this.timeline?.toggleOnion();
     else if (lower === "t" && e.shiftKey) this.cycleTraceMode();
     else if (lower === "t") this.toggleTrace();
     else if (lower === "q") this.peek(true);
@@ -635,7 +1036,7 @@ export class StoryboardView extends FileView {
     else if (lower === "r") {
       /* held for rotating */
     } else {
-      const t = TOOL_INFO.find((x) => x.key.toLowerCase() === lower);
+      const t = toolsFor(ed.board.kind).find((x) => x.key.toLowerCase() === lower);
       if (t) this.setTool(t.id);
       else used = false;
     }
@@ -1027,7 +1428,10 @@ export class StoryboardView extends FileView {
   }
 
   private exportMenu(e: MouseEvent) {
+    const kind = this.ed!.board.kind;
+    if (isPageKind(kind)) return this.pageExportMenu(e);
     const m = new Menu();
+    m.addItem((i) => i.setTitle("Board pages to print or send (PDF, six shots per page)").setIcon("file-text").onClick(() => this.exportPages("pdf")));
     m.addItem((i) => i.setTitle("Frames as PNG pictures in the vault…").setIcon("images").onClick(() => this.exportPng()));
     m.addItem((i) => i.setTitle("Contact sheet (all frames with notes)…").setIcon("layout-grid").onClick(() => this.exportSheet()));
     m.addItem((i) => i.setTitle("Into Pictogrep's storyboards folder").setIcon("clapperboard").onClick(() => this.exportPictogrep()));
@@ -1036,6 +1440,24 @@ export class StoryboardView extends FileView {
     m.addSeparator();
     m.addItem((i) => i.setTitle("This frame as a picture in the vault").setIcon("image").onClick(() => this.exportCurrent()));
     m.addItem((i) => i.setTitle("Copy this frame").setIcon("copy").onClick(() => this.copyFrame()));
+    m.showAtMouseEvent(e);
+  }
+
+  private pageExportMenu(e: MouseEvent) {
+    const kind = this.ed!.board.kind;
+    const unit = kindInfo(kind).units;
+    const m = new Menu();
+    if (kind === "thumbnails") m.addItem((i) => i.setTitle("Send the panels to an animatic…").setIcon("send").onClick(() => this.sendToAnimatic()));
+    if (kind === "webtoon") {
+      m.addItem((i) => i.setTitle("Slices for upload (PNG, 1280 px high)").setIcon("scissors").onClick(() => this.exportPages("slices")));
+      m.addItem((i) => i.setTitle("Phone preview").setIcon("smartphone").onClick(() => this.phonePreview()));
+    }
+    m.addItem((i) => i.setTitle(`${unit[0].toUpperCase() + unit.slice(1)} as PDF (print size)`).setIcon("file-text").onClick(() => this.exportPages("pdf")));
+    m.addItem((i) => i.setTitle(`${unit[0].toUpperCase() + unit.slice(1)} as PNG pictures in the vault…`).setIcon("images").onClick(() => this.exportPng()));
+    m.addItem((i) => i.setTitle("Into Pictogrep's storyboards folder").setIcon("clapperboard").onClick(() => this.exportPictogrep()));
+    m.addSeparator();
+    m.addItem((i) => i.setTitle(`This ${kindInfo(kind).unit} as a picture in the vault`).setIcon("image").onClick(() => this.exportCurrent()));
+    m.addItem((i) => i.setTitle(`Copy this ${kindInfo(kind).unit}`).setIcon("copy").onClick(() => this.copyFrame()));
     m.showAtMouseEvent(e);
   }
 
@@ -1165,18 +1587,37 @@ export class StoryboardView extends FileView {
   private async editSettings() {
     const ed = this.ed!;
     const b = ed.board;
-    const modal = new BoardOptionsModal(this.app, { name: this.baseName(), width: b.width, height: b.height, infinite: b.infinite, background: b.background, fps: b.fps }, "edit");
+    const modal = new BoardOptionsModal(this.app, { kind: b.kind, name: this.baseName(), width: b.width, height: b.height, infinite: b.infinite, background: b.background, fps: b.fps, rtl: !!b.page?.rtl, spreads: !!b.page?.spreads }, "edit");
     modal.open();
     const res = await modal.result;
     if (!res) return;
-    const dw = res.width - b.width, dh = res.height - b.height;
-    const shift = b.infinite || res.infinite ? { x: 0, y: 0 } : res.anchor === "center" ? { x: Math.round(dw / 2), y: Math.round(dh / 2) } : res.anchor === "top" ? { x: Math.round(dw / 2), y: 0 } : res.anchor === "left" ? { x: 0, y: Math.round(dh / 2) } : { x: 0, y: 0 };
+    const kindChanged = res.kind !== b.kind;
+    const timed = res.kind === "animatic" || res.kind === "presentation";
+    const dw = timed ? res.width - b.width : 0, dh = timed ? res.height - b.height : 0;
+    const shift = !timed || b.infinite || res.infinite ? { x: 0, y: 0 } : res.anchor === "center" ? { x: Math.round(dw / 2), y: Math.round(dh / 2) } : res.anchor === "top" ? { x: Math.round(dw / 2), y: 0 } : res.anchor === "left" ? { x: 0, y: Math.round(dh / 2) } : { x: 0, y: 0 };
     ed.mutate("Storyboard settings", (bd) => {
-      bd.width = res.width;
-      bd.height = res.height;
-      bd.infinite = res.infinite;
+      bd.kind = res.kind;
       bd.background = res.background;
-      bd.fps = res.fps;
+      if (timed) {
+        bd.width = res.width;
+        bd.height = res.height;
+        bd.infinite = res.infinite;
+        bd.fps = res.fps;
+      } else {
+        bd.infinite = false;
+        // Becoming pages: a page setup from the current canvas.
+        if (!bd.page) {
+          const m = Math.round(Math.min(bd.width, bd.height) * 0.06);
+          bd.page = { dpi: 150, bleed: 0, inner: { x: m, y: m, w: bd.width - 2 * m, h: bd.height - 2 * m }, rtl: res.kind === "name", spreads: res.kind === "name" || res.kind === "comic", gutterX: 12, gutterY: 24, border: 4, mask: true, clipToPanel: true, slice: 1280 };
+        }
+        bd.page.rtl = res.rtl;
+        bd.page.spreads = res.spreads && res.kind !== "webtoon" && res.kind !== "thumbnails";
+        // Frames that become pages start as one panel over the inner frame (a webtoon starts empty).
+        for (const f of bd.frames) {
+          if (!f.panels?.length) f.panels = startPanels(bd);
+          f.balloons ||= [];
+        }
+      }
       if (shift.x || shift.y) {
         for (const l of Object.values(bd.layers)) {
           if (l.kind === "raster") {
@@ -1193,9 +1634,23 @@ export class StoryboardView extends FileView {
       const parent = this.file.parent && !this.file.parent.isRoot() ? this.file.parent.path + "/" : "";
       await this.app.fileManager.renameFile(this.file, `${parent}${res.name}.storyboard`).catch((e: any) => new Notice(String(e)));
     }
+    if (kindChanged) {
+      // Another kind brings another workspace (tools, timeline, exports).
+      await this.reload();
+      return;
+    }
     await ed.refreshFrame();
     ed.fit();
     ed.scheduleThumb();
+  }
+
+  /** Saves and builds the view again from the file. */
+  private async reload() {
+    if (!this.file) return;
+    await this.close();
+    this.contentEl.empty();
+    const doc = await StoryDoc.open(this.app.vault.adapter.getFullPath(this.file.path));
+    this.build(doc);
   }
 }
 

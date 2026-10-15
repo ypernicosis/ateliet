@@ -5,9 +5,10 @@
 // number of frames; for film, shots held for seconds. Same thing.
 
 import { Editor } from "./editor.ts";
-import { Frame, Layer, frameStarts, newLayer, timecode, totalFrames, uid } from "./model.ts";
+import { Frame, Layer, frameStarts, isPageKind, newLayer, timecode, totalFrames, uid, unitName } from "./model.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
+import { openPopover } from "./popover.ts";
 
 export const SHOTS = ["", "Extreme wide", "Wide", "Full", "Medium wide", "Medium", "Medium close-up", "Close-up", "Extreme close-up", "Over the shoulder", "Point of view", "Insert", "Two shot", "Establishing"];
 export const CAMERA = ["", "Static", "Pan left", "Pan right", "Tilt up", "Tilt down", "Dolly in", "Dolly out", "Truck left", "Truck right", "Crane up", "Crane down", "Zoom in", "Zoom out", "Handheld", "Tracking", "Whip pan", "Rack focus"];
@@ -33,8 +34,16 @@ export class Timeline {
   private version = 0;
   private off: (() => void)[] = [];
 
+  /** time: animatic; cards: presentation board; pages: the page kinds. */
+  get mode(): "time" | "cards" | "pages" {
+    const k = this.ed.board.kind;
+    return isPageKind(k) ? "pages" : k === "presentation" ? "cards" : "time";
+  }
+
   constructor(private app: any, private ed: Editor, parent: HTMLElement) {
     this.el = parent.createDiv("sb-timeline");
+    this.el.addClass(`mode-${isPageKind(ed.board.kind) ? "pages" : ed.board.kind === "presentation" ? "cards" : "time"}`);
+    this.el.toggleClass("is-webtoon", ed.board.kind === "webtoon");
     const bar = this.el.createDiv("sb-timeline-bar");
     const btn = (icon: string, label: string, fn: (e: MouseEvent) => void) => {
       const b = bar.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
@@ -63,10 +72,14 @@ export class Timeline {
     fps.addEventListener("change", () => this.ed.mutate("Frame rate", (b) => (b.fps = Number(fps.value))));
     bar.createDiv("sb-spacer");
     this.onionBtn = btn("layers-3", "Onion skin (O): see the frames before and after", () => this.toggleOnion());
-    btn("settings-2", "Onion skin settings", (e) => this.onionMenu(e));
+    const onionSettings = btn("chevron-down", "Onion skin settings: frames, opacity, colours", () => this.onionPanel(onionSettings));
+    onionSettings.addClass("sb-caret");
     btn("plus", "New frame (Ctrl/Cmd+Enter)", () => this.ed.newFrame());
     btn("copy-plus", "Duplicate frame", () => this.duplicate(this.ed.frame));
-    const zoom = bar.createEl("input", { type: "range", cls: "sb-timeline-zoom", attr: { min: "0", max: "100", value: "0", "aria-label": "Timeline zoom" } });
+    const zoom = bar.createEl("input", { type: "range", cls: "sb-timeline-zoom sb-time-only", attr: { min: "0", max: "100", value: "0", "aria-label": "Timeline zoom" } });
+    // Pages and cards have no clock.
+    for (const el of [this.playBtn, loopBtn, this.timeEl, fps]) el.addClass("sb-play-only");
+    for (const el of [this.onionBtn, onionSettings]) el.addClass("sb-time-only");
     zoom.addEventListener("input", () => {
       const v = Number(zoom.value);
       this.pxPerFrame = v === 0 ? 0 : 2 + (v / 100) ** 2 * 60;
@@ -127,6 +140,28 @@ export class Timeline {
     return u;
   }
 
+  private thumbQueue: Frame[] = [];
+  private thumbBusy = false;
+
+  /** Frames without a picture yet (a new board, imported pages) get one, one at a time. */
+  private queueThumb(f: Frame) {
+    if (!this.thumbQueue.includes(f)) this.thumbQueue.push(f);
+    if (this.thumbBusy) return;
+    this.thumbBusy = true;
+    const next = async () => {
+      const g = this.thumbQueue.shift();
+      if (!g || !this.el.isConnected) {
+        // Detached (a re-render or a closed view): what is left is asked for again on the next render.
+        this.thumbQueue.length = 0;
+        this.thumbBusy = false;
+        return;
+      }
+      if (!this.ed.doc.thumbs.has(g.id)) await this.ed.updateThumb(g);
+      setTimeout(next, 30);
+    };
+    setTimeout(next, 200);
+  }
+
   private scale(): number {
     const total = Math.max(1, totalFrames(this.ed.board));
     const fit = Math.max(2, (this.scroller.clientWidth - 24) / total);
@@ -137,23 +172,56 @@ export class Timeline {
     const b = this.ed.board;
     if (!this.ed.frame) return;
     const k = this.scale();
+    const mode = this.mode;
     const starts = frameStarts(b);
     const total = totalFrames(b);
-    const width = Math.max(this.scroller.clientWidth, total * k + 80);
+    // Cards and pages: one box each, in reading order (manga: right to left, spreads paired).
+    const trackH = Math.max(60, this.track.clientHeight || 110);
+    // A webtoon part is far taller than wide: its box shows the top of it.
+    const boxW = mode === "cards" ? 190 : b.kind === "webtoon" ? 120 : Math.max(46, Math.min(220, ((trackH - 22) * b.width) / b.height));
+    const pos: number[] = [];
+    let x = 4;
+    b.frames.forEach((_, i) => {
+      if (mode === "time") return;
+      const spreadGap = b.page?.spreads ? (i === 1 || (i > 1 && i % 2 === 1) ? 18 : 2) : 10;
+      if (i > 0) x += spreadGap;
+      pos.push(x);
+      x += boxW;
+    });
+    const contentW = mode === "time" ? total * k + 80 : x + 40;
+    const width = Math.max(this.scroller.clientWidth - 24, contentW);
+    const rtl = mode === "pages" && !!b.page?.rtl;
     this.track.style.width = `${width}px`;
     this.track.empty();
     b.frames.forEach((f, i) => {
       const clip = this.track.createDiv({ cls: "sb-clip", attr: { draggable: "true" } });
-      clip.style.left = `${starts[i] * k}px`;
-      clip.style.width = `${Math.max(8, f.duration * k - 2)}px`;
+      if (mode === "time") {
+        clip.style.left = `${starts[i] * k}px`;
+        clip.style.width = `${Math.max(8, f.duration * k - 2)}px`;
+      } else {
+        clip.style.left = `${rtl ? width - pos[i] - boxW : pos[i]}px`;
+        clip.style.width = `${boxW}px`;
+      }
       clip.toggleClass("is-active", f === this.ed.frame);
+      const cur = this.ed.frameIndex, on = b.onion;
+      if (on.enabled && ((i < cur && cur - i <= on.before) || (i > cur && i - cur <= on.after))) {
+        clip.addClass("in-onion");
+        clip.style.setProperty("--sb-onion", i < cur ? on.colorBefore : on.colorAfter);
+        clip.setAttr("aria-label", "Shown as onion skin");
+      }
       if (f.color) clip.style.setProperty("--sb-label", f.color);
       const url = this.thumb(f);
       if (url) clip.createEl("img", { attr: { src: url, draggable: "false" } });
+      else this.queueThumb(f);
       const info = clip.createDiv("sb-clip-info");
-      info.createSpan({ cls: "sb-clip-num", text: String(i + 1) });
+      info.createSpan({ cls: "sb-clip-num", text: mode === "pages" ? `${unitName(b).toLowerCase().slice(0, 1)}.${i + 1}` : String(i + 1) });
       if (f.name) info.createSpan({ cls: "sb-clip-name", text: f.name });
-      info.createSpan({ cls: "sb-clip-dur", text: `${(f.duration / b.fps).toFixed(f.duration % b.fps ? 2 : 0)}s` });
+      if (mode === "time") info.createSpan({ cls: "sb-clip-dur", text: `${(f.duration / b.fps).toFixed(f.duration % b.fps ? 2 : 0)}s` });
+      if (mode === "cards") {
+        const note = [f.notes.shot, f.notes.camera].filter(Boolean).join(" · ");
+        if (note) info.createSpan({ cls: "sb-clip-dur", text: note });
+        if (f.notes.action || f.notes.dialogue) clip.createDiv({ cls: "sb-clip-note", text: f.notes.action || `“${f.notes.dialogue}”` });
+      }
       clip.addEventListener("click", () => this.ed.setFrame(f));
       clip.addEventListener("dblclick", () => this.rename(f));
       clip.addEventListener("contextmenu", (e) => {
@@ -173,9 +241,11 @@ export class Timeline {
         this.move(id, f.id, e.clientX > r.left + r.width / 2);
       });
       // The right edge sets the duration.
-      const edge = clip.createDiv({ cls: "sb-clip-edge", attr: { "aria-label": "Drag to change how long the frame lasts" } });
-      edge.addEventListener("pointerdown", (e) => this.resize(e, f, edge));
-      edge.addEventListener("click", (e) => e.stopPropagation());
+      if (mode === "time") {
+        const edge = clip.createDiv({ cls: "sb-clip-edge", attr: { "aria-label": "Drag to change how long the frame lasts" } });
+        edge.addEventListener("pointerdown", (e) => this.resize(e, f, edge));
+        edge.addEventListener("click", (e) => e.stopPropagation());
+      }
     });
     this.drawRuler(width, k);
     this.placePlayhead();
@@ -320,29 +390,88 @@ export class Timeline {
   // ── onion skin ──────────────────────────────────────────────────────────
 
   toggleOnion() {
-    this.ed.board.onion.enabled = !this.ed.board.onion.enabled;
-    this.ed.changed();
-    this.ed.refreshFrame();
-  }
-
-  private onionMenu(e: MouseEvent) {
     const o = this.ed.board.onion;
-    const m = new Menu();
-    for (const n of [1, 2, 3]) m.addItem((i) => i.setTitle(`${n} before`).setChecked(o.before === n).onClick(() => this.setOnion({ before: n })));
-    m.addItem((i) => i.setTitle("None before").setChecked(o.before === 0).onClick(() => this.setOnion({ before: 0 })));
-    m.addSeparator();
-    for (const n of [1, 2, 3]) m.addItem((i) => i.setTitle(`${n} after`).setChecked(o.after === n).onClick(() => this.setOnion({ after: n })));
-    m.addItem((i) => i.setTitle("None after").setChecked(o.after === 0).onClick(() => this.setOnion({ after: 0 })));
-    m.addSeparator();
-    for (const v of [0.15, 0.3, 0.5]) m.addItem((i) => i.setTitle(`Opacity ${Math.round(v * 100)}%`).setChecked(Math.abs(o.opacity - v) < 0.01).onClick(() => this.setOnion({ opacity: v })));
-    m.addItem((i) => i.setTitle("Tint (earlier red, later green)").setChecked(o.tint).onClick(() => this.setOnion({ tint: !o.tint })));
-    m.showAtMouseEvent(e);
+    o.enabled = !o.enabled;
+    if (o.enabled && this.ed.board.frames.length < 2) new Notice("Onion skin shows the frames before and after this one, faintly. Add a frame (+ in the timeline, or Ctrl/Cmd+Enter) to draw over this one.", 7000);
+    this.afterOnion();
   }
 
-  private setOnion(p: Partial<typeof this.ed.board.onion>) {
-    Object.assign(this.ed.board.onion, p, { enabled: true });
+  private afterOnion() {
     this.ed.changed();
     this.ed.refreshFrame();
+    this.ed.trigger("onion");
+    this.render();
+  }
+
+  /** The onion skin settings, as a panel (sliders and colours, not a menu). */
+  onionPanel(anchor: HTMLElement) {
+    openPopover(anchor, (el) => {
+      const o = this.ed.board.onion;
+      el.addClass("sb-onion-panel");
+      const head = el.createDiv("sb-pop-head");
+      head.createSpan({ cls: "sb-pop-title", text: "Onion skin" });
+      const sw = head.createEl("label", { cls: "sb-switch", attr: { "aria-label": "On / off (O)" } });
+      const cb = sw.createEl("input", { type: "checkbox" });
+      cb.checked = o.enabled;
+      sw.createSpan("sb-switch-track");
+      cb.addEventListener("change", () => {
+        if (cb.checked !== o.enabled) this.toggleOnion();
+      });
+      el.createDiv({ cls: "sb-hint sb-pop-desc", text: "The frames around this one, faint, to draw the next pose or check motion." });
+      const slider = (label: string, min: number, max: number, step: number, value: number, fmt: (v: number) => string, set: (v: number) => void) => {
+        const row = el.createDiv("sb-pop-row");
+        row.createSpan({ cls: "sb-pop-label", text: label });
+        const input = row.createEl("input", { type: "range", attr: { min: String(min), max: String(max), step: String(step), value: String(value) } });
+        const out = row.createSpan({ cls: "sb-pop-value", text: fmt(value) });
+        input.addEventListener("input", () => {
+          const v = Number(input.value);
+          out.setText(fmt(v));
+          set(v);
+          o.enabled = true;
+          cb.checked = true;
+          this.ed.invalidate();
+        });
+        input.addEventListener("change", () => this.afterOnion());
+      };
+      const frames = (n: number) => (n === 0 ? "none" : `${n} ${n === 1 ? "frame" : "frames"}`);
+      slider("Before", 0, 5, 1, o.before, frames, (v) => (o.before = v));
+      slider("After", 0, 5, 1, o.after, frames, (v) => (o.after = v));
+      slider("Opacity", 5, 80, 1, Math.round(o.opacity * 100), (v) => `${v}%`, (v) => (o.opacity = v / 100));
+      const colors = el.createDiv("sb-pop-row");
+      colors.createSpan({ cls: "sb-pop-label", text: "Colours" });
+      const tint = colors.createEl("label", { cls: "sb-pop-check" });
+      const tcb = tint.createEl("input", { type: "checkbox" });
+      tcb.checked = o.tint;
+      tint.appendText("tint");
+      tcb.addEventListener("change", () => {
+        o.tint = tcb.checked;
+        this.afterOnion();
+      });
+      for (const [key, label] of [["colorBefore", "Before"], ["colorAfter", "After"]] as const) {
+        const c = colors.createEl("input", { type: "color", attr: { "aria-label": `${label} colour` } });
+        c.value = o[key];
+        c.addEventListener("input", () => {
+          o[key] = c.value;
+          o.tint = tcb.checked = true;
+          this.ed.invalidate();
+        });
+        c.addEventListener("change", () => this.afterOnion());
+      }
+      const checks = el.createDiv("sb-pop-checks");
+      const check = (label: string, value: boolean, set: (v: boolean) => void, title: string) => {
+        const lab = checks.createEl("label", { cls: "sb-pop-check", attr: { title } });
+        const c = lab.createEl("input", { type: "checkbox" });
+        c.checked = value;
+        lab.appendText(label);
+        c.addEventListener("change", () => {
+          set(c.checked);
+          this.afterOnion();
+        });
+      };
+      check("Farther frames fainter", o.fade !== false, (v) => (o.fade = v), "Each step away halves the opacity");
+      check("Include picture layers", !!o.pictures, (v) => (o.pictures = v), "Off: only what was drawn");
+      el.createDiv({ cls: "sb-hint sb-pop-desc", text: "Never exported. Layers shown in every frame are left out (they would only blur)." });
+    });
   }
 
   // ── editing frames ──────────────────────────────────────────────────────
@@ -488,6 +617,18 @@ export class Timeline {
     el.empty();
     const head = el.createDiv("sb-notes-head");
     head.createSpan({ cls: "sb-notes-title", text: ed.frameName(f) });
+    if (this.mode === "pages") {
+      // A page is written from the script: the excerpt it covers, next to it.
+      const n = (f.panels || []).length, bl = (f.balloons || []).length;
+      head.createSpan({ cls: "sb-notes-dur", text: `${n} ${n === 1 ? "panel" : "panels"} · ${bl} ${bl === 1 ? "balloon" : "balloons"}` });
+      const wrap = el.createDiv("sb-note sb-note-script");
+      wrap.createDiv({ cls: "sb-note-label", text: ed.board.kind === "thumbnails" ? "Notes" : `Script for this ${unitName(ed.board).toLowerCase()}` });
+      const t = wrap.createEl("textarea", { attr: { rows: "6", placeholder: ed.board.kind === "thumbnails" ? "What these thumbnails explore" : `Paste the part of the script this ${unitName(ed.board).toLowerCase()} covers; write its beats` } });
+      t.value = f.script || "";
+      t.addEventListener("keydown", (e) => e.stopPropagation());
+      t.addEventListener("change", () => ed.mutate("Page script", () => (f.script = t.value)));
+      return;
+    }
     head.createSpan({ cls: "sb-notes-dur", text: `${(f.duration / ed.board.fps).toFixed(2)} s · ${f.duration} frames` });
     const grid = el.createDiv("sb-notes-grid");
     const select = (label: string, values: string[], key: "shot" | "camera") => {

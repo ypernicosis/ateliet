@@ -6,6 +6,7 @@ import { Editor, ToolHandler, selectionFrom, translated } from "./editor.ts";
 import { Layer, TILE, Transform } from "./model.ts";
 import { context } from "./store.ts";
 import { Scratch, corners, sourceSize } from "./render.ts";
+import { polyPath } from "./pages.ts";
 import { cloneBoard, BoardStep, TileStep } from "./history.ts";
 
 export type ShapeKind = "line" | "rect" | "ellipse" | "arrow";
@@ -16,6 +17,7 @@ export interface ToolSettings {
   lasso: { opacity: number };
   shape: { kind: ShapeKind; width: number; fill: boolean };
   select: { mode: "rect" | "lasso" | "ellipse" };
+  balloon: { kind: import("./model.ts").BalloonKind; vertical: boolean; size: number };
 }
 
 export function defaultToolSettings(): ToolSettings {
@@ -25,6 +27,7 @@ export function defaultToolSettings(): ToolSettings {
     lasso: { opacity: 1 },
     shape: { kind: "rect", width: 4, fill: false },
     select: { mode: "rect" },
+    balloon: { kind: "speech", vertical: false, size: 28 },
   };
 }
 
@@ -39,9 +42,17 @@ export const TOOL_INFO: { id: string; name: string; icon: string; key: string }[
   { id: "shape", name: "Shapes and camera arrows", icon: "shapes", key: "U" },
   { id: "select", name: "Select", icon: "square-dashed", key: "M" },
   { id: "move", name: "Move and transform", icon: "move", key: "V" },
+  { id: "panel", name: "Panels: cut, draw, move", icon: "panels-top-left", key: "J" },
+  { id: "balloon", name: "Balloons and captions", icon: "message-square-text", key: "W" },
   { id: "eyedropper", name: "Pick colour", icon: "pipette", key: "I" },
   { id: "hand", name: "Hand", icon: "hand", key: "H" },
 ];
+
+/** The tools a kind of storyboard offers (panels and balloons only on pages). */
+export function toolsFor(kind: string): typeof TOOL_INFO {
+  const pages = ["thumbnails", "name", "comic", "webtoon"].includes(kind);
+  return TOOL_INFO.filter((t) => pages || (t.id !== "panel" && t.id !== "balloon"));
+}
 
 /** The active layer, if drawing on it is possible; otherwise tells why. */
 function drawable(ed: Editor, raster = true): Layer | null {
@@ -63,9 +74,14 @@ function drawable(ed: Editor, raster = true): Layer | null {
 }
 
 /** Clips drawing in layer coordinates to the canvas (bounded) and the selection. */
-function clipper(ed: Editor, l: Layer): (ctx: CanvasRenderingContext2D) => void {
+function clipper(ed: Editor, l: Layer, at?: { x: number; y: number }): (ctx: CanvasRenderingContext2D) => void {
   const b = ed.board;
-  const sel = ed.selection ? translated(ed.selection.path, -l.x, -l.y) : null;
+  let sel = ed.selection ? translated(ed.selection.path, -l.x, -l.y) : null;
+  // Pages: a stroke stays in the panel it starts in (like drawing inside a frame).
+  if (!sel && at && b.page?.clipToPanel) {
+    const panel = ed.panelAt(at.x, at.y);
+    if (panel) sel = translated(polyPath(panel.points), -l.x, -l.y);
+  }
   return (ctx) => {
     if (!b.infinite) {
       ctx.beginPath();
@@ -103,7 +119,7 @@ export class BrushTool implements ToolHandler {
     if (!l) return;
     this.layer = l;
     this.step = ed.pixels(this.id === "eraser" ? "Erase" : "Draw", l.id);
-    const clip = clipper(ed, l);
+    const clip = clipper(ed, l, p);
     const color = this.id === "eraser" ? "#000000" : ed.color;
     const direct = Stroke.direct(this.id);
     if (direct) {
@@ -272,7 +288,7 @@ export class FillTool implements ToolHandler {
     await ed.doc.tiles.load([l.id]);
     const step = ed.pixels("Fill", l.id);
     const lx = rx - l.x, ly = ry - l.y;
-    const clip = clipper(ed, l);
+    const clip = clipper(ed, l, p);
     ed.eachTile(lx, ly, w, h, (tx, ty) => step.touch(tx, ty));
     ed.doc.tiles.paint(l.id, lx, ly, w, h, (ctx) => {
       ctx.translate(-lx, -ly);
@@ -377,7 +393,7 @@ export class LassoFillTool implements ToolHandler {
     const w = Math.ceil(box.w) + 3, h = Math.ceil(box.h) + 3;
     if (outsideCanvas(ed, l, x, y, w, h)) return;
     const path = translated(sel.path, -l.x, -l.y);
-    const clip = clipper(ed, l);
+    const clip = clipper(ed, l, pts[0]);
     ed.eachTile(x, y, w, h, (tx, ty) => step.touch(tx, ty));
     ed.doc.tiles.paint(l.id, x, y, w, h, (ctx) => {
       ctx.translate(-x, -y);
@@ -498,7 +514,7 @@ export class ShapeTool implements ToolHandler {
     const x = Math.floor(Math.min(a.x, b.x) - l.x - pad), y = Math.floor(Math.min(a.y, b.y) - l.y - pad);
     const w = Math.ceil(Math.abs(b.x - a.x) + 2 * pad), h = Math.ceil(Math.abs(b.y - a.y) + 2 * pad);
     const step = ed.pixels("Shape", l.id);
-    const clip = clipper(ed, l);
+    const clip = clipper(ed, l, a);
     ed.eachTile(x, y, w, h, (tx, ty) => step.touch(tx, ty));
     ed.doc.tiles.paint(l.id, x, y, w, h, (ctx) => {
       ctx.translate(-x, -y);

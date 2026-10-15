@@ -88,10 +88,56 @@ pub fn shared_info(window: tauri::Window, state: State<Galleries>) -> Res<Value>
     let unsorted = shared.iter().filter(|e| !sorted.contains(&e.key)).count();
     let plugins: Vec<Value> = pictogrep::plugins(&home).into_iter().map(|p| serde_json::to_value(p).unwrap_or(Value::Null)).collect();
     Ok(json!({
-        "home": home.root, "library": home.library(), "running": pictogrep::is_running(&home),
+        "home": home.root, "library": home.library(), "running": pictogrep::is_running(&home), "copiedFrom": pictogrep::copied_from(&home),
         "total": shared.len(), "unsorted": unsorted, "collections": collections, "plugins": plugins,
         "galleryDl": pinterest::gallery_dl().map(|p| p.to_string_lossy().into_owned()),
     }))
+}
+
+// ── a library of Ateliet's own ────────────────────────────────────────────
+
+fn copy_cancel() -> &'static std::sync::atomic::AtomicBool {
+    static FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    &FLAG
+}
+
+/// What copying a Pictogrep library would take: the folder (given, in use, or
+/// found), what it holds, and where the copy goes by default.
+#[tauri::command]
+pub fn pictogrep_copy_plan(window: tauri::Window, state: State<Galleries>, from: Option<String>) -> Res<Value> {
+    let from = match from.filter(|f| !f.trim().is_empty()) {
+        Some(f) => Some(Home::new(PathBuf::from(f))),
+        None => state.get(window.label()).ok().and_then(|g| g.lib.lock().unwrap().shared.clone()).filter(|h| pictogrep::copied_from(h).is_none()).or_else(pictogrep::detect),
+    };
+    let mut to = pictogrep::own_library_dir();
+    for i in 2.. {
+        if !to.exists() || fs::read_dir(&to).map(|mut d| d.next().is_none()).unwrap_or(false) {
+            break;
+        }
+        to = pictogrep::own_library_dir().with_file_name(format!("library-{i}"));
+    }
+    let Some(home) = from else { return Ok(json!({ "from": null, "to": to })) };
+    let plan = pictogrep::copy_plan(&home)?;
+    Ok(json!({ "from": home.root, "to": to, "plan": plan, "running": pictogrep::is_running(&home) }))
+}
+
+/// Copies the library (progress as `pictogrep-copy` events) and returns the new folder.
+#[tauri::command]
+pub async fn pictogrep_copy(app: AppHandle, from: String, to: String) -> Res<Value> {
+    copy_cancel().store(false, std::sync::atomic::Ordering::Relaxed);
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = pictogrep::copy_home(&Home::new(PathBuf::from(from)), Path::new(&to), copy_cancel(), |p| {
+            let _ = app.emit("pictogrep-copy", p);
+        })?;
+        Ok(json!({ "home": home.root }))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub fn pictogrep_copy_cancel() {
+    copy_cancel().store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[derive(Deserialize)]

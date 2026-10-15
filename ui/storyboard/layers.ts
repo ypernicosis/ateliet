@@ -17,7 +17,10 @@ export class LayersPanel {
   private list!: HTMLElement;
   private props!: HTMLElement;
   private dragging: string | null = null;
+  private thumbs = new Map<string, HTMLCanvasElement>();
+  private thumbTimer = 0;
   private onBoard = () => this.render();
+  private onPixels = () => this.scheduleThumbs();
 
   constructor(private ed: Editor, parent: HTMLElement, private hooks: { chooseReference: (cb: (refId: string) => void) => void; trace: () => void }) {
     this.el = parent.createDiv("sb-layers");
@@ -36,18 +39,55 @@ export class LayersPanel {
     this.props = this.el.createDiv("sb-layer-props");
     ed.on("board", this.onBoard);
     ed.on("frame", this.onBoard);
+    ed.on("thumb", this.onPixels);
     this.render();
   }
 
   destroy() {
     this.ed.off("board", this.onBoard);
     this.ed.off("frame", this.onBoard);
+    this.ed.off("thumb", this.onPixels);
+    clearTimeout(this.thumbTimer);
+  }
+
+  private scheduleThumbs() {
+    clearTimeout(this.thumbTimer);
+    this.thumbTimer = window.setTimeout(() => this.drawThumbs(), 120);
+  }
+
+  /** Each layer alone, small, on a checkerboard: what is on which layer at a glance. */
+  private drawThumbs() {
+    const ed = this.ed;
+    if (!ed.frame) return;
+    const area = ed.board.infinite ? ed.comp.area(ed.frame, false) : { x: 0, y: 0, w: ed.board.width, h: ed.board.height };
+    const W = 44, H = Math.max(14, Math.min(44, Math.round((W * area.h) / area.w)));
+    const dpr = window.devicePixelRatio || 1;
+    for (const [id, c] of this.thumbs) {
+      const l = ed.board.layers[id];
+      if (!l || !c.isConnected) continue;
+      c.width = Math.round(W * dpr);
+      c.height = Math.round(H * dpr);
+      c.style.width = `${W}px`;
+      c.style.height = `${H}px`;
+      const ctx = c.getContext("2d")!;
+      const k = Math.min(c.width / area.w, c.height / area.h);
+      ctx.setTransform(k, 0, 0, k, -area.x * k, -area.y * k);
+      ctx.imageSmoothingQuality = "high";
+      try {
+        const scratch = new Scratch(c.width, c.height);
+        ed.comp.content(ctx, l, { region: area, background: false }, scratch, ctx.getTransform());
+        scratch.release();
+      } catch {
+        /* a picture not loaded yet */
+      }
+    }
   }
 
   render() {
     const ed = this.ed;
     if (!ed.frame) return;
     this.list.empty();
+    this.thumbs.clear();
     const layers = [...ed.layers].reverse();
     for (const l of layers) {
       const row = this.list.createDiv({ cls: "sb-layer", attr: { draggable: "true" } });
@@ -60,8 +100,11 @@ export class LayersPanel {
         e.stopPropagation();
         ed.mutate(l.visible ? "Hide layer" : "Show layer", () => (l.visible = !l.visible));
       });
-      const kind = row.createDiv("sb-layer-kind");
-      setIcon(kind, l.kind === "trace" ? "scan-line" : l.kind === "image" ? "image" : l.clip ? "corner-left-down" : "pen-line");
+      if (l.clip) setIcon(row.createDiv({ cls: "sb-layer-clipmark", attr: { "aria-label": "Clipped to the layer below" } }), "corner-left-down");
+      const thumb = row.createDiv("sb-layer-thumb");
+      const tc = thumb.createEl("canvas");
+      this.thumbs.set(l.id, tc);
+      if (l.kind !== "raster") setIcon(thumb.createDiv({ cls: "sb-layer-kind", attr: { "aria-label": l.kind === "trace" ? "Trace" : "Picture" } }), l.kind === "trace" ? "scan-line" : "image");
       const name = row.createDiv({ cls: "sb-layer-name", text: l.name });
       const badges = row.createDiv("sb-layer-badges");
       const badge = (icon: string, label: string) => setIcon(badges.createSpan({ cls: "sb-badge", attr: { "aria-label": label } }), icon);
@@ -99,6 +142,7 @@ export class LayersPanel {
       });
     }
     this.renderProps();
+    this.scheduleThumbs();
   }
 
   private rename(l: Layer, el: HTMLElement) {
@@ -356,6 +400,23 @@ export class LayersPanel {
     for (const [v, n] of BLEND_MODES) blend.createEl("option", { value: v, text: n });
     blend.value = l.blend;
     blend.addEventListener("change", () => ed.mutate("Blend mode", () => (l.blend = blend.value)));
+    // Everything the context menu offers, as buttons.
+    const bar = this.props.createDiv("sb-prop-buttons");
+    const btn = (icon: string, label: string, active: boolean | null, fn: () => void, disabled = false) => {
+      const b = bar.createDiv({ cls: "clickable-icon", attr: { "aria-label": label } });
+      setIcon(b, icon);
+      if (active) b.addClass("is-active");
+      if (disabled) b.addClass("mod-disabled");
+      b.addEventListener("click", () => !disabled && fn());
+    };
+    btn(l.locked ? "lock" : "unlock", l.locked ? "Locked (click to unlock)" : "Lock", l.locked, () => ed.mutate(l.locked ? "Unlock layer" : "Lock layer", () => (l.locked = !l.locked)));
+    if (l.kind === "raster") btn("droplet", "Lock transparency: paint only where there is already paint", !!l.alphaLock, () => ed.mutate("Lock transparency", () => (l.alphaLock = !l.alphaLock)));
+    btn("corner-left-down", "Clip to the layer below", l.clip, () => ed.mutate("Clip layer", () => (l.clip = !l.clip)));
+    btn("layers", l.shared ? "In every frame (click: only this frame)" : "Show in every frame", !!l.shared, () => this.toggleShared(l));
+    bar.createDiv("sb-spacer");
+    btn("copy", "Duplicate", null, () => this.duplicate(l));
+    btn("merge", "Merge down", null, () => this.mergeDown(l), !this.below(l));
+    btn("trash-2", "Delete layer", null, () => this.remove(l));
     if (l.kind === "trace") this.traceProps(l, row);
   }
 
