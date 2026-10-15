@@ -767,6 +767,22 @@ export function buildSizer(cm: EditorView, before: HTMLElement[]): HTMLElement {
     if (ref && ref.parentNode !== scroller) return native.call(scroller, node, sizer);
     return native.call(scroller, node, ref);
   };
+  // A click in the margins around the text would let WebKit drop the native caret
+  // wherever it likes (the inline title, a neighbouring line): send it to CM instead.
+  scroller.addEventListener("mousedown", (e: MouseEvent) => {
+    const t = e.target;
+    if (e.button !== 0 || (t !== scroller && t !== sizer && t !== container)) return;
+    const sr = scroller.getBoundingClientRect();
+    if (e.clientX >= sr.left + scroller.clientLeft + scroller.clientWidth) return; // scrollbar
+    const rect = cm.contentDOM.getBoundingClientRect();
+    if (e.clientY < rect.top || e.clientY > rect.bottom) return; // title row; CM handles clicks below the text
+    const x = Math.min(Math.max(e.clientX, rect.left + 1), rect.right - 1);
+    const pos = cm.posAtCoords({ x, y: e.clientY }, false);
+    e.preventDefault();
+    const anchor = e.shiftKey ? cm.state.selection.main.anchor : pos;
+    cm.dispatch({ selection: { anchor, head: pos }, userEvent: "select.pointer" });
+    cm.focus();
+  });
   return sizer;
 }
 

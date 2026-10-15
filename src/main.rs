@@ -4,6 +4,7 @@
 
 mod gallery;
 mod process;
+mod update;
 
 use ateliet_core::{metadata, render, search, vault};
 use base64::Engine;

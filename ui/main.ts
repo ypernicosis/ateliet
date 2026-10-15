@@ -24,6 +24,7 @@ import { currentWindow, invoke, isMac, isWin, listen } from "./tauri.ts";
 import { moment } from "./obsidian/util.ts";
 import { tokenClassNodeProp } from "./editor/syntax.ts";
 import { MarkdownView } from "./obsidian/views.ts";
+import { installUpdater } from "./core/update.ts";
 
 // Same module map Obsidian exposes to plugins.
 const MODULES: Record<string, any> = {
@@ -82,7 +83,13 @@ async function boot() {
   const info = await invoke<any>("app_info");
   setHome(info.home);
   document.body.addClass(isMac ? "mod-macos" : isWin ? "mod-windows" : "mod-linux");
-  if (isMac) document.body.addClass("is-frameless", "is-hidden-frameless");
+  if (isMac) {
+    document.body.addClass("is-frameless", "is-hidden-frameless");
+    // The traffic lights disappear in full screen; the header padding for them must too.
+    const syncFullscreen = () => currentWindow().isFullscreen().then((fs: boolean) => document.body.toggleClass("is-fullscreen", fs)).catch(() => {});
+    window.addEventListener("resize", syncFullscreen);
+    syncFullscreen();
+  }
   document.body.addClass("theme-dark", "is-focused");
   if (!vaultPath) return showLauncher();
 
@@ -131,6 +138,7 @@ async function boot() {
   app.workspace.setLayoutReady();
   app.workspace.updateTitle();
   installCloseHandler(app);
+  installUpdater(app, () => flush(app));
 }
 
 function buildRibbon(app: any) {
@@ -180,20 +188,22 @@ async function onFsEvents(app: any, paths: string[]) {
   if (vaultPaths.length) await app.vault.reconcile(vaultPaths);
 }
 
+/** Saves open notes and the layout. */
+async function flush(app: any) {
+  const saves: Promise<any>[] = [];
+  app.workspace.iterateAllLeaves((l: any) => {
+    if (l.view instanceof MarkdownView) saves.push(l.view.save());
+  });
+  await Promise.all(saves);
+  await app.workspace.saveLayout();
+}
+
 function installCloseHandler(app: any) {
-  const flush = async () => {
-    const saves: Promise<any>[] = [];
-    app.workspace.iterateAllLeaves((l: any) => {
-      if (l.view instanceof MarkdownView) saves.push(l.view.save());
-    });
-    await Promise.all(saves);
-    await app.workspace.saveLayout();
-  };
-  window.addEventListener("blur", () => flush());
+  window.addEventListener("blur", () => flush(app));
   try {
     currentWindow().onCloseRequested(async () => {
       app.workspace.trigger("quit", { add() {}, });
-      await flush();
+      await flush(app);
     });
   } catch (e) {
     console.warn(e);
