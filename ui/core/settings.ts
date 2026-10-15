@@ -181,6 +181,7 @@ export class SettingsModal extends Modal {
         d.setValue(this.cfg("cssTheme") || "").onChange((v) => app.customCss.setTheme(v));
       }).addButton((b) => b.setButtonText("Browse").onClick(() => new ThemeBrowser(app, () => tab.display()).open()));
       new Setting(el).setName("Font size").addSlider((s) => s.setLimits(10, 30, 1).setValue(this.cfg("baseFontSize") || 16).setDynamicTooltip().onChange((v) => this.set("baseFontSize", v)));
+      new Setting(el).setName("Text alignment").setDesc("How paragraphs and list items line up in the editor and in reading view. Ateliet only; Obsidian ignores it.").addDropdown((d) => d.addOptions({ justify: "Justified", start: "Left", center: "Centered", end: "Right" }).setValue(this.cfg("atelietTextAlign") || "justify").onChange((v) => this.set("atelietTextAlign", v)));
       new Setting(el).setName("Interface font").addText((t) => t.setPlaceholder("System default").setValue(this.cfg("interfaceFontFamily")).onChange((v) => this.set("interfaceFontFamily", v)));
       new Setting(el).setName("Text font").addText((t) => t.setPlaceholder("System default").setValue(this.cfg("textFontFamily")).onChange((v) => this.set("textFontFamily", v)));
       new Setting(el).setName("Monospace font").addText((t) => t.setPlaceholder("System default").setValue(this.cfg("monospaceFontFamily")).onChange((v) => this.set("monospaceFontFamily", v)));

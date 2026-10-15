@@ -455,7 +455,6 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   -webkit-user-select: none;
-  cursor: var(--cursor);
   line-height: var(--line-height-tight);
 }
 input, textarea, select, button { font-family: inherit; font-size: inherit; color: inherit; }
@@ -495,7 +494,10 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
   background-color: var(--tab-container-background); border-bottom: 1px solid var(--tab-outline-color);
 }
 .is-hidden-frameless .workspace-ribbon.mod-left::after { content: ""; position: absolute; top: var(--header-height); bottom: 0; right: 0; width: 1px; background-color: var(--divider-color); }
-.is-hidden-frameless .workspace-ribbon.mod-left .sidebar-toggle-button { top: auto; position: static; margin-top: -2px; margin-bottom: 8px; }
+/* As in Obsidian, the left sidebar toggle sits in the header row, just after the traffic lights. */
+.is-hidden-frameless:not(.is-fullscreen) .workspace-ribbon.mod-left .sidebar-toggle-button {
+  top: calc(var(--header-height) / 2); left: calc(var(--traffic-lights-width) + var(--ribbon-width) / 2); transform: translate(-50%, -50%); z-index: 3;
+}
 .workspace-ribbon.mod-right { display: none; }
 .side-dock-actions, .side-dock-settings { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 100%; }
 .side-dock-actions { flex: 1 1 auto; }
@@ -569,17 +571,19 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
 
 /* sidedock tabs: icons only */
 .mod-sidedock .workspace-tab-header-container { padding-left: var(--size-4-2); }
-.mod-sidedock .workspace-tab-header { flex: 0 0 auto; min-width: 0; height: calc(var(--header-height) - 10px); border-radius: var(--radius-s); background: transparent; box-shadow: none; }
-.mod-sidedock .workspace-tab-header-container-inner { margin: 0; padding: 0 0 5px; align-items: center; }
+/* Same row as the main tabs, with 6px left below so the icons sit in the middle of the header
+   (the value themes such as Primary also set). */
+.mod-sidedock .workspace-tab-header { flex: 0 0 auto; min-width: 0; border-radius: var(--radius-s); background: transparent; box-shadow: none; }
+.mod-sidedock .workspace-tab-header-container-inner { padding-bottom: 6px; }
 .mod-sidedock .workspace-tab-header-inner { padding: 0 6px; margin: 0; height: 100%; }
 .mod-sidedock .workspace-tab-header-inner-title, .mod-sidedock .workspace-tab-header-inner-close-button, .mod-sidedock .workspace-tab-header-new-tab, .mod-sidedock .workspace-tab-header-tab-list { display: none; }
 .mod-sidedock .workspace-tab-header.is-active { background-color: var(--background-modifier-hover); color: var(--text-normal); }
 .mod-sidedock .workspace-tab-header-inner-icon { opacity: 1; --icon-size: var(--icon-m); }
 .mod-sidedock .workspace-tab-container { background-color: var(--background-secondary); }
 /* macOS overlay title bar: whatever header sits at the top-left corner starts after the traffic lights. */
-.is-hidden-frameless:not(.is-fullscreen).show-ribbon:not(.is-left-sidedock-collapsed) .mod-left-split .workspace-tab-header-container { padding-left: calc(var(--traffic-lights-width) - var(--ribbon-width)); }
+.is-hidden-frameless:not(.is-fullscreen).show-ribbon:not(.is-left-sidedock-collapsed) .mod-left-split .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
 .is-hidden-frameless:not(.is-fullscreen):not(.show-ribbon):not(.is-left-sidedock-collapsed) .mod-left-split .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
-.is-hidden-frameless:not(.is-fullscreen).show-ribbon.is-left-sidedock-collapsed .mod-root > .workspace-tabs:first-child .workspace-tab-header-container { padding-left: calc(var(--traffic-lights-width) - var(--ribbon-width)); }
+.is-hidden-frameless:not(.is-fullscreen).show-ribbon.is-left-sidedock-collapsed .mod-root > .workspace-tabs:first-child .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
 .is-hidden-frameless:not(.is-fullscreen):not(.show-ribbon).is-left-sidedock-collapsed .mod-root .workspace-tab-header-container { padding-left: var(--traffic-lights-width); }
 .is-hidden-frameless.is-right-sidedock-collapsed .mod-root .workspace-tab-header-container { padding-right: 44px; }
 .is-hidden-frameless:not(.is-right-sidedock-collapsed) .mod-right-split .workspace-tab-header-container { padding-right: 44px; }
@@ -686,13 +690,18 @@ body:not(.show-view-header) .mod-root .view-header { display: none; }
 .markdown-source-view.mod-cm6 .cm-scroller {
   font-family: var(--font-text); font-size: var(--font-text-size); line-height: var(--line-height-normal);
   padding: var(--size-4-8) var(--file-margins) 40vh; overflow: auto; user-select: text; -webkit-user-select: text; scrollbar-gutter: stable;
+  cursor: text; /* a click anywhere in the page, margins included, places the caret */
 }
+.markdown-source-view.mod-cm6 .cm-gutters, .markdown-source-view.mod-cm6 .metadata-container-widget { cursor: default; }
 .markdown-source-view.mod-cm6 .cm-sizer { display: flex; flex-direction: column; align-items: stretch; width: 100%; min-height: 100%; }
 .markdown-source-view.mod-cm6.is-readable-line-width .cm-sizer { max-width: var(--file-line-width); margin-left: auto; margin-right: auto; }
 .markdown-source-view.mod-cm6 .cm-contentContainer { flex: 1 1 auto; display: flex; align-items: stretch; overflow-x: visible; }
 .markdown-source-view.mod-cm6 .cm-content { flex-basis: unset !important; width: 0; min-height: unset; padding: 0; }
 .cm-content { caret-color: var(--caret-color, var(--text-normal)); white-space: pre-wrap; word-wrap: break-word; }
 .cm-line { padding: 0; }
+/* Body text alignment (Settings → Appearance → Text alignment); headings, code and tables keep theirs. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line:not(.HyperMD-header, .HyperMD-codeblock, .HyperMD-table-row, .HyperMD-frontmatter),
+.markdown-rendered p, .markdown-rendered li { text-align: var(--ateliet-text-align, justify); }
 /* CM measures block widgets by their border box: keep children's margins (callout, properties) inside it,
    or every line below the widget drifts and clicks land on the wrong line. */
 .cm-embed-block { display: flow-root; }
