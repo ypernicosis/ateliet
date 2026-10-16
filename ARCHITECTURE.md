@@ -97,3 +97,5 @@ A ordem de tentativa é a mesma do Obsidian:
 ## Depuração
 
 Com `ATELIET_DEBUG=<pasta>`, o console do webview é espelhado em `<pasta>/console.log`, o conteúdo de `<pasta>/eval.js` é avaliado no app e o comando `debug_snapshot` gera um PNG da webview (macOS). Fora desse modo, os comandos de depuração ficam inativos.
+
+No Linux (WebKitGTK), o app roda numa tela virtual para testar plugins de verdade: `sh build.sh --dev`, `cargo build --no-default-features --features ort-dynamic` (o recurso `ort-dynamic` dispensa baixar o ONNX Runtime na compilação), depois `Xvfb :99` e `DISPLAY=:99 ATELIET_DEBUG=<pasta> target/debug/ateliet <vault>`; capturas com `import -window root` e cliques com `xdotool`.

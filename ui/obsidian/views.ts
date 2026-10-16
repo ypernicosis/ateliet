@@ -55,8 +55,15 @@ export abstract class View extends Component {
   onTabMenu(menu: Menu): void {
     void menu;
   }
+  // Obsidian's View has no `file`; Ateliet reads `view.file` on any view, so it is an accessor here.
+  // It must be writable: plugin item views may set `this.file` themselves (Scriptorium's Inspector
+  // does), which threw "Attempted to assign to readonly property" with a getter alone.
+  /** @internal */ private _viewFile: TFile | null = null;
   /** @internal */ get file(): TFile | null {
-    return null;
+    return this._viewFile;
+  }
+  set file(f: TFile | null) {
+    this._viewFile = f;
   }
 }
 

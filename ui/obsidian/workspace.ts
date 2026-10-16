@@ -118,6 +118,7 @@ export class WorkspaceSplit extends WorkspaceParent {
       const start = vertical ? e.clientX : e.clientY;
       const startA = vertical ? ra.width : ra.height;
       document.body.addClass("is-grabbing");
+      document.body.toggleClass("is-grabbing-row", !vertical);
       const move = (ev: MouseEvent) => {
         const d = (vertical ? ev.clientX : ev.clientY) - start;
         const sizeA = Math.max(60, Math.min(total - 60, startA + d));
@@ -128,7 +129,7 @@ export class WorkspaceSplit extends WorkspaceParent {
         this.onResize();
       };
       const up = () => {
-        document.body.removeClass("is-grabbing");
+        document.body.removeClass("is-grabbing", "is-grabbing-row");
         window.removeEventListener("mousemove", move);
         window.removeEventListener("mouseup", up);
         this.app.workspace.requestSaveLayout();
@@ -242,6 +243,20 @@ export class WorkspaceTabs extends WorkspaceParent {
   tabsContainerEl: HTMLElement;
   newTabButtonEl: HTMLElement;
   isStacked = false;
+
+  /** Only leaves are tabs: a group handed in gives its leaves instead of nesting (which drew two header rows). */
+  insertChild(index: number, child: WorkspaceItem, resize?: boolean): void {
+    if (child instanceof WorkspaceParent) {
+      const leaves: WorkspaceLeaf[] = [];
+      this.app.workspace.iterateLeaves(child, (l: WorkspaceLeaf) => {
+        leaves.push(l);
+      });
+      if (index < 0 || index > this.children.length) index = this.children.length;
+      leaves.forEach((l, i) => super.insertChild(index + i, l, resize));
+      return;
+    }
+    super.insertChild(index, child, resize);
+  }
 
   constructor(app: any) {
     super(app);
@@ -881,9 +896,15 @@ export class Workspace extends Events {
     return this.getLeaf(false);
   }
 
-  createLeafInParent(parent: WorkspaceSplit, index: number): WorkspaceLeaf {
-    const tabs = new WorkspaceTabs(this.app);
+  createLeafInParent(parent: WorkspaceSplit | WorkspaceTabs, index: number): WorkspaceLeaf {
     const leaf = new WorkspaceLeaf(this.app);
+    // A tab group takes the leaf as one more tab (plugins pass one: Scriptorium's Studio does);
+    // a split gets a new group holding it.
+    if (parent instanceof WorkspaceTabs) {
+      parent.insertChild(index, leaf);
+      return leaf;
+    }
+    const tabs = new WorkspaceTabs(this.app);
     tabs.insertChild(0, leaf);
     parent.insertChild(index, tabs);
     return leaf;
@@ -1152,6 +1173,15 @@ export class Workspace extends Events {
         parent.insertChild(-1, leaf);
         const st = data.state || { type: "empty" };
         await leaf.setViewState({ type: st.type, state: st.state, pinned: data.pinned, group: data.group });
+        return;
+      }
+      // A group saved inside a group (older Ateliet versions wrote that when a plugin created a leaf in a
+      // tab group): its leaves join the outer group, without the empty ones left by views that failed to open.
+      if ((data.type === "tabs" || data.type === "split") && parent instanceof WorkspaceTabs) {
+        for (const c of data.children || []) {
+          if (c?.type === "leaf" && (c.state?.type ?? "empty") === "empty") continue;
+          await build(c, parent);
+        }
         return;
       }
       if (data.type === "tabs") {
