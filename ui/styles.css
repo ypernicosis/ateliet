@@ -708,10 +708,13 @@ body:not(.show-view-header) .mod-root .view-header { display: none; }
 .cm-content { caret-color: var(--caret-color, var(--text-normal)); white-space: pre-wrap; word-wrap: break-word; }
 .cm-line { padding: 0; }
 /* Body text alignment (Settings → Appearance → Text alignment).
-   Editor: the setting wins over other CSS in the vault (plugins, snippets) on paragraph lines; headings,
-   code, tables, rules and properties keep theirs. Rendered markdown: inherited from the container, so
-   blocks a theme or plugin aligns on purpose (a centred callout) stay as they are. */
-.markdown-source-view.mod-cm6 .cm-content > .cm-line:not(.HyperMD-header, .HyperMD-codeblock, .HyperMD-table-row, .HyperMD-frontmatter, .hr, .HyperMD-hr) { text-align: var(--ateliet-text-align, justify) !important; }
+   The note's own paragraphs and list items take the setting over other CSS in the vault (themes, snippets,
+   plugins): !important, and `:not(#\#)` (matches every element) lifts the rule to ID specificity, which
+   class-based rules cannot reach even with !important of their own. Editor: paragraph lines; headings, code,
+   tables, rules and properties keep theirs. Reading view: top-level paragraphs and lists; anything nested
+   in a block (a callout a theme centres) and other rendered markdown inherit from the container. */
+.markdown-source-view.mod-cm6 .cm-content > .cm-line:not(#\#):not(.HyperMD-header, .HyperMD-codeblock, .HyperMD-table-row, .HyperMD-frontmatter, .hr, .HyperMD-hr),
+.markdown-preview-section > div > p:not(#\#), .markdown-preview-section > div > :is(ul, ol) li:not(#\#) { text-align: var(--ateliet-text-align, justify) !important; }
 .markdown-rendered { text-align: var(--ateliet-text-align, justify); }
 :where(.markdown-rendered) :is(h1, h2, h3, h4, h5, h6, pre, table, .math-block, .mermaid) { text-align: start; }
 /* CM measures block widgets by their border box: keep children's margins (callout, properties) inside it,
