@@ -589,7 +589,9 @@ export class CustomCss extends Events {
       body.style.removeProperty("--accent-s");
       body.style.removeProperty("--accent-l");
     }
-    body.style.setProperty("--ateliet-text-align", cfg("atelietTextAlign") || "justify");
+    const align = cfg("atelietTextAlign") || "justify";
+    body.style.setProperty("--ateliet-text-align", align);
+    body.toggleClass("is-text-justified", align === "justify");
     body.toggleClass("is-translucent", !!cfg("translucency"));
     body.toggleClass("show-ribbon", cfg("showRibbon") !== false);
     this.app.workspace.leftRibbon.containerEl.toggle(cfg("showRibbon") !== false);

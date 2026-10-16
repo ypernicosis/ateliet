@@ -716,6 +716,9 @@ body:not(.show-view-header) .mod-root .view-header { display: none; }
 .markdown-source-view.mod-cm6 .cm-content > .cm-line:not(#\#):not(.HyperMD-header, .HyperMD-codeblock, .HyperMD-table-row, .HyperMD-frontmatter, .hr, .HyperMD-hr),
 .markdown-preview-section > div > p:not(#\#), .markdown-preview-section > div > :is(ul, ol) li:not(#\#) { text-align: var(--ateliet-text-align, justify) !important; }
 .markdown-rendered { text-align: var(--ateliet-text-align, justify); }
+/* CodeMirror wraps lines with white-space: break-spaces, and WebKit before 2.52 (Safari included) does not
+   justify break-spaces text: the lines come out ragged. Justified lines use pre-wrap, which it justifies. */
+.is-text-justified .markdown-source-view.mod-cm6 .cm-content.cm-lineWrapping > .cm-line { white-space: pre-wrap; }
 :where(.markdown-rendered) :is(h1, h2, h3, h4, h5, h6, pre, table, .math-block, .mermaid) { text-align: start; }
 /* CM measures block widgets by their border box: keep children's margins (callout, properties) inside it,
    or every line below the widget drifts and clicks land on the wrong line. */
