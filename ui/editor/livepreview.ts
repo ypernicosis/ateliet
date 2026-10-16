@@ -92,6 +92,44 @@ function buildLineClasses(view: EditorView): DecorationSet {
   return b.finish();
 }
 
+/** CodeMirror measures a block widget by its border box, so the vertical margins a plugin gives its own
+ * widget (Scriptorium's chapter header has 3.2em above and 2.4em below) never reach the height map:
+ * every line below drifts by that much and a click lands lines away from the word under the pointer.
+ * Those margins move inside the box: padding when the widget paints nothing of its own, otherwise a
+ * transparent border the background stays clear of. It runs from a MutationObserver, which fires
+ * before the animation frame where CodeMirror measures, so the first measurement is already right. */
+export const blockWidgetMargins = ViewPlugin.fromClass(
+  class {
+    observer: MutationObserver;
+    constructor(view: EditorView) {
+      this.observer = new MutationObserver((records) => {
+        for (const r of records) r.addedNodes.forEach((n) => fixWidgetMargins(n));
+      });
+      this.observer.observe(view.contentDOM, { childList: true });
+      for (const n of Array.from(view.contentDOM.children)) fixWidgetMargins(n);
+    }
+    destroy() {
+      this.observer.disconnect();
+    }
+  },
+);
+
+function fixWidgetMargins(node: Node) {
+  if (!(node instanceof HTMLElement) || node.classList.contains("cm-line")) return;
+  const cs = getComputedStyle(node);
+  if (cs.display === "none" || cs.float !== "none") return;
+  const paints = cs.backgroundImage !== "none" || !/^(transparent|rgba\(.*,\s*0\))$/.test(cs.backgroundColor) || cs.boxShadow !== "none";
+  for (const side of ["Top", "Bottom"] as const) {
+    const margin = parseFloat(cs[`margin${side}`]);
+    if (!(margin > 0)) continue;
+    node.style[`margin${side}`] = "0";
+    if (paints && !(parseFloat(cs[`border${side}Width`]) > 0)) {
+      node.style[`border${side}`] = `${margin}px solid transparent`;
+      if (cs.backgroundClip === "border-box") node.style.backgroundClip = "padding-box";
+    } else node.style[`padding${side}`] = `${parseFloat(cs[`padding${side}`]) + margin}px`;
+  }
+}
+
 export const lineClasses = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;

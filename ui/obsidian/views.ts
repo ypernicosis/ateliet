@@ -15,7 +15,7 @@ import { bracketMatching, foldGutter, foldKeymap, indentOnInput, indentUnit } fr
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
 import { highlightSelectionMatches, search, searchKeymap, openSearchPanel } from "@codemirror/search";
 import { obsidianMarkdown, obsidianSyntaxHighlighting } from "../editor/syntax.ts";
-import { lineClasses, livePreview, livePreviewHost, sourceMode } from "../editor/livepreview.ts";
+import { blockWidgetMargins, lineClasses, livePreview, livePreviewHost, sourceMode } from "../editor/livepreview.ts";
 import { embedKind } from "./renderer.ts";
 
 export abstract class View extends Component {
@@ -496,6 +496,7 @@ export class MarkdownView extends TextFileView {
       highlightSelectionMatches(),
       search({ top: true }),
       lineClasses,
+      blockWidgetMargins,
       foldGutter({
         markerDOM: (open) => {
           const d = createDiv("cm-fold-indicator" + (open ? "" : " is-collapsed"));
@@ -889,6 +890,7 @@ export class ScrollableMarkdownEditor extends Component {
       obsidianSyntaxHighlighting,
       closeBrackets(),
       lineClasses,
+      blockWidgetMargins,
       livePreview(),
       keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, indentWithTab]),
       EditorView.lineWrapping,

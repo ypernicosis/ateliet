@@ -1,8 +1,10 @@
 // Self-update: Rust checks the git checkout Ateliet was built from (src/update.rs).
 // The ribbon button is always there; it lights up while the upstream branch
-// has commits this build lacks.
+// has commits this build lacks. With automatic updates on (the default), the
+// background check also pulls and rebuilds; the new build runs at the next
+// start, or right away from the notice that offers to restart.
 
-import { Modal, Notice } from "../obsidian/index.ts";
+import { Modal, Notice, Setting } from "../obsidian/index.ts";
 import { invoke, listen } from "../tauri.ts";
 
 const CHECK_EVERY = 30 * 60 * 1000;
@@ -23,6 +25,26 @@ interface Progress {
 
 const plural = (n: number) => `${n} new commit${n === 1 ? "" : "s"}`;
 
+/** App-wide, not per vault: kept in the webview's storage. */
+const AUTO_KEY = "ateliet-auto-update";
+export function autoUpdateEnabled(): boolean {
+  try {
+    return localStorage.getItem(AUTO_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+export function setAutoUpdate(on: boolean) {
+  try {
+    localStorage.setItem(AUTO_KEY, on ? "on" : "off");
+  } catch {
+    /* storage unavailable: stays on */
+  }
+}
+
+/** The automatic update in this run of the app: idle, building, built (waits for a restart) or failed. */
+const auto = { state: "idle" as "idle" | "running" | "ready" | "failed", latest: "", step: "" };
+
 export function installUpdater(app: any, flush: () => Promise<void>) {
   let notified = "";
   let restarting = false;
@@ -34,14 +56,27 @@ export function installUpdater(app: any, flush: () => Promise<void>) {
   async function check(): Promise<UpdateStatus> {
     const status = await invoke<UpdateStatus>("update_check");
     button.toggleClass("is-available", status.available);
-    button.setAttr("aria-label", status.available ? `Update Ateliet (${plural(status.behind)})` : "Update Ateliet");
+    if (auto.state !== "ready") button.setAttr("aria-label", status.available ? `Update Ateliet (${plural(status.behind)})` : "Update Ateliet");
     return status;
   }
 
   async function background() {
     try {
       const status = await check();
-      if (status.available && notified !== status.latest) {
+      if (!status.available || UpdateModal.initiator) return;
+      if (autoUpdateEnabled()) {
+        // A build already made or one that failed for this same commit is not tried again every half hour.
+        if (auto.state === "running" || (auto.latest === status.latest && auto.state !== "idle")) return;
+        auto.latest = status.latest;
+        auto.state = "running";
+        try {
+          await invoke("update_apply");
+          new Notice(`Updating Ateliet in the background (${plural(status.behind)}).`, 5000);
+        } catch (e) {
+          // Another window started it: its progress reaches this one too.
+          if (!String(e).includes("already running")) fail(String(e));
+        }
+      } else if (notified !== status.latest) {
         notified = status.latest;
         new Notice(`Ateliet has an update (${plural(status.behind)}). Click the arrow at the bottom of the ribbon.`, 8000);
       }
@@ -50,14 +85,42 @@ export function installUpdater(app: any, flush: () => Promise<void>) {
     }
   }
 
+  function fail(text: string) {
+    auto.state = "failed";
+    console.warn("automatic update:", text);
+    new Notice(`The automatic update failed: ${text.split("\n")[0]} Open "Update Ateliet" for the full log.`, 12000);
+  }
+
   // Every window saves its notes before the app restarts; the window that started the update restarts it.
   listen("update-progress", async (p: Progress) => {
+    if (p.kind === "step") {
+      auto.step = p.text;
+      if (!UpdateModal.initiator && auto.state !== "ready") auto.state = "running";
+      return;
+    }
+    if (p.kind === "error") {
+      if (!UpdateModal.initiator && auto.state === "running") fail(p.text);
+      return;
+    }
     if (p.kind !== "done") return;
     await flush().catch(console.error);
-    if (UpdateModal.initiator && !restarting) {
-      restarting = true;
-      setTimeout(() => invoke("update_restart"), 500);
+    if (UpdateModal.initiator) {
+      if (!restarting) {
+        restarting = true;
+        setTimeout(() => invoke("update_restart"), 500);
+      }
+      return;
     }
+    // Built in the background: the new version starts with the app. Offer to restart now.
+    auto.state = "ready";
+    button.addClass("is-ready");
+    button.setAttr("aria-label", "Ateliet was updated: restart to use the new version");
+    const n = new Notice("Ateliet was updated. Click here to restart now; otherwise the new version starts next time.", 0);
+    n.noticeEl.addClass("mod-ateliet-update-ready");
+    n.noticeEl.addEventListener("click", async () => {
+      await flush().catch(console.error);
+      invoke("update_restart");
+    });
   });
 
   app.commands.addCommand({ id: "ateliet:update", name: "Update Ateliet", icon: "circle-arrow-down", callback: () => new UpdateModal(app, check).open() });
@@ -77,6 +140,21 @@ class UpdateModal extends Modal {
     this.modalEl.addClass("mod-ateliet-update");
     this.setTitle("Update Ateliet");
     const c = this.contentEl;
+    new Setting(c).setName("Update automatically").setDesc("Every half hour Ateliet checks its source. When there are new commits it pulls and rebuilds in the background; the new version starts with the app, or right away if you choose to restart.").addToggle((t) => t.setValue(autoUpdateEnabled()).onChange(setAutoUpdate));
+    if (auto.state === "running" || auto.state === "ready") {
+      const p = c.createEl("p", { cls: "mod-muted", text: auto.state === "ready" ? "An update was built in the background. Restart Ateliet to use it." : `Updating in the background: ${auto.step || "starting"}…` });
+      if (auto.state === "ready") {
+        const b = this.modalEl.createDiv("modal-button-container").createEl("button", { cls: "mod-cta", text: "Restart now" });
+        b.addEventListener("click", () => invoke("update_restart"));
+      } else {
+        this.unlisten = await listen("update-progress", (e: Progress) => {
+          if (e.kind === "step") p.setText(`Updating in the background: ${e.text}…`);
+          else if (e.kind === "done") p.setText("An update was built in the background. Restart Ateliet to use it.");
+          else if (e.kind === "error") p.setText(`The update failed:\n${e.text}`);
+        });
+      }
+      return;
+    }
     const info = c.createDiv();
     info.createEl("p", { text: "Checking for updates…", cls: "mod-muted" });
     const stepEl = c.createDiv({ cls: "ateliet-update-step" });
