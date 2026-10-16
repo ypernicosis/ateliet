@@ -1,4 +1,9 @@
-# Ateliet
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/lockup-dark.svg">
+    <img src="brand/lockup.svg" alt="ateliet" height="64">
+  </picture>
+</h1>
 
 Um clone minimalista do Obsidian, com núcleo em **Rust**, que abre **o mesmo vault** que o Obsidian e roda os **plugins da comunidade do Obsidian sem modificação**.
 
@@ -174,3 +179,7 @@ Plugins testados num vault real: Dataview (incluindo queries inline no Live Prev
 ## Arquitetura
 
 Veja [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Marca
+
+O símbolo, o logotipo e os ícones saem de `brand/build.py`; o conceito e as regras de uso estão em [brand/README.md](brand/README.md).

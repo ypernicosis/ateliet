@@ -1118,7 +1118,8 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .launcher-main { flex: 1 1 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: var(--size-4-8); gap: var(--size-4-8); }
 .launcher-brand { text-align: center; }
 .launcher-brand img { width: 88px; height: 88px; }
-.launcher-brand h1 { margin: var(--size-4-2) 0 var(--size-4-1); font-size: 28px; letter-spacing: -0.02em; }
+/* the wordmark is outlined type (brand/wordmark.svg), painted in the theme's text colour */
+.launcher-wordmark { width: 133px; height: 41px; margin: var(--size-4-3) auto var(--size-4-2); background: var(--text-normal); -webkit-mask: url(wordmark.svg) center / contain no-repeat; mask: url(wordmark.svg) center / contain no-repeat; }
 .launcher-tagline { color: var(--text-muted); }
 .launcher-error { color: var(--text-error); max-width: 480px; text-align: center; font-size: var(--font-ui-small); user-select: text; -webkit-user-select: text; }
 .launcher-actions { width: min(480px, 100%); display: flex; flex-direction: column; }
