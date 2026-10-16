@@ -9,4 +9,5 @@ MINIFY="--minify"
 "$DENO" bundle --config ui/deno.json --platform browser --format esm --code-splitting --outdir dist $MINIFY ui/main.ts
 cp ui/index.html ui/styles.css dist/
 cp icons/icon.png dist/icon.png
+cp brand/wordmark.svg dist/wordmark.svg
 echo "built: $(du -sh dist | cut -f1)"

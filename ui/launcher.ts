@@ -13,8 +13,8 @@ export async function showLauncher(error?: string) {
 
   const brand = main.createDiv("launcher-brand");
   brand.createEl("img", { attr: { src: "icon.png", alt: "" } });
-  brand.createEl("h1", { text: "Ateliet" });
-  brand.createDiv({ cls: "launcher-tagline", text: "A minimal workshop for your Obsidian vaults." });
+  brand.createEl("h1", { cls: "launcher-wordmark", attr: { "aria-label": "ateliet" } });
+  brand.createDiv({ cls: "launcher-tagline", text: "a minimal workshop for your obsidian vaults." });
   if (error) main.createDiv({ cls: "launcher-error", text: error });
 
   const actions = main.createDiv("launcher-actions");
