@@ -68,7 +68,9 @@ Na parte de baixo da faixa lateral esquerda fica o botão de atualizar (uma seta
 3. compila (`cargo build --release`);
 4. troca o executável do app instalado (dentro do `.app`) e reinicia, salvando as notas abertas antes.
 
-O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou. Sem commits novos, o mesmo botão oferece *Rebuild anyway*. O app guarda o caminho do clone em que foi compilado: se você mover o clone, compile e instale de novo a partir do novo lugar (passos 6 e 7).
+O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou. Sem commits novos, o mesmo botão oferece *Rebuild anyway*.
+
+**Atualização automática** (ligada por padrão; a chave *Update automatically* fica na mesma janela). Quando a verificação acha commits novos, o Ateliet faz os passos 1 a 4 sozinho, em segundo plano, sem reiniciar: um aviso diz que está atualizando e outro, no fim, oferece reiniciar na hora. Quem não reiniciar abre a versão nova da próxima vez. Se algum passo falhar (por exemplo, o clone tem mudanças locais que impedem o `git pull --ff-only`), aparece um aviso com o erro e o mesmo commit não é tentado de novo até o app reabrir; o log completo fica em *Update Ateliet*. O app guarda o caminho do clone em que foi compilado: se você mover o clone, compile e instale de novo a partir do novo lugar (passos 6 e 7).
 
 ## Benchmark
 

@@ -530,17 +530,18 @@ kbd { font-family: var(--font-monospace); font-size: var(--font-ui-smaller); pad
 .workspace-split.mod-sidedock.is-sidedock-collapsed { overflow: hidden; }
 .workspace-split.mod-sidedock.is-sidedock-collapsed > *:not(.workspace-leaf-resize-handle) { display: none; }
 /* The sidebars split horizontally, so the rule above gave this handle a 1px height: it could not be grabbed.
-   As in Obsidian, it runs up from the bottom for --divider-vertical-height (themes such as Primary set it). */
-.workspace-split.mod-sidedock > .workspace-leaf-resize-handle { position: absolute; top: auto; bottom: 0; height: var(--divider-vertical-height); width: 7px; cursor: col-resize; background: transparent !important; }
+   As in Obsidian, it runs up from the bottom for --divider-vertical-height (themes such as Primary set it).
+   Only the sidebar's own width handle: the ones between groups stacked in it keep the row divider. */
+.workspace-split.mod-sidedock > .workspace-leaf-resize-handle.mod-sidedock-width { position: absolute; top: auto; bottom: 0; height: var(--divider-vertical-height); width: 7px; cursor: col-resize; background: transparent !important; }
 .is-grabbing .workspace-split.mod-sidedock { transition: none; }
 /* while dragging a divider, the cursor stays the resize one over whatever passes under it */
 body.is-grabbing, body.is-grabbing * { cursor: col-resize !important; }
 body.is-grabbing.is-grabbing-row, body.is-grabbing.is-grabbing-row * { cursor: row-resize !important; }
-.workspace-split.mod-sidedock > .workspace-leaf-resize-handle:hover { background: var(--divider-color-hover) !important; opacity: 0.6; }
+.workspace-split.mod-sidedock > .workspace-leaf-resize-handle.mod-sidedock-width:hover { background: var(--divider-color-hover) !important; opacity: 0.6; }
 .workspace-split.mod-left-split { border-right: 1px solid var(--divider-color); }
-.workspace-split.mod-left-split > .workspace-leaf-resize-handle { right: -4px; }
+.workspace-split.mod-left-split > .workspace-leaf-resize-handle.mod-sidedock-width { right: -4px; }
 .workspace-split.mod-right-split { border-left: 1px solid var(--divider-color); }
-.workspace-split.mod-right-split > .workspace-leaf-resize-handle { left: -4px; }
+.workspace-split.mod-right-split > .workspace-leaf-resize-handle.mod-sidedock-width { left: -4px; }
 .workspace-split.mod-sidedock.is-sidedock-collapsed { border: none; }
 
 /* tabs */
@@ -719,6 +720,9 @@ body:not(.show-view-header) .mod-root .view-header { display: none; }
 /* CodeMirror wraps lines with white-space: break-spaces, and WebKit before 2.52 (Safari included) does not
    justify break-spaces text: the lines come out ragged. Justified lines use pre-wrap, which it justifies. */
 .is-text-justified .markdown-source-view.mod-cm6 .cm-content.cm-lineWrapping > .cm-line { white-space: pre-wrap; }
+/* Where the webview leaves a justified line that ends in a hyphenation break ragged (see
+   justifiesHyphenatedLines in app.ts), the editor does without automatic hyphenation, so every line is flush. */
+.is-text-justified.is-hyphenation-ragged .markdown-source-view.mod-cm6 .cm-content > .cm-line { hyphens: manual !important; -webkit-hyphens: manual !important; }
 :where(.markdown-rendered) :is(h1, h2, h3, h4, h5, h6, pre, table, .math-block, .mermaid) { text-align: start; }
 /* CM measures block widgets by their border box: keep children's margins (callout, properties) inside it,
    or every line below the widget drifts and clicks land on the wrong line. */
@@ -1233,7 +1237,10 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .side-dock-ribbon-action.mod-update.is-available::after {
   content: ""; position: absolute; top: 4px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--interactive-accent);
 }
+.side-dock-ribbon-action.mod-update.is-ready::after { background: var(--color-green); }
+.notice.mod-ateliet-update-ready { cursor: var(--cursor); }
 .mod-ateliet-update { width: 560px; max-width: 90vw; }
+.mod-ateliet-update p { white-space: pre-wrap; }
 .mod-ateliet-update .mod-muted { color: var(--text-muted); }
 .ateliet-update-commits { max-height: 30vh; overflow-y: auto; padding-inline-start: 1.2em; user-select: text; -webkit-user-select: text; font-size: var(--font-ui-small); }
 .ateliet-update-commits li { margin-block: 2px; }

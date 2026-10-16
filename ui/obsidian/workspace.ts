@@ -163,7 +163,7 @@ export class WorkspaceSidedock extends WorkspaceSplit {
     super(app, "horizontal");
     this.side = side;
     this.containerEl.addClass("mod-sidedock", `mod-${side}-split`);
-    this.resizeHandle = createDiv("workspace-leaf-resize-handle");
+    this.resizeHandle = createDiv("workspace-leaf-resize-handle mod-sidedock-width");
     this.resizeHandle.addEventListener("mousedown", (e) => this.startResize(e));
     this.setSize(this.size);
   }
@@ -186,7 +186,9 @@ export class WorkspaceSidedock extends WorkspaceSplit {
     const move = (ev: MouseEvent) => {
       const d = ev.clientX - start;
       this.setSize(this.side === "left" ? startSize + d : startSize - d);
+      // the main area loses what the sidebar gains: its views resize too
       this.onResize();
+      this.app.workspace.rootSplit.onResize();
     };
     const up = () => {
       document.body.removeClass("is-grabbing");
@@ -252,10 +254,22 @@ export class WorkspaceTabs extends WorkspaceParent {
         leaves.push(l);
       });
       if (index < 0 || index > this.children.length) index = this.children.length;
-      leaves.forEach((l, i) => super.insertChild(index + i, l, resize));
+      leaves.forEach((l, i) => this.insertChild(index + i, l, resize));
       return;
     }
+    // The tab on screen stays on screen: a tab added before it moves it one place right.
+    child.parent?.removeChild(child);
+    if (index < 0 || index > this.children.length) index = this.children.length;
+    if (this.children.length && index <= this.currentTab) this.currentTab++;
     super.insertChild(index, child, resize);
+  }
+
+  /** Closing or moving away a tab before the one on screen moves it one place left; closing the one on
+   * screen shows the tab that took its place (the last one when it was last). */
+  removeChild(child: WorkspaceItem, resize?: boolean): void {
+    const i = this.children.indexOf(child);
+    if (i !== -1 && i < this.currentTab) this.currentTab--;
+    super.removeChild(child, resize);
   }
 
   constructor(app: any) {
@@ -636,14 +650,7 @@ export class WorkspaceLeaf extends WorkspaceItem {
     const parent = this.parent;
     const wasActive = ws.activeLeaf === this;
     this.closeView();
-    if (parent) {
-      const idx = parent.children.indexOf(this);
-      parent.removeChild(this);
-      if (parent instanceof WorkspaceTabs && parent.children.length) {
-        parent.currentTab = Math.min(idx, parent.children.length - 1);
-        parent.updateVisibility();
-      }
-    }
+    parent?.removeChild(this);
     this.trigger("detach");
     ws.onLeafDetached(this, wasActive);
   }
@@ -1076,10 +1083,19 @@ export class Workspace extends Events {
   /** @internal */ onSidedockToggle() {
     document.body.toggleClass("is-left-sidedock-collapsed", this.leftSplit.collapsed);
     document.body.toggleClass("is-right-sidedock-collapsed", this.rightSplit.collapsed);
-    this.rootSplit.onResize();
-    this.trigger("resize");
+    const resize = () => {
+      this.rootSplit.onResize();
+      this.leftSplit.onResize();
+      this.rightSplit.onResize();
+      this.trigger("resize");
+    };
+    resize();
+    // the sidebar's width animates (0.12s): views that measure themselves need the final size too
+    window.clearTimeout(this.sidedockResizeTimer);
+    this.sidedockResizeTimer = window.setTimeout(resize, 160);
     this.requestSaveLayout();
   }
+  private sidedockResizeTimer = 0;
 
   /** @internal */ recordFileOpen(file: TFile) {
     this.lastOpenFiles = [file.path, ...this.lastOpenFiles.filter((p) => p !== file.path)].slice(0, 20);

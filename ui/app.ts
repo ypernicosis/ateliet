@@ -592,10 +592,43 @@ export class CustomCss extends Events {
     const align = cfg("atelietTextAlign") || "justify";
     body.style.setProperty("--ateliet-text-align", align);
     body.toggleClass("is-text-justified", align === "justify");
+    body.toggleClass("is-hyphenation-ragged", align === "justify" && !justifiesHyphenatedLines());
     body.toggleClass("is-translucent", !!cfg("translucency"));
     body.toggleClass("show-ribbon", cfg("showRibbon") !== false);
     this.app.workspace.leftRibbon.containerEl.toggle(cfg("showRibbon") !== false);
   }
+}
+
+/** Whether the webview justifies a pre-wrap line (the editor's) that ends in a hyphenation break.
+ * Some WebKit releases justify the other lines and leave those ragged, so a justified page with
+ * automatic hyphenation (Scriptorium turns it on) comes out uneven at every hyphen. Measured once:
+ * on a line broken at a soft hyphen, an engine that justifies it widens the spaces past their natural
+ * width. A few column widths, since one of them could leave the line with no slack to spread. */
+let hyphenatedLinesJustify: boolean | null = null;
+function justifiesHyphenatedLines(): boolean {
+  if (hyphenatedLinesJustify !== null) return hyphenatedLinesJustify;
+  const box = document.body.createDiv();
+  box.style.cssText = "position:absolute;left:-10000px;top:0;visibility:hidden;font:16px serif;white-space:pre-wrap;hyphens:manual;-webkit-hyphens:manual;";
+  box.setText("ab cd " + Array(40).fill("mo").join("\u00AD"));
+  const space = document.createRange();
+  space.setStart(box.firstChild!, 2);
+  space.setEnd(box.firstChild!, 3);
+  let justified = false;
+  try {
+    for (const width of [180, 187, 193, 199, 206]) {
+      box.style.width = width + "px";
+      box.style.textAlign = "left";
+      const natural = space.getBoundingClientRect().width;
+      box.style.textAlign = "justify";
+      if (space.getBoundingClientRect().width > natural + 0.5) {
+        justified = true;
+        break;
+      }
+    }
+  } finally {
+    box.remove();
+  }
+  return (hyphenatedLinesJustify = justified);
 }
 
 function hexToHsl(hex: string): [number, number, number] {
