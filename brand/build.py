@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BRAND = ROOT / "brand"
 CACHE = Path(os.environ.get("ATELIET_FONT_CACHE", Path.home() / ".cache" / "ateliet-brand"))
 
-PAPER = "#F3EEE4"
+PAPER = "#F4F2EC"
 INK = "#18181C"
 BLUE = "#9BD3EA"   # non-photo blue, the colour of underdrawing
 GUIDE = "#86C6E3"  # the printed guides of manuscript paper
@@ -134,7 +134,7 @@ def guides(frame=FRAME, trim=58, w=3.5, color=GUIDE):
 
 def tile(uid):
     return (f'<defs><linearGradient id="p{uid}" x1="0" y1="0" x2="0" y2="1">'
-            f'<stop offset="0" stop-color="#F7F3EB"/><stop offset="1" stop-color="#EEE8DC"/></linearGradient></defs>'
+            f'<stop offset="0" stop-color="#F9F7F2"/><stop offset="1" stop-color="#EFECE5"/></linearGradient></defs>'
             f'<path d="{squircle()}" fill="url(#p{uid})"/>')
 
 

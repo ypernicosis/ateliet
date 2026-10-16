@@ -27,7 +27,7 @@ A haste é inclinada a 13°, o mesmo ângulo das hastes do itálico do logotipo,
 ## regras
 
 - Tudo em minúsculas: o nome, os títulos, as frases da marca. "ateliet", nunca "Ateliet" nem "ATELIET".
-- Três cores e nenhuma outra: papel `#F3EEE4`, nanquim `#18181C`, azul não-fotográfico `#9BD3EA` (guia `#86C6E3`). O azul aparece em uma coisa por vez.
+- Três cores e nenhuma outra: papel `#F4F2EC`, nanquim `#18181C`, azul não-fotográfico `#9BD3EA` (guia `#86C6E3`). O azul aparece em uma coisa por vez.
 - As medianizes são sempre papel. Num fundo escuro a página leva a margem de papel (como em `lockup-dark.svg`), ou se usa `mark-mono.svg` na cor do papel. Nunca medianizes pretas sobre página branca.
 - No lockup, a página tem a altura das maiúsculas do logotipo e assenta na linha de base. O espaço entre a página e a palavra é 0,42 do lado da página.
 - Não esticar, girar, contornar, sombrear (exceto o ícone do macOS), nem trocar a fonte do logotipo.
