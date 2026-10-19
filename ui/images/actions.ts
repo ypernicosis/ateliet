@@ -5,7 +5,7 @@
 import { ImageItem, api, embedLink, ensureInVault, fullUrl, insertImages, notesUsing, vaultFile } from "./api.ts";
 import { ConfirmationModal, FuzzySuggestModal, Menu, Notice } from "../obsidian/ui.ts";
 import { TFile, TFolder } from "../obsidian/vault.ts";
-import { invoke } from "../tauri.ts";
+import { canvasBlob, copyPng, invoke } from "../tauri.ts";
 
 /** What the views need from the images plugin. */
 export interface ImagesHost {
@@ -100,17 +100,17 @@ export async function newNoteWithImages(host: ImagesHost, items: ImageItem[]) {
 
 async function copyImage(item: ImageItem) {
   try {
-    const blob = await (await fetch(fullUrl(item))).blob();
-    let png = blob;
-    if (blob.type !== "image/png") {
+    const png = (async () => {
+      const blob = await (await fetch(fullUrl(item))).blob();
+      if (blob.type === "image/png") return blob;
       const bmp = await createImageBitmap(blob);
       const canvas = document.createElement("canvas");
       canvas.width = bmp.width;
       canvas.height = bmp.height;
       canvas.getContext("2d")!.drawImage(bmp, 0, 0);
-      png = await new Promise<Blob>((r) => canvas.toBlob((b) => r(b!), "image/png"));
-    }
-    await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      return canvasBlob(canvas);
+    })();
+    await copyPng(png);
     new Notice("Image copied.");
   } catch (e) {
     new Notice("Could not copy the image: " + e);
