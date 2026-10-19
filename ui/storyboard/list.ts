@@ -148,6 +148,7 @@ export function describe(b: Board): string {
   const count = `${n} ${n === 1 ? k.unit : k.units}`;
   void frameStarts;
   if (isPageKind(b.kind)) return `${k.name} · ${count}${b.page?.rtl ? " · right to left" : ""}`;
+  if (b.kind === "canvas") return k.name;
   return `${k.name} · ${count} · ${timecode(totalFrames(b), b.fps)} · ${b.infinite ? "infinite canvas" : `${b.width} × ${b.height}`}`;
 }
 

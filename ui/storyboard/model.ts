@@ -158,14 +158,20 @@ export interface Onion {
  * - thumbnails: sheets of small panels for fast exploration;
  * - name: manga pages (ネーム): panels, balloons, right to left, spreads;
  * - comic: comic pages, left to right;
- * - webtoon: a vertical strip read by scrolling.
+ * - webtoon: a vertical strip read by scrolling;
+ * - canvas: one infinite canvas, no frames to go through and no timeline.
  */
-export type BoardKind = "animatic" | "presentation" | "thumbnails" | "name" | "comic" | "webtoon";
+export type BoardKind = "animatic" | "presentation" | "thumbnails" | "name" | "comic" | "webtoon" | "canvas";
 
 export const PAGE_KINDS: BoardKind[] = ["thumbnails", "name", "comic", "webtoon"];
 
 export function isPageKind(k: BoardKind | undefined): boolean {
   return !!k && PAGE_KINDS.includes(k);
+}
+
+/** Kinds that go through frames (all but the single infinite canvas). */
+export function hasFrames(k: BoardKind | undefined): boolean {
+  return k !== "canvas";
 }
 
 /** Page geometry, in pixels of the page canvas (which includes the bleed). */
@@ -349,7 +355,7 @@ export function sharedLayers(board: Board): Layer[] {
   return out;
 }
 
-const UNIT: Record<BoardKind, string> = { animatic: "Frame", presentation: "Shot", thumbnails: "Sheet", name: "Page", comic: "Page", webtoon: "Part" };
+const UNIT: Record<BoardKind, string> = { animatic: "Frame", presentation: "Shot", thumbnails: "Sheet", name: "Page", comic: "Page", webtoon: "Part", canvas: "Canvas" };
 
 export function unitName(board: Board): string {
   return UNIT[board.kind] || "Frame";
@@ -411,6 +417,8 @@ export function normalizeBoard(raw: any): Board {
     }
   }
   board.kind ||= "animatic";
+  // The infinite canvas has no edges, whatever an edit of the file says.
+  if (board.kind === "canvas") board.infinite = true;
   for (const l of Object.values(board.layers)) {
     l.x ||= 0;
     l.y ||= 0;

@@ -1,5 +1,5 @@
 // Creating a storyboard and changing one later. First the kind (animatic,
-// presentation board, thumbnails, name, comic, webtoon), then what that
+// presentation board, thumbnails, name, comic, webtoon, infinite canvas), then what that
 // kind needs: canvas size and frame rate; page size, resolution, reading
 // direction and spreads; cell shape; strip width and length.
 
@@ -26,7 +26,7 @@ export class BoardOptionsModal extends Modal {
   private body!: HTMLElement;
   private initialKind: BoardKind;
 
-  constructor(app: any, initial: Partial<BoardOptions>, private mode: "new" | "edit") {
+  constructor(app: any, initial: Partial<BoardOptions>, private mode: "new" | "edit", private frameCount = 1) {
     super(app);
     const kind = (initial.kind || "animatic") as BoardKind;
     this.initialKind = kind;
@@ -81,7 +81,10 @@ export class BoardOptionsModal extends Modal {
     el.empty();
     const kind = o.kind;
     if (kind === "animatic" || kind === "presentation") this.canvasOptions(el);
-    else if (kind === "name" || kind === "comic") {
+    else if (kind === "canvas") {
+      el.createDiv({ cls: "sb-hint sb-kind-note", text: "Draw anywhere, as far as you like. Exports take what was drawn." });
+      this.paper(el);
+    } else if (kind === "name" || kind === "comic") {
       if (this.mode === "new") {
         new Setting(el).setName("Page size").setDesc("Trim size; bleed and the inner frame (where panels and text belong) come with it, and can be changed later.").addDropdown((d) => {
           for (const p of PAGE_SIZES[kind]) d.addOption(p.id, p.name);
@@ -129,6 +132,9 @@ export class BoardOptionsModal extends Modal {
     }
     if (this.mode === "edit" && isPageKind(kind) !== isPageKind(this.initialKind)) {
       el.createDiv({ cls: "sb-hint sb-kind-warning", text: "Changing between frames and pages keeps every drawing; panels and balloons only show on pages." });
+    }
+    if (this.mode === "edit" && kind === "canvas" && this.initialKind !== "canvas" && this.frameCount > 1) {
+      el.createDiv({ cls: "sb-hint sb-kind-warning", text: `The infinite canvas shows only the first frame. The other ${this.frameCount - 1} stay in the file and come back with another kind.` });
     }
   }
 

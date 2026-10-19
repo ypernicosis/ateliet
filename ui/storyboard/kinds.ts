@@ -26,6 +26,7 @@ export const KINDS: KindInfo[] = [
   { id: "name", name: "Name (manga)", icon: "book-open", blurb: "Manga pages: panels, vertical balloons, right to left, spreads.", unit: "page", units: "pages" },
   { id: "comic", name: "Comic pages", icon: "book-open-text", blurb: "Comic pages: panels, balloons and captions, left to right, spreads.", unit: "page", units: "pages" },
   { id: "webtoon", name: "Webtoon", icon: "smartphone", blurb: "A vertical strip read by scrolling, exported in upload-sized slices.", unit: "part", units: "parts" },
+  { id: "canvas", name: "Infinite canvas", icon: "infinity", blurb: "One endless canvas: no frames, no timeline, no edges. Sketch, study, plan.", unit: "canvas", units: "canvases" },
 ];
 
 export function kindInfo(k: BoardKind | undefined): KindInfo {
@@ -178,6 +179,10 @@ export function startPanels(b: Board, layout?: string, aspect?: number) {
 
 /** A new storyboard of a kind. */
 export function boardForKind(o: KindOptions): Board {
+  if (o.kind === "canvas") {
+    // The size is only where the view starts.
+    return newBoard({ kind: "canvas", width: o.width, height: o.height, infinite: true, background: o.background, fps: o.fps });
+  }
   if (!isPageKind(o.kind)) {
     return newBoard({ kind: o.kind, width: o.width, height: o.height, infinite: o.infinite, background: o.background, fps: o.fps });
   }
