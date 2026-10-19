@@ -1282,7 +1282,7 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .sb-seg .clickable-icon.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
 .sb-hint { font-size: var(--font-ui-smaller); color: var(--text-faint); white-space: nowrap; }
 .sb-main { flex: 1 1 auto; display: flex; min-height: 0; }
-.sb-root.hide-side .sb-side, .sb-root.hide-timeline .sb-timeline { display: none; }
+.sb-root.hide-side .sb-side, .sb-root.hide-timeline .sb-timeline, .sb-root.no-frames .sb-timeline { display: none; }
 .sb-tools { flex: 0 0 44px; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 0; border-right: 1px solid var(--background-modifier-border); overflow-y: auto; scrollbar-width: none; }
 .sb-tool.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
 .sb-tool.is-active:hover { background: var(--interactive-accent-hover); color: var(--text-on-accent); }
@@ -1296,11 +1296,15 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 .sb-stage canvas { position: absolute; left: 0; top: 0; }
 .sb-overlay { pointer-events: none; }
 .sb-side { flex: 0 0 auto; width: 300px; min-width: 0; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
-.sb-side-handle { flex: 0 0 5px; cursor: col-resize; border-left: 1px solid var(--background-modifier-border); }
-.sb-side-handle:hover { background: var(--interactive-accent); }
+/* dividers: a hairline you can see, a wider strip you can grab */
+.sb-side-handle, .sb-side-resizer { position: relative; z-index: 4; flex: 0 0 1px; background: var(--background-modifier-border); touch-action: none; transition: background .12s; }
+.sb-side-handle { cursor: col-resize; }
+.sb-side-resizer { cursor: row-resize; }
+.sb-side-handle::after, .sb-side-resizer::after { content: ""; position: absolute; }
+.sb-side-handle::after { top: 0; bottom: 0; left: -5px; right: -5px; }
+.sb-side-resizer::after { left: 0; right: 0; top: -5px; bottom: -5px; }
+.sb-side-handle:hover, .sb-side-handle.is-dragging, .sb-side-resizer:hover, .sb-side-resizer.is-dragging { background: var(--interactive-accent); }
 .sb-root.hide-side .sb-side-handle { display: none; }
-.sb-side-resizer { flex: 0 0 5px; cursor: row-resize; border-top: 1px solid var(--background-modifier-border); }
-.sb-side-resizer:hover { background: var(--interactive-accent); }
 .sb-panel-head { display: flex; align-items: center; gap: 2px; padding: 4px 6px 4px 10px; min-width: 0; }
 .sb-panel-head > .clickable-icon { flex: 0 0 auto; }
 .sb-panel-title { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -1462,12 +1466,40 @@ input[type=color]::-webkit-color-swatch { border: none; border-radius: 50%; box-
 body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { padding-top: 28px; }
 .sb-focus .sb-toolbar, .sb-focus .sb-timeline, .sb-focus .sb-layers, .sb-focus .sb-side-resizer { display: none; }
 .sb-root.sb-focus.hide-side .sb-side, .sb-root.sb-focus.hide-side .sb-side-handle { display: flex; }
-.sb-focus .sb-side { width: 42%; }
 .sb-focus .sb-refs { flex: 1 1 auto; }
-.sb-focus.ref-left .sb-side { order: 0; }
-.sb-focus.ref-left .sb-side-handle { order: 1; border-left: none; border-right: 1px solid var(--background-modifier-border); }
-.sb-focus.ref-left .sb-tools { order: 2; border-left: 1px solid var(--background-modifier-border); }
-.sb-focus.ref-left .sb-center { order: 3; }
+/* the reference on any side; --sb-ref (set by split.ts) is its share */
+.sb-focus .sb-main { display: grid; grid-template-columns: 44px minmax(0, 1fr) 1px var(--sb-ref, 40%); grid-template-rows: minmax(0, 1fr); grid-template-areas: "tools center handle side"; }
+.sb-focus .sb-tools { grid-area: tools; }
+.sb-focus .sb-center { grid-area: center; }
+.sb-focus .sb-side-handle { grid-area: handle; }
+.sb-focus .sb-side { grid-area: side; width: auto !important; }
+.sb-focus.ref-left .sb-main { grid-template-columns: var(--sb-ref, 40%) 1px 44px minmax(0, 1fr); grid-template-areas: "side handle tools center"; }
+.sb-focus.ref-left .sb-tools { border-left: 1px solid var(--background-modifier-border); }
+.sb-focus.ref-below .sb-main { grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) 1px var(--sb-ref, 40%); grid-template-areas: "tools center" "tools handle" "tools side"; }
+.sb-focus.ref-above .sb-main { grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: var(--sb-ref, 40%) 1px minmax(0, 1fr); grid-template-areas: "tools side" "tools handle" "tools center"; }
+.sb-focus.ref-below .sb-side-handle, .sb-focus.ref-above .sb-side-handle { cursor: row-resize; }
+.sb-focus.ref-below .sb-side-handle::after, .sb-focus.ref-above .sb-side-handle::after { left: 0; right: 0; top: -6px; bottom: -6px; }
+.sb-focus .sb-side-handle::after { left: -6px; right: -6px; }
+/* a grip in the middle of the divider, and a stronger line where it snaps */
+.sb-focus .sb-side-handle::before { content: ""; position: absolute; z-index: 1; left: 50%; top: 50%; width: 5px; height: 36px; transform: translate(-50%, -50%); border-radius: 3px; background: var(--background-modifier-border-hover); box-shadow: 0 0 0 2px var(--background-primary); pointer-events: none; transition: background .12s; }
+.sb-focus.ref-below .sb-side-handle::before, .sb-focus.ref-above .sb-side-handle::before { width: 36px; height: 5px; }
+.sb-focus .sb-side-handle:hover::before, .sb-focus .sb-side-handle.is-dragging::before { background: var(--interactive-accent); }
+.sb-side-handle.is-snapped, .sb-focus .sb-side-handle.is-snapped::before { background: var(--interactive-accent-hover); }
+/* the reference as a floating window over the drawing (split.ts places it) */
+.sb-main { position: relative; }
+.sb-root.ref-float .sb-refs { position: absolute; z-index: 4; flex: none; min-height: 0; background: var(--background-primary); border: 1px solid var(--background-modifier-border-hover); border-radius: var(--radius-m); box-shadow: var(--shadow-l); overflow: hidden; }
+.sb-root.ref-float .sb-refs .sb-panel-head { cursor: grab; }
+.sb-root.ref-float .sb-refs.is-moving .sb-panel-head { cursor: grabbing; }
+.sb-root.ref-float .sb-side-resizer { display: none; }
+.sb-root.ref-float .sb-layers { flex: 1 1 auto; }
+.sb-root.is-drawing.ref-float .sb-refs { pointer-events: none; }
+.sb-refs-grip { display: none; }
+.sb-root.ref-float .sb-refs-grip { display: block; position: absolute; right: 0; bottom: 0; z-index: 3; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 50%, var(--background-modifier-border-hover) 50%, var(--background-modifier-border-hover) 58%, transparent 58%, transparent 70%, var(--background-modifier-border-hover) 70%, var(--background-modifier-border-hover) 78%, transparent 78%); }
+.sb-panel-head > .clickable-icon.is-active { color: var(--interactive-accent); }
+.sb-focus.ref-float .sb-main { grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "tools center"; }
+/* floating, the window stays when the sidebar (layers) is hidden, and in focus it has no side to sit in */
+.sb-root.ref-float.hide-side .sb-side, .sb-root.sb-focus.ref-float .sb-side, .sb-root.sb-focus.ref-float.hide-side .sb-side { display: contents; }
+.sb-root.ref-float.hide-side .sb-layers, .sb-root.sb-focus.ref-float .sb-side-handle, .sb-root.sb-focus.ref-float.hide-side .sb-side-handle { display: none; }
 .sb-focusbar { display: none; }
 .sb-focus .sb-focusbar { display: flex; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; align-items: center; gap: 2px; padding: 3px 6px; max-width: calc(100% - 20px); overflow-x: auto; scrollbar-width: none; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: var(--shadow-s); opacity: .94; transition: opacity .2s; }
 .sb-focus .sb-focusbar > * { flex: 0 0 auto; }
@@ -1489,7 +1521,7 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .sb-phone-screen { height: min(844px, 74vh); aspect-ratio: 390 / 844; overflow-y: auto; background: #fff; border-radius: 22px; scrollbar-width: thin; }
 .sb-phone-part { display: block; width: 100%; height: auto; }
 .sb-options-modal { width: min(760px, 94vw); }
-.sb-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 6px 0 14px; }
+.sb-kinds { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 6px 0 14px; }
 .sb-kind { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); cursor: var(--cursor); min-width: 0; }
 .sb-kind:hover { border-color: var(--background-modifier-border-hover); background: var(--background-modifier-hover); }
 .sb-kind.is-active { border-color: var(--interactive-accent); box-shadow: 0 0 0 1px var(--interactive-accent); background: var(--background-modifier-hover); }
@@ -1498,7 +1530,7 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .sb-kind-icon svg { width: 20px; height: 20px; }
 .sb-kind-name { font-weight: var(--font-semibold); font-size: var(--font-ui-small); }
 .sb-kind-blurb { font-size: var(--font-ui-smaller); color: var(--text-muted); line-height: 1.35; }
-.sb-kind-warning { white-space: normal; margin-top: 8px; }
+.sb-kind-warning, .sb-kind-note { white-space: normal; margin-top: 8px; }
 @media (max-width: 640px) { .sb-kinds { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Copying Pictogrep's library into Ateliet */

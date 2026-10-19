@@ -20,6 +20,9 @@ import { Compositor, DrawOptions, Floating, Scratch, StrokeOverlay, ViewState, c
 import { BoardStep, History, Step, TileStep, cloneBoard, GroupStep, SpreadTarget } from "./history.ts";
 import { Events } from "../obsidian/events.ts";
 
+/** Room left around the frame when it is fitted in view. */
+export const FIT_MARGIN = 32;
+
 export interface Selection {
   /** Polygon in canvas coordinates. */
   points: { x: number; y: number }[];
@@ -477,10 +480,8 @@ export class Editor extends Events {
   /** True until the user zooms or pans: the frame then follows the stage's size. */
   private autoFit = true;
 
-  /** The whole frame in view (infinite canvas: the drawn area, or the start size). */
-  fit() {
-    const r = this.stage.getBoundingClientRect();
-    if (!r.width || !r.height || !this.frame) return;
+  /** What "fit" puts in view: the frame, both pages of a spread, or (infinite canvas) the drawn area. */
+  private fitArea(): { x: number; y: number; w: number; h: number } {
     const area = this.board.infinite ? this.comp.area(this.frame, false) : { x: 0, y: 0, w: this.board.width, h: this.board.height };
     // A spread: both pages in view.
     const f = this.facing();
@@ -488,7 +489,23 @@ export class Editor extends Events {
       area.x = Math.min(0, f.dx);
       area.w = this.board.width + Math.abs(f.dx);
     }
-    const margin = 32;
+    return area;
+  }
+
+  /** The shape of what is fitted in view; null when it has no edges or is read by scrolling. */
+  fitAspect(): number | null {
+    if (this.board.infinite || !this.frame) return null;
+    const area = this.fitArea();
+    if (this.board.kind === "webtoon" && area.h > area.w * 2) return null;
+    return area.w / area.h;
+  }
+
+  /** The whole frame in view (infinite canvas: the drawn area, or the start size). */
+  fit() {
+    const r = this.stage.getBoundingClientRect();
+    if (!r.width || !r.height || !this.frame) return;
+    const area = this.fitArea();
+    const margin = FIT_MARGIN;
     this.view.rotation = 0;
     if (this.board.kind === "webtoon" && area.h > area.w * 2) {
       // A long strip is read by scrolling: fit its width (up to the phone-ish size) and start at the top.

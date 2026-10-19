@@ -5,18 +5,19 @@
 //   │       │                                       │ layers            │
 //   └ timeline: transport · frames · notes ─────────────────────────────┘
 
-import { Editor, ToolHandler, selectionFrom } from "./editor.ts";
+import { Editor, FIT_MARGIN, ToolHandler, selectionFrom } from "./editor.ts";
 import { BrushKind, BRUSH_NAMES } from "./brush.ts";
 import { BoardOptionsModal } from "./dialogs.ts";
 import { ColorPanel } from "./color.ts";
 import { LayersPanel } from "./layers.ts";
 import { ReferencePanel } from "./references.ts";
+import { Arrange, Split } from "./split.ts";
 import { Timeline } from "./timeline.ts";
 import { BrushTool, EyedropperTool, FillTool, HandTool, LassoFillTool, MoveTool, SelectTool, ShapeTool, TOOL_INFO, ToolSettings, defaultToolSettings, fitTransform, toolsFor } from "./tools.ts";
 import { BalloonTool, PanelTool } from "./pagetools.ts";
 import { BALLOON_KINDS, LAYOUTS, layoutPanels, readingOrder, rectPanel } from "./pages.ts";
 import { THUMB_ASPECTS, kindInfo, startPanels } from "./kinds.ts";
-import { isPageKind } from "./model.ts";
+import { hasFrames, isPageKind } from "./model.ts";
 import { Layer, Reference, TraceMode, addFrame, newLayer, uid } from "./model.ts";
 import { cloneBoard } from "./history.ts";
 import { StoryDoc } from "./store.ts";
@@ -31,6 +32,7 @@ import { currentWindow, fileUrl, invoke } from "../tauri.ts";
 import { closePopover } from "./popover.ts";
 
 export const STORYBOARD_VIEW = "storyboard";
+const SIDE_ICONS: Record<"right" | "left" | "below" | "above", string> = { right: "panel-right", left: "panel-left", below: "panel-bottom", above: "panel-top" };
 const TOOLS_KEY = "ateliet-storyboard-tools";
 
 function loadToolSettings(): ToolSettings {
@@ -75,6 +77,7 @@ export class StoryboardView extends FileView {
   private onionBtn!: HTMLElement;
   private joinBtn: HTMLElement | null = null;
   private side!: HTMLElement;
+  private split: Split | null = null;
 
   getViewType() {
     return STORYBOARD_VIEW;
@@ -127,6 +130,8 @@ export class StoryboardView extends FileView {
     ed.commitFloating();
     await ed.save();
     this.refs?.destroy();
+    this.split?.destroy();
+    this.split = null;
     this.layers?.destroy();
     this.timeline?.destroy();
     this.colorPop?.panel.destroy();
@@ -138,14 +143,15 @@ export class StoryboardView extends FileView {
 
   private build(doc: StoryDoc) {
     const root = (this.root = this.contentEl.createDiv({ cls: "sb-root", attr: { "data-tauri-drag-region": "" } }));
+    // The infinite canvas is one drawing: no timeline, no frames to go through.
+    root.toggleClass("no-frames", !hasFrames(doc.board.kind));
     const bar = root.createDiv("sb-toolbar");
     const main = root.createDiv("sb-main");
     this.toolsEl = main.createDiv("sb-tools");
     const center = main.createDiv("sb-center");
     this.stage = center.createDiv({ cls: "sb-stage", attr: { tabindex: "0" } });
-    const handle = main.createDiv({ cls: "sb-side-handle", attr: { "aria-label": "Drag to resize" } });
+    const handle = main.createDiv({ cls: "sb-side-handle", attr: { "aria-label": "Drag to resize · double click in focus: fit the reference" } });
     const side = (this.side = main.createDiv("sb-side"));
-    this.dragWidth(handle, side);
     this.focusBar = center.createDiv("sb-focusbar");
     const ed = (this.ed = new Editor(doc, this.stage));
     ed.app = this.app;
@@ -154,12 +160,19 @@ export class StoryboardView extends FileView {
     this.settings.balloon.vertical = doc.board.kind === "name";
     this.buildToolbar(bar);
     this.buildTools();
-    const host = { trace: (r: Reference) => this.trace(r), place: (r: Reference) => this.layers?.placePicture(r.id) };
+    const host = { trace: (r: Reference) => this.trace(r), place: (r: Reference) => this.layers?.placePicture(r.id), shown: (size: { w: number; h: number } | null) => this.split?.setPicture(size), toggleFloat: () => this.toggleFloat() };
     ed.frame = doc.board.frames[0];
     this.refs = new ReferencePanel(this.app, ed, side, host);
     const resizer = side.createDiv("sb-side-resizer");
     this.layers = new LayersPanel(ed, side, { chooseReference: (cb) => this.chooseReference(cb), trace: () => this.trace() });
-    this.dragSplit(resizer, side);
+    this.split = new Split({
+      root, main, tools: this.toolsEl, center, side, handle, resizer,
+      refs: this.refs.el, refStage: this.refs.stageEl,
+      focus: () => !!this.focus,
+      canvasAspect: () => ed.fitAspect(),
+      canvasMargin: FIT_MARGIN,
+      floated: (on) => this.refs?.markFloating(on),
+    });
     this.timeline = new Timeline(this.app, ed, root);
 
     ed.on("history", () => this.updateHistory());
@@ -183,6 +196,9 @@ export class StoryboardView extends FileView {
     ed.on("board", () => this.updateJoin());
     ed.on("frame", () => this.updateJoin());
     ed.on("history", () => this.renderFocusBar());
+    // The frame's shape (size, a spread) can change what fits best beside the reference.
+    ed.on("frame", () => this.split?.schedule());
+    ed.on("board", () => this.split?.schedule());
     // Another tab coming forward leaves focus mode (it covers the whole window).
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf: any) => {
       if (this.focus && leaf && leaf !== this.leaf) this.setFocus(false);
@@ -198,57 +214,6 @@ export class StoryboardView extends FileView {
       ed.fit();
       if (!doc.thumbs.size) ed.scheduleThumb();
       this.updateTraceButton();
-    });
-  }
-
-  private dragWidth(handle: HTMLElement, side: HTMLElement) {
-    try {
-      const w = Number(localStorage.getItem("ateliet-storyboard-side") || 0);
-      if (w) side.style.width = `${w}px`;
-    } catch {
-      /* private mode */
-    }
-    handle.addEventListener("pointerdown", (e) => {
-      try { handle.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
-      const x0 = e.clientX, w0 = side.getBoundingClientRect().width;
-      // In focus mode the reference can sit on either side and is sized in percent.
-      const dir = this.focus && this.root.hasClass("ref-left") ? 1 : -1;
-      const total = side.parentElement!.getBoundingClientRect().width;
-      const move = (ev: PointerEvent) => {
-        const w = w0 + dir * (ev.clientX - x0);
-        if (this.focus) side.style.width = `${Math.max(15, Math.min(80, (w / total) * 100))}%`;
-        else side.style.width = `${Math.max(200, Math.min(900, w))}px`;
-      };
-      const up = () => {
-        handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", up);
-        try {
-          if (this.focus) localStorage.setItem("ateliet-storyboard-focus-ref", side.style.width);
-          else localStorage.setItem("ateliet-storyboard-side", String(Math.round(side.getBoundingClientRect().width)));
-        } catch {
-          /* private mode */
-        }
-      };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", up);
-    });
-  }
-
-  private dragSplit(handle: HTMLElement, side: HTMLElement) {
-    handle.addEventListener("pointerdown", (e) => {
-      try { handle.setPointerCapture(e.pointerId); } catch { /* synthetic or finished pointer */ }
-      const refs = this.refs!.el;
-      const y0 = e.clientY, h0 = refs.getBoundingClientRect().height;
-      const move = (ev: PointerEvent) => {
-        const total = side.getBoundingClientRect().height;
-        refs.style.flex = `0 0 ${Math.max(120, Math.min(total - 140, h0 + ev.clientY - y0))}px`;
-      };
-      const up = () => {
-        handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", up);
-      };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", up);
     });
   }
 
@@ -275,7 +240,7 @@ export class StoryboardView extends FileView {
     this.button(bar, "grid-3x3", "Guides and grid", (e) => this.guidesMenu(e));
     bar.createDiv("sb-sep");
     this.traceBtn = this.button(bar, "scan-line", "Trace (T shows/hides · hold Q to peek · Shift+T display)", (e) => this.traceMenu(e));
-    if (!isPageKind(ed.board.kind)) {
+    if (!isPageKind(ed.board.kind) && hasFrames(ed.board.kind)) {
       this.onionBtn = this.button(bar, "layers-3", "Onion skin (O): the frames before and after, faint", () => this.timeline?.toggleOnion());
       const onionMore = this.button(bar, "chevron-down", "Onion skin settings", () => this.timeline?.onionPanel(onionMore));
       onionMore.addClass("sb-caret");
@@ -345,7 +310,8 @@ export class StoryboardView extends FileView {
   // Only the drawing and the reference, side by side, over the whole window:
   // Ateliet's tabs and sidebars, the toolbar, the timeline and the layers go
   // away; the slim tool column and a small floating bar stay. Tab or Esc
-  // come back. The reference can sit left or right and the divider moves.
+  // come back. Where the reference sits and how much room it gets is the
+  // split's business (split.ts).
 
   get inFocus() {
     return !!this.focus;
@@ -358,30 +324,15 @@ export class StoryboardView extends FileView {
       this.focus = { parent: this.root.parentElement!, next: this.root.nextSibling, osFullscreen: false };
       document.body.appendChild(this.root);
       this.root.addClass("sb-focus");
-      let left = false, width = "42%";
-      try {
-        left = localStorage.getItem("ateliet-storyboard-focus-left") === "1";
-        width = localStorage.getItem("ateliet-storyboard-focus-ref") || width;
-      } catch {
-        /* private mode */
-      }
-      this.root.toggleClass("ref-left", left);
-      this.side.style.width = width;
     } else {
       const f = this.focus!;
       this.focus = null;
       if (f.osFullscreen) await currentWindow().setFullscreen(false).catch(() => {});
-      this.root.removeClass("sb-focus", "ref-left");
+      this.root.removeClass("sb-focus");
       if (f.parent.isConnected) f.parent.insertBefore(this.root, f.next && f.next.parentNode === f.parent ? f.next : null);
       else this.contentEl.appendChild(this.root);
-      let w = 0;
-      try {
-        w = Number(localStorage.getItem("ateliet-storyboard-side") || 0);
-      } catch {
-        /* private mode */
-      }
-      this.side.style.width = w ? `${w}px` : "";
     }
+    this.split?.layout();
     this.focusBtn?.toggleClass("is-active", !!this.focus);
     this.renderFocusBar();
     this.stage.focus({ preventScroll: true });
@@ -422,24 +373,46 @@ export class StoryboardView extends FileView {
     bar.createDiv("sb-sep");
     const traces = ed.layers.filter((l) => l.kind === "trace");
     b("scan-line", "Trace (T)", () => this.toggleTrace(), traces.some((l) => l.visible));
-    if (!isPageKind(ed.board.kind)) b("layers-3", "Onion skin (O)", () => this.timeline?.toggleOnion(), ed.board.onion.enabled);
+    if (!isPageKind(ed.board.kind) && hasFrames(ed.board.kind)) b("layers-3", "Onion skin (O)", () => this.timeline?.toggleOnion(), ed.board.onion.enabled);
     b("flip-horizontal-2", "Mirror the view (F)", () => ed.setMirror(!ed.view.mirror), ed.view.mirror);
+    if (hasFrames(ed.board.kind)) {
+      bar.createDiv("sb-sep");
+      b("chevron-left", "Previous frame (↑ or ,)", () => this.timeline?.go(ed.frameIndex - 1), false, ed.frameIndex === 0);
+      bar.createDiv({ cls: "sb-focus-frame", text: `${ed.frameIndex + 1} / ${ed.board.frames.length}` });
+      b("chevron-right", "Next frame (↓ or .)", () => this.timeline?.go(ed.frameIndex + 1), false, ed.frameIndex >= ed.board.frames.length - 1);
+      b("plus", "New frame (Ctrl/Cmd+Enter)", () => ed.newFrame());
+    }
     bar.createDiv("sb-sep");
-    b("chevron-left", "Previous frame (↑ or ,)", () => this.timeline?.go(ed.frameIndex - 1), false, ed.frameIndex === 0);
-    bar.createDiv({ cls: "sb-focus-frame", text: `${ed.frameIndex + 1} / ${ed.board.frames.length}` });
-    b("chevron-right", "Next frame (↓ or .)", () => this.timeline?.go(ed.frameIndex + 1), false, ed.frameIndex >= ed.board.frames.length - 1);
-    b("plus", "New frame (Ctrl/Cmd+Enter)", () => ed.newFrame());
-    bar.createDiv("sb-sep");
-    b("arrow-left-right", "Reference on the other side", () => {
-      const left = !this.root.hasClass("ref-left");
-      this.root.toggleClass("ref-left", left);
-      try {
-        localStorage.setItem("ateliet-storyboard-focus-left", left ? "1" : "0");
-      } catch {
-        /* private mode */
-      }
-    });
+    const layout = b(this.split?.state.floating ? "picture-in-picture-2" : SIDE_ICONS[this.split?.current || "right"], "Where the reference goes", () => this.layoutMenu(layout));
     b(this.focus.osFullscreen ? "shrink" : "expand", this.focus.osFullscreen ? "Leave full screen" : "Full screen", () => this.toggleOsFullscreen(), this.focus.osFullscreen);
+  }
+
+  private toggleFloat() {
+    if (!this.split) return;
+    this.split.setFloating(!this.split.state.floating);
+    this.renderFocusBar();
+  }
+
+  /** Focus: automatic, a chosen side, or a floating window. */
+  private layoutMenu(anchor: HTMLElement) {
+    const split = this.split;
+    if (!split) return;
+    const set = (a: Arrange) => {
+      split.setArrange(a);
+      this.renderFocusBar();
+    };
+    const floating = split.state.floating;
+    const m = new Menu();
+    m.addItem((i) => i.setTitle("Automatic: fit to the picture").setIcon("sparkles").setChecked(!floating && split.state.arrange === "auto").onClick(() => set("auto")));
+    m.addSeparator();
+    for (const [a, name] of [["right", "Reference on the right"], ["left", "Reference on the left"], ["below", "Reference below"], ["above", "Reference above"]] as [Exclude<Arrange, "auto">, string][]) {
+      m.addItem((i) => i.setTitle(name).setIcon(SIDE_ICONS[a]).setChecked(!floating && split.state.arrange === a).onClick(() => set(a)));
+    }
+    m.addItem((i) => i.setTitle("Floating window over the drawing").setIcon("picture-in-picture-2").setChecked(floating).onClick(() => this.toggleFloat()));
+    m.addSeparator();
+    m.addItem((i) => i.setTitle(floating ? "Fit the window to the picture (double click its title)" : "Fit to the picture again (double click the divider)").setIcon("scan").setDisabled(floating ? !split.state.floatSized : split.state.share == null).onClick(() => split.fitAgain()));
+    const r = anchor.getBoundingClientRect();
+    m.showAtPosition({ x: r.left, y: r.bottom + 4 });
   }
 
   private toggleJoined() {
@@ -1017,6 +990,7 @@ export class StoryboardView extends FileView {
     const mod = e.ctrlKey || e.metaKey;
     const k = e.key;
     const lower = k.toLowerCase();
+    const frames = hasFrames(ed.board.kind);
     let used = true;
     if (!mod) this.keys.add(lower === " " ? " " : lower);
     if (ed.tool?.key?.(e)) {
@@ -1030,20 +1004,20 @@ export class StoryboardView extends FileView {
     else if (mod && lower === "c") this.copy(false);
     else if (mod && lower === "x") this.copy(true);
     else if (mod && lower === "v") used = false; // the paste event handles it
-    else if (mod && k === "Enter") ed.newFrame();
+    else if (mod && k === "Enter" && frames) ed.newFrame();
     else if (mod && e.shiftKey && lower === "n") ed.addLayer("raster");
     else if (mod) used = false;
     else if (k === " ") {
       if (!this.panning) this.stage.style.cursor = "grab";
     } else if (k === "ArrowLeft") this.refs?.step(-1);
     else if (k === "ArrowRight") this.refs?.step(1);
-    else if (k === "ArrowUp" || k === ",") this.timeline?.go(ed.frameIndex - 1);
-    else if (k === "ArrowDown" || k === ".") this.timeline?.go(ed.frameIndex + 1);
+    else if ((k === "ArrowUp" || k === ",") && frames) this.timeline?.go(ed.frameIndex - 1);
+    else if ((k === "ArrowDown" || k === ".") && frames) this.timeline?.go(ed.frameIndex + 1);
     else if (k === "Tab" && e.shiftKey) this.root.toggleClass("hide-timeline", !this.root.hasClass("hide-timeline"));
     else if (k === "Tab") this.setFocus(!this.focus);
-    else if (k === "Home") this.timeline?.go(0);
-    else if (k === "End") this.timeline?.go(ed.board.frames.length - 1);
-    else if (k === "Enter") this.timeline?.toggle();
+    else if (k === "Home" && frames) this.timeline?.go(0);
+    else if (k === "End" && frames) this.timeline?.go(ed.board.frames.length - 1);
+    else if (k === "Enter" && frames) this.timeline?.toggle();
     else if (k === "Escape") {
       if (ed.floating) ed.cancelFloating();
       else if (ed.selection) ed.setSelection(null);
@@ -1057,7 +1031,7 @@ export class StoryboardView extends FileView {
       ed.secondary = "#ffffff";
       ed.trigger("color");
     } else if (lower === "f") ed.setMirror(!ed.view.mirror);
-    else if (lower === "o" && !isPageKind(ed.board.kind)) this.timeline?.toggleOnion();
+    else if (lower === "o" && !isPageKind(ed.board.kind) && frames) this.timeline?.toggleOnion();
     else if (lower === "t" && e.shiftKey) this.cycleTraceMode();
     else if (lower === "t") this.toggleTrace();
     else if (lower === "q") this.peek(true);
@@ -1350,6 +1324,12 @@ export class StoryboardView extends FileView {
 
   private importMenu(e: MouseEvent) {
     const m = new Menu();
+    if (!hasFrames(this.ed!.board.kind)) {
+      m.addItem((i) => i.setTitle("Clip Studio file (.clip) as layers…").setIcon("layers").onClick(() => this.importClip(false)));
+      m.addItem((i) => i.setTitle("Pictures as layers…").setIcon("image-plus").onClick(() => this.importPictures(false)));
+      m.showAtMouseEvent(e);
+      return;
+    }
     m.addItem((i) => i.setTitle("Clip Studio file (.clip) as layers of this frame…").setIcon("layers").onClick(() => this.importClip(false)));
     m.addItem((i) => i.setTitle("Clip Studio file (.clip) as a new frame…").setIcon("square-plus").onClick(() => this.importClip(true)));
     m.addSeparator();
@@ -1464,6 +1444,12 @@ export class StoryboardView extends FileView {
     const kind = this.ed!.board.kind;
     if (isPageKind(kind)) return this.pageExportMenu(e);
     const m = new Menu();
+    if (!hasFrames(kind)) {
+      m.addItem((i) => i.setTitle("What is drawn, as a picture in the vault").setIcon("image").onClick(() => this.exportCurrent()));
+      m.addItem((i) => i.setTitle("Copy what is drawn").setIcon("copy").onClick(() => this.copyFrame()));
+      m.showAtMouseEvent(e);
+      return;
+    }
     m.addItem((i) => i.setTitle("Board pages to print or send (PDF, six shots per page)").setIcon("file-text").onClick(() => this.exportPages("pdf")));
     m.addItem((i) => i.setTitle("Frames as PNG pictures in the vault…").setIcon("images").onClick(() => this.exportPng()));
     m.addItem((i) => i.setTitle("Contact sheet (all frames with notes)…").setIcon("layout-grid").onClick(() => this.exportSheet()));
@@ -1610,7 +1596,7 @@ export class StoryboardView extends FileView {
     try {
       const blob: Blob | null = await new Promise((r) => pic.toBlob(r, "image/png"));
       await navigator.clipboard.write([new (window as any).ClipboardItem({ "image/png": blob })]);
-      new Notice("Frame copied.");
+      new Notice(hasFrames(ed.board.kind) ? "Frame copied." : "Copied.");
     } catch {
       this.clipboard = { canvas: pic, x: 0, y: 0 };
       new Notice("Copied inside Ateliet (the system clipboard refused the picture).");
@@ -1620,7 +1606,7 @@ export class StoryboardView extends FileView {
   private async editSettings() {
     const ed = this.ed!;
     const b = ed.board;
-    const modal = new BoardOptionsModal(this.app, { kind: b.kind, name: this.baseName(), width: b.width, height: b.height, infinite: b.infinite, background: b.background, fps: b.fps, rtl: !!b.page?.rtl, spreads: !!b.page?.spreads }, "edit");
+    const modal = new BoardOptionsModal(this.app, { kind: b.kind, name: this.baseName(), width: b.width, height: b.height, infinite: b.infinite, background: b.background, fps: b.fps, rtl: !!b.page?.rtl, spreads: !!b.page?.spreads }, "edit", b.frames.length);
     modal.open();
     const res = await modal.result;
     if (!res) return;
@@ -1636,6 +1622,8 @@ export class StoryboardView extends FileView {
         bd.height = res.height;
         bd.infinite = res.infinite;
         bd.fps = res.fps;
+      } else if (res.kind === "canvas") {
+        bd.infinite = true;
       } else {
         bd.infinite = false;
         // Becoming pages: a page setup from the current canvas.

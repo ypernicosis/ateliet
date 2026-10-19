@@ -1,6 +1,7 @@
 // References: the pictures you draw from, beside the frame. One is shown
 // large (zoom with the wheel, drag to move, double click for real size), the
-// rest wait in a strip below; ← and → go through them. A whole moodboard
+// rest wait in a strip below; ← and → go through them. The order can be
+// shuffled, once or for every picture that comes in. A whole moodboard
 // comes in at once: a collection of the shared library, a vault folder, the
 // pictures of a note, an Obsidian canvas, Pictogrep's storyboard references,
 // files from the computer, the clipboard, or a search by description.
@@ -18,10 +19,24 @@ import { TFile, TFolder } from "../obsidian/vault.ts";
 import { invoke, readBytes } from "../tauri.ts";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|webp|bmp|avif)$/i;
+const SHUFFLE_KEY = "ateliet-storyboard-refs-shuffle";
+
+/** Fisher–Yates, in place. */
+function shuffle<T>(a: T[]): T[] {
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
 
 export interface ReferenceHost {
   trace(ref: Reference): void;
   place(ref: Reference): void;
+  /** A picture is on show (its size, for fitting the panel to it), or none is. */
+  shown?(size: { w: number; h: number } | null): void;
+  /** Float the panel over the drawing, or put it back. */
+  toggleFloat?(): void;
 }
 
 export class ReferencePanel {
@@ -40,6 +55,8 @@ export class ReferencePanel {
   private actions!: HTMLElement;
   private mirrorBtn!: HTMLElement;
   private stripKey = "";
+  private shuffleBtn!: HTMLElement;
+  private floatBtn: HTMLElement | null = null;
   private off: (() => void)[] = [];
 
   constructor(private app: any, private ed: Editor, parent: HTMLElement, private host: ReferenceHost) {
@@ -47,9 +64,18 @@ export class ReferencePanel {
     const head = this.el.createDiv("sb-panel-head");
     head.createDiv({ cls: "sb-panel-title", text: "References" });
     this.counter = head.createDiv("sb-refs-counter");
+    this.shuffleBtn = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Shuffle the order (undo puts it back)" } });
+    setIcon(this.shuffleBtn, "shuffle");
+    this.shuffleBtn.addEventListener("click", () => this.shuffleAll());
     const add = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Add references (moodboard, folder, note, search…)" } });
     setIcon(add, "image-plus");
     add.addEventListener("click", (e) => this.addMenu(e));
+    if (host.toggleFloat) {
+      this.floatBtn = head.createDiv({ cls: "clickable-icon" });
+      setIcon(this.floatBtn, "picture-in-picture-2");
+      this.floatBtn.addEventListener("click", () => host.toggleFloat!());
+      this.markFloating(false);
+    }
     const more = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "More" } });
     setIcon(more, "more-horizontal");
     more.addEventListener("click", (e) => this.currentMenu(e));
@@ -124,6 +150,18 @@ export class ReferencePanel {
     this.zoom?.destroy();
   }
 
+  /** The float button shows whether the panel is a window over the drawing. */
+  markFloating(on: boolean) {
+    if (!this.floatBtn) return;
+    this.floatBtn.toggleClass("is-active", on);
+    this.floatBtn.setAttr("aria-label", on ? "Put the reference back in its panel" : "Float the reference in a window over the drawing");
+  }
+
+  /** Where the picture is shown (the panel's bars are around it). */
+  get stageEl(): HTMLElement {
+    return this.stage;
+  }
+
   get list(): Reference[] {
     return this.ed.board.references;
   }
@@ -136,6 +174,8 @@ export class ReferencePanel {
     if (!this.current && list.length) this.show(list[0], false);
     this.counter.setText(list.length ? `${this.current ? list.indexOf(this.current) + 1 : 0} / ${list.length}` : "");
     this.actions.toggle(!!list.length);
+    this.shuffleBtn.toggle(list.length > 1);
+    if (!list.length) this.host.shown?.(null);
     this.stage.toggleClass("has-many", list.length > 1);
     // The strip is rebuilt only when the list changes (it can hold hundreds).
     const key = list.map((r) => r.id + r.path).join("|");
@@ -192,6 +232,7 @@ export class ReferencePanel {
     const w = img.naturalWidth, h = img.naturalHeight;
     this.zoom!.setSize(w, h);
     this.drawGrid();
+    this.host.shown?.({ w, h });
   }
 
   step(delta: number) {
@@ -200,6 +241,30 @@ export class ReferencePanel {
     const i = this.current ? list.findIndex((x) => x.id === this.current!.id) : -1;
     const next = list[(i + delta + list.length) % list.length];
     this.show(next);
+  }
+
+  /** A new random order for every reference; the first of it comes up. */
+  shuffleAll() {
+    if (this.list.length < 2) return;
+    this.ed.mutate("Shuffle references", (b) => shuffle(b.references));
+    this.render();
+    this.show(this.list[0]);
+  }
+
+  get shuffleIncoming(): boolean {
+    try {
+      return localStorage.getItem(SHUFFLE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+
+  set shuffleIncoming(on: boolean) {
+    try {
+      localStorage.setItem(SHUFFLE_KEY, on ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
   }
 
   toggleMirror() {
@@ -270,6 +335,7 @@ export class ReferencePanel {
       new Notice(items.length ? "Those pictures are already among the references." : "No pictures found there.");
       return;
     }
+    if (this.shuffleIncoming) shuffle(fresh);
     this.ed.mutate(label, (b) => b.references.push(...fresh));
     this.render();
     this.show(fresh[0]);
@@ -294,6 +360,7 @@ export class ReferencePanel {
     m.addItem((i) => i.setTitle("Pictogrep's storyboard references").setIcon("image").onClick(() => this.fromPictogrep()));
     m.addItem((i) => i.setTitle("Files on this computer…").setIcon("hard-drive").onClick(() => this.fromDisk()));
     m.addSeparator();
+    m.addItem((i) => i.setTitle("Shuffle the pictures as they come in").setIcon("shuffle").setChecked(this.shuffleIncoming).onClick(() => (this.shuffleIncoming = !this.shuffleIncoming)));
     m.addItem((i) => i.setTitle("Paste a picture (Ctrl/Cmd+V here)").setIcon("clipboard").setDisabled(true));
     m.showAtMouseEvent(e);
   }
@@ -409,6 +476,10 @@ export class ReferencePanel {
     const m = new Menu();
     m.addItem((i) => i.setTitle("Trace this picture").setIcon("scan-line").onClick(() => this.host.trace(r)));
     m.addItem((i) => i.setTitle("Place it on the frame as a picture layer").setIcon("image-plus").onClick(() => this.host.place(r)));
+    if (current && this.list.length > 1) {
+      m.addItem((i) => i.setTitle("Shuffle the order").setIcon("shuffle").onClick(() => this.shuffleAll()));
+      m.addItem((i) => i.setTitle("Shuffle the pictures as they come in").setIcon("shuffle").setChecked(this.shuffleIncoming).onClick(() => (this.shuffleIncoming = !this.shuffleIncoming)));
+    }
     if (current) {
       m.addItem((i) => i.setTitle(this.mirrored ? "Show unmirrored" : "Mirror the reference").setIcon("flip-horizontal").onClick(() => this.toggleMirror()));
       m.addItem((i) => i.setTitle("Whole picture").setIcon("maximize").onClick(() => this.zoom?.fit()));
