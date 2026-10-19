@@ -160,17 +160,18 @@ export class StoryboardView extends FileView {
     this.settings.balloon.vertical = doc.board.kind === "name";
     this.buildToolbar(bar);
     this.buildTools();
-    const host = { trace: (r: Reference) => this.trace(r), place: (r: Reference) => this.layers?.placePicture(r.id), shown: (size: { w: number; h: number } | null) => this.split?.setPicture(size) };
+    const host = { trace: (r: Reference) => this.trace(r), place: (r: Reference) => this.layers?.placePicture(r.id), shown: (size: { w: number; h: number } | null) => this.split?.setPicture(size), toggleFloat: () => this.toggleFloat() };
     ed.frame = doc.board.frames[0];
     this.refs = new ReferencePanel(this.app, ed, side, host);
     const resizer = side.createDiv("sb-side-resizer");
     this.layers = new LayersPanel(ed, side, { chooseReference: (cb) => this.chooseReference(cb), trace: () => this.trace() });
     this.split = new Split({
-      root, main, tools: this.toolsEl, side, handle, resizer,
+      root, main, tools: this.toolsEl, center, side, handle, resizer,
       refs: this.refs.el, refStage: this.refs.stageEl,
       focus: () => !!this.focus,
       canvasAspect: () => ed.fitAspect(),
       canvasMargin: FIT_MARGIN,
+      floated: (on) => this.refs?.markFloating(on),
     });
     this.timeline = new Timeline(this.app, ed, root);
 
@@ -382,11 +383,17 @@ export class StoryboardView extends FileView {
       b("plus", "New frame (Ctrl/Cmd+Enter)", () => ed.newFrame());
     }
     bar.createDiv("sb-sep");
-    const layout = b(SIDE_ICONS[this.split?.current || "right"], "Where the reference goes", () => this.layoutMenu(layout));
+    const layout = b(this.split?.state.floating ? "picture-in-picture-2" : SIDE_ICONS[this.split?.current || "right"], "Where the reference goes", () => this.layoutMenu(layout));
     b(this.focus.osFullscreen ? "shrink" : "expand", this.focus.osFullscreen ? "Leave full screen" : "Full screen", () => this.toggleOsFullscreen(), this.focus.osFullscreen);
   }
 
-  /** Focus: automatic, or the reference on a chosen side. */
+  private toggleFloat() {
+    if (!this.split) return;
+    this.split.setFloating(!this.split.state.floating);
+    this.renderFocusBar();
+  }
+
+  /** Focus: automatic, a chosen side, or a floating window. */
   private layoutMenu(anchor: HTMLElement) {
     const split = this.split;
     if (!split) return;
@@ -394,14 +401,16 @@ export class StoryboardView extends FileView {
       split.setArrange(a);
       this.renderFocusBar();
     };
+    const floating = split.state.floating;
     const m = new Menu();
-    m.addItem((i) => i.setTitle("Automatic: fit to the picture").setIcon("sparkles").setChecked(split.state.arrange === "auto").onClick(() => set("auto")));
+    m.addItem((i) => i.setTitle("Automatic: fit to the picture").setIcon("sparkles").setChecked(!floating && split.state.arrange === "auto").onClick(() => set("auto")));
     m.addSeparator();
     for (const [a, name] of [["right", "Reference on the right"], ["left", "Reference on the left"], ["below", "Reference below"], ["above", "Reference above"]] as [Exclude<Arrange, "auto">, string][]) {
-      m.addItem((i) => i.setTitle(name).setIcon(SIDE_ICONS[a]).setChecked(split.state.arrange === a).onClick(() => set(a)));
+      m.addItem((i) => i.setTitle(name).setIcon(SIDE_ICONS[a]).setChecked(!floating && split.state.arrange === a).onClick(() => set(a)));
     }
+    m.addItem((i) => i.setTitle("Floating window over the drawing").setIcon("picture-in-picture-2").setChecked(floating).onClick(() => this.toggleFloat()));
     m.addSeparator();
-    m.addItem((i) => i.setTitle("Fit to the picture again (double click the divider)").setIcon("scan").setDisabled(split.state.share == null).onClick(() => split.fitAgain()));
+    m.addItem((i) => i.setTitle(floating ? "Fit the window to the picture (double click its title)" : "Fit to the picture again (double click the divider)").setIcon("scan").setDisabled(floating ? !split.state.floatSized : split.state.share == null).onClick(() => split.fitAgain()));
     const r = anchor.getBoundingClientRect();
     m.showAtPosition({ x: r.left, y: r.bottom + 4 });
   }

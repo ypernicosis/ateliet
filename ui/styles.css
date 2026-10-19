@@ -1485,6 +1485,21 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .sb-focus.ref-below .sb-side-handle::before, .sb-focus.ref-above .sb-side-handle::before { width: 36px; height: 5px; }
 .sb-focus .sb-side-handle:hover::before, .sb-focus .sb-side-handle.is-dragging::before { background: var(--interactive-accent); }
 .sb-side-handle.is-snapped, .sb-focus .sb-side-handle.is-snapped::before { background: var(--interactive-accent-hover); }
+/* the reference as a floating window over the drawing (split.ts places it) */
+.sb-main { position: relative; }
+.sb-root.ref-float .sb-refs { position: absolute; z-index: 4; flex: none; min-height: 0; background: var(--background-primary); border: 1px solid var(--background-modifier-border-hover); border-radius: var(--radius-m); box-shadow: var(--shadow-l); overflow: hidden; }
+.sb-root.ref-float .sb-refs .sb-panel-head { cursor: grab; }
+.sb-root.ref-float .sb-refs.is-moving .sb-panel-head { cursor: grabbing; }
+.sb-root.ref-float .sb-side-resizer { display: none; }
+.sb-root.ref-float .sb-layers { flex: 1 1 auto; }
+.sb-root.is-drawing.ref-float .sb-refs { pointer-events: none; }
+.sb-refs-grip { display: none; }
+.sb-root.ref-float .sb-refs-grip { display: block; position: absolute; right: 0; bottom: 0; z-index: 3; width: 18px; height: 18px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 50%, var(--background-modifier-border-hover) 50%, var(--background-modifier-border-hover) 58%, transparent 58%, transparent 70%, var(--background-modifier-border-hover) 70%, var(--background-modifier-border-hover) 78%, transparent 78%); }
+.sb-panel-head > .clickable-icon.is-active { color: var(--interactive-accent); }
+.sb-focus.ref-float .sb-main { grid-template-columns: 44px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "tools center"; }
+/* floating, the window stays when the sidebar (layers) is hidden, and in focus it has no side to sit in */
+.sb-root.ref-float.hide-side .sb-side, .sb-root.sb-focus.ref-float .sb-side, .sb-root.sb-focus.ref-float.hide-side .sb-side { display: contents; }
+.sb-root.ref-float.hide-side .sb-layers, .sb-root.sb-focus.ref-float .sb-side-handle, .sb-root.sb-focus.ref-float.hide-side .sb-side-handle { display: none; }
 .sb-focusbar { display: none; }
 .sb-focus .sb-focusbar { display: flex; position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; align-items: center; gap: 2px; padding: 3px 6px; max-width: calc(100% - 20px); overflow-x: auto; scrollbar-width: none; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: var(--shadow-s); opacity: .94; transition: opacity .2s; }
 .sb-focus .sb-focusbar > * { flex: 0 0 auto; }

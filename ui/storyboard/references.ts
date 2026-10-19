@@ -35,6 +35,8 @@ export interface ReferenceHost {
   place(ref: Reference): void;
   /** A picture is on show (its size, for fitting the panel to it), or none is. */
   shown?(size: { w: number; h: number } | null): void;
+  /** Float the panel over the drawing, or put it back. */
+  toggleFloat?(): void;
 }
 
 export class ReferencePanel {
@@ -54,6 +56,7 @@ export class ReferencePanel {
   private mirrorBtn!: HTMLElement;
   private stripKey = "";
   private shuffleBtn!: HTMLElement;
+  private floatBtn: HTMLElement | null = null;
   private off: (() => void)[] = [];
 
   constructor(private app: any, private ed: Editor, parent: HTMLElement, private host: ReferenceHost) {
@@ -67,6 +70,12 @@ export class ReferencePanel {
     const add = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "Add references (moodboard, folder, note, search…)" } });
     setIcon(add, "image-plus");
     add.addEventListener("click", (e) => this.addMenu(e));
+    if (host.toggleFloat) {
+      this.floatBtn = head.createDiv({ cls: "clickable-icon" });
+      setIcon(this.floatBtn, "picture-in-picture-2");
+      this.floatBtn.addEventListener("click", () => host.toggleFloat!());
+      this.markFloating(false);
+    }
     const more = head.createDiv({ cls: "clickable-icon", attr: { "aria-label": "More" } });
     setIcon(more, "more-horizontal");
     more.addEventListener("click", (e) => this.currentMenu(e));
@@ -139,6 +148,13 @@ export class ReferencePanel {
   destroy() {
     this.off.forEach((f) => f());
     this.zoom?.destroy();
+  }
+
+  /** The float button shows whether the panel is a window over the drawing. */
+  markFloating(on: boolean) {
+    if (!this.floatBtn) return;
+    this.floatBtn.toggleClass("is-active", on);
+    this.floatBtn.setAttr("aria-label", on ? "Put the reference back in its panel" : "Float the reference in a window over the drawing");
   }
 
   /** Where the picture is shown (the panel's bars are around it). */

@@ -12,14 +12,32 @@
 // Outside focus, the reference shares the sidebar with the layers: its height
 // follows the picture's shape at the sidebar's width until its divider is
 // dragged (a double click gives it back to the picture).
+//
+// In both, the reference can float instead: a small window over the drawing,
+// moved by its title (it sticks to the edges), resized by its corner, shaped
+// like its picture until it is resized (a double click on the title fits it
+// again).
 
 export type Arrange = "auto" | "right" | "left" | "below" | "above";
 type Side = Exclude<Arrange, "auto">;
+
+export interface FloatBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export interface SplitState {
   arrange: Arrange;
   /** Share of the reference; null fits it to the picture on show. */
   share: number | null;
+  /** A window over the drawing instead of a panel beside it. */
+  floating: boolean;
+  /** Where the window is, in pixels of the work area. */
+  float: FloatBox | null;
+  /** The window was resized by hand (otherwise it takes the picture's shape). */
+  floatSized: boolean;
 }
 
 /** What the share is computed from (pixels). */
@@ -43,6 +61,9 @@ const DRAG_MIN = 0.12, DRAG_MAX = 0.8;
 /** The other arrangement must be this much better before automatic flips to it. */
 const FLIP = 1.15;
 const SNAP_PX = 10;
+/** Room kept between a floating window and the edges; closer than STICK it sticks to them. */
+const EDGE = 10, STICK = 24;
+const FLOAT_MIN_W = 200, FLOAT_MIN_H = 150;
 
 /** Area of a picture of `aspect` fitted in a box (the whole box without one). */
 function fittedArea(bw: number, bh: number, aspect: number | null): number {
@@ -77,6 +98,7 @@ export interface SplitHost {
   root: HTMLElement;
   main: HTMLElement;
   tools: HTMLElement;
+  center: HTMLElement;
   side: HTMLElement;
   /** The divider between the drawing and the side. */
   handle: HTMLElement;
@@ -88,10 +110,12 @@ export interface SplitHost {
   /** The frame's shape as it is fitted in view, or null. */
   canvasAspect(): number | null;
   canvasMargin: number;
+  /** Floating on or off (for the buttons that show it). */
+  floated?(on: boolean): void;
 }
 
 export class Split {
-  state: SplitState = { arrange: "auto", share: null };
+  state: SplitState = { arrange: "auto", share: null, floating: false, float: null, floatSized: false };
   /** The arrangement automatic chose last (it only flips for a clearly better one). */
   private autoSide: Side = "right";
   private picture: { w: number; h: number } | null = null;
@@ -108,6 +132,7 @@ export class Split {
     this.resize.observe(h.side);
     this.bindHandle();
     this.bindResizer();
+    this.bindFloat();
     this.loadSideWidth();
   }
 
@@ -128,14 +153,23 @@ export class Split {
   }
 
   setArrange(a: Arrange) {
-    this.state = { arrange: a, share: null };
+    Object.assign(this.state, { arrange: a, share: null, floating: false });
     this.save();
     this.layout();
   }
 
-  /** Back to fitting the share to the picture. */
+  setFloating(on: boolean) {
+    this.state.floating = on;
+    this.save();
+    this.layout();
+  }
+
+  /** Back to fitting the share (or the floating window) to the picture. */
   fitAgain() {
-    if (this.h.focus()) {
+    if (this.state.floating) {
+      this.state.floatSized = false;
+      this.save();
+    } else if (this.h.focus()) {
       this.state.share = null;
       this.save();
     } else this.refsHeight = null;
@@ -151,6 +185,14 @@ export class Split {
     const h = this.h;
     const focus = h.focus();
     for (const s of ["right", "left", "below", "above"]) h.root.removeClass(`ref-${s}`);
+    h.root.toggleClass("ref-float", this.state.floating);
+    h.floated?.(this.state.floating);
+    if (this.state.floating) {
+      h.main.style.removeProperty("--sb-ref");
+      this.layoutFloat();
+      return;
+    }
+    for (const p of ["left", "top", "width", "height"]) h.refs.style.removeProperty(p);
     if (!focus) {
       h.main.style.removeProperty("--sb-ref");
       this.layoutSidebar();
@@ -211,6 +253,110 @@ export class Split {
     if (width <= 0) return;
     const want = chrome + 16 + Math.max(90, (width * this.picture.h) / this.picture.w);
     h.refs.style.flex = `0 0 ${Math.round(Math.max(120, Math.min(max, want)))}px`;
+  }
+
+  // ── floating ────────────────────────────────────────────────────────────
+
+  /** The window placed (and kept inside the work area), shaped like its picture unless resized. */
+  private layoutFloat() {
+    const h = this.h;
+    h.refs.style.flex = "";
+    const m = h.main.getBoundingClientRect();
+    if (!m.width || !m.height) return;
+    let box = this.state.float;
+    if (!box) {
+      // First time: the top right corner of the drawing, under the focus bar.
+      const w = Math.round(Math.max(FLOAT_MIN_W + 60, Math.min(440, m.width * 0.3)));
+      const c = h.center.getBoundingClientRect();
+      box = { x: c.right - m.left - w - EDGE - 6, y: h.focus() ? 56 : EDGE + 6, w, h: Math.round(w * 0.9) };
+    }
+    box = { ...box };
+    if (!this.state.floatSized && this.picture) {
+      const chrome = this.floatChrome();
+      const maxH = m.height - 2 * EDGE;
+      box.h = Math.round(chrome + (box.w - 16) * this.picture.h / this.picture.w);
+      if (box.h > maxH) {
+        box.h = maxH;
+        box.w = Math.round(Math.max(FLOAT_MIN_W, 16 + (maxH - chrome) * this.picture.w / this.picture.h));
+      }
+    }
+    this.state.float = this.clampFloat(box);
+    this.placeFloat();
+  }
+
+  /** Title, buttons and strip around the picture, with the picture's margin. */
+  private floatChrome(): number {
+    const h = this.h;
+    const c = h.refs.offsetHeight - h.refStage.clientHeight;
+    return (c > 0 && h.refStage.clientHeight > 0 ? c : 130) + 16;
+  }
+
+  private clampFloat(b: FloatBox): FloatBox {
+    const m = this.h.main.getBoundingClientRect();
+    const w = Math.max(FLOAT_MIN_W, Math.min(m.width - 2 * EDGE, b.w));
+    const hh = Math.max(FLOAT_MIN_H, Math.min(m.height - 2 * EDGE, b.h));
+    const x = Math.max(EDGE, Math.min(m.width - w - EDGE, b.x));
+    const y = Math.max(EDGE, Math.min(m.height - hh - EDGE, b.y));
+    return { x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(hh) };
+  }
+
+  private placeFloat() {
+    const b = this.state.float!;
+    Object.assign(this.h.refs.style, { left: `${b.x}px`, top: `${b.y}px`, width: `${b.w}px`, height: `${b.h}px` });
+  }
+
+  /** Moving by the title, resizing by the corner grip. */
+  private bindFloat() {
+    const refs = this.h.refs;
+    const head = refs.querySelector(".sb-panel-head") as HTMLElement | null;
+    const grip = refs.createDiv({ cls: "sb-refs-grip", attr: { "aria-label": "Resize" } });
+    const drag = (el: HTMLElement, move: (dx: number, dy: number, b: FloatBox) => FloatBox, ignore?: string) => {
+      el.addEventListener("pointerdown", (e) => {
+        if (!this.state.floating || e.button !== 0 || !this.state.float) return;
+        if (ignore && (e.target as HTMLElement).closest(ignore)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try { el.setPointerCapture(e.pointerId); } catch { /* synthetic */ }
+        refs.addClass("is-moving");
+        const x0 = e.clientX, y0 = e.clientY, b0 = { ...this.state.float };
+        const onMove = (ev: PointerEvent) => {
+          this.state.float = move(ev.clientX - x0, ev.clientY - y0, b0);
+          this.placeFloat();
+        };
+        const up = () => {
+          el.removeEventListener("pointermove", onMove);
+          el.removeEventListener("pointerup", up);
+          el.removeEventListener("pointercancel", up);
+          refs.removeClass("is-moving");
+          this.save();
+        };
+        el.addEventListener("pointermove", onMove);
+        el.addEventListener("pointerup", up);
+        el.addEventListener("pointercancel", up);
+      });
+    };
+    if (head) {
+      drag(head, (dx, dy, b) => this.stick(this.clampFloat({ ...b, x: b.x + dx, y: b.y + dy })), ".clickable-icon");
+      head.addEventListener("dblclick", (e) => {
+        if (!this.state.floating || (e.target as HTMLElement).closest(".clickable-icon")) return;
+        this.fitAgain();
+      });
+    }
+    drag(grip, (dx, dy, b) => {
+      this.state.floatSized = true;
+      return this.clampFloat({ ...b, w: b.w + dx, h: b.h + dy });
+    });
+  }
+
+  /** Close to an edge of the work area, the window sticks to it. */
+  private stick(b: FloatBox): FloatBox {
+    const m = this.h.main.getBoundingClientRect();
+    const right = m.width - b.w - EDGE, bottom = m.height - b.h - EDGE;
+    if (b.x - EDGE < STICK) b.x = EDGE;
+    else if (right - b.x < STICK) b.x = right;
+    if (b.y - EDGE < STICK) b.y = EDGE;
+    else if (bottom - b.y < STICK) b.y = bottom;
+    return b;
   }
 
   // ── dragging ────────────────────────────────────────────────────────────
@@ -307,6 +453,10 @@ export class Split {
         const s = JSON.parse(raw);
         if (["auto", "right", "left", "below", "above"].includes(s.arrange)) this.state.arrange = s.arrange;
         if (typeof s.share === "number") this.state.share = Math.max(DRAG_MIN, Math.min(DRAG_MAX, s.share));
+        this.state.floating = !!s.floating;
+        this.state.floatSized = !!s.floatSized;
+        const f = s.float;
+        if (f && [f.x, f.y, f.w, f.h].every((v) => typeof v === "number")) this.state.float = { x: f.x, y: f.y, w: f.w, h: f.h };
       } else if (localStorage.getItem("ateliet-storyboard-focus-left") === "1") {
         // The reference was kept on the left before there was a choice of four.
         this.state.arrange = "left";
