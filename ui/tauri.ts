@@ -45,6 +45,32 @@ export function writeBytes(path: string, data: ArrayBuffer | Uint8Array, atomic 
   return invoke("fs_write_bytes", bytes, { headers });
 }
 
+/**
+ * A PNG onto the system clipboard, where other apps can paste it. Call it
+ * straight from the key or click handler, before awaiting anything: on macOS
+ * the Rust side writes the pasteboard (the webview's clipboard API gives up
+ * once the PNG takes a moment to encode); elsewhere the webview's API gets
+ * the picture as a promise, so the user's gesture is still alive when it writes.
+ */
+export async function copyPng(png: Promise<Blob | null>): Promise<void> {
+  const blob = png.then((b) => b || Promise.reject(new Error("no picture")));
+  if (isMac) {
+    try {
+      return await invoke("clipboard_write_png", new Uint8Array(await (await blob).arrayBuffer()));
+    } catch (e) {
+      if (!(window as any).ClipboardItem) throw e;
+    }
+  }
+  const CI = (window as any).ClipboardItem;
+  if (!CI || !navigator.clipboard?.write) throw new Error("this system has no clipboard for pictures");
+  await navigator.clipboard.write([new CI({ "image/png": blob })]);
+}
+
+/** A canvas as PNG, for copyPng. */
+export function canvasBlob(c: HTMLCanvasElement): Promise<Blob | null> {
+  return new Promise((r) => c.toBlob(r, "image/png"));
+}
+
 /** Synchronous fs access (for the Node `fs` shim) via sync XHR to the protocol. */
 export function syncFs(op: string, path: string, extra: Record<string, string> = {}, body?: any, binary = false): any {
   const q = new URLSearchParams({ path, ...extra }).toString();

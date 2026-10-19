@@ -644,6 +644,57 @@ fn debug_snapshot(_path: String) -> Res<()> {
     Err("not supported on this platform".into())
 }
 
+// ── clipboard ─────────────────────────────────────────────────────────────
+
+/// A PNG (raw body) onto the system clipboard, so other apps can paste it.
+/// The webview's clipboard API needs the user's gesture to still be alive
+/// when it writes, and encoding the PNG outlives it in WebKit; this does not.
+/// Synchronous on purpose: on macOS it then runs on the main thread, where
+/// AppKit wants the pasteboard used.
+#[tauri::command]
+fn clipboard_write_png(request: tauri::ipc::Request<'_>) -> Res<()> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("expected raw body".into());
+    };
+    write_png_to_clipboard(data)
+}
+
+#[cfg(target_os = "macos")]
+fn write_png_to_clipboard(png: &[u8]) -> Res<()> {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    objc2::rc::autoreleasepool(|_| unsafe {
+        let ns = |s: &std::ffi::CStr| -> *mut AnyObject { msg_send![class!(NSString), stringWithUTF8String: s.as_ptr()] };
+        let data: *mut AnyObject = msg_send![class!(NSData), dataWithBytes: png.as_ptr() as *const std::ffi::c_void, length: png.len()];
+        // TIFF too: some apps only read that from the pasteboard.
+        let rep: *mut AnyObject = msg_send![class!(NSBitmapImageRep), imageRepWithData: data];
+        if rep.is_null() {
+            return Err("not a PNG".into());
+        }
+        let tiff: *mut AnyObject = msg_send![rep, TIFFRepresentation];
+        let (png_type, tiff_type) = (ns(c"public.png"), ns(c"public.tiff"));
+        let types = [png_type, tiff_type];
+        let list: *mut AnyObject = msg_send![class!(NSArray), arrayWithObjects: types.as_ptr(), count: types.len()];
+        let pb: *mut AnyObject = msg_send![class!(NSPasteboard), generalPasteboard];
+        let _: isize = msg_send![pb, declareTypes: list, owner: std::ptr::null_mut::<AnyObject>()];
+        let ok: bool = msg_send![pb, setData: data, forType: png_type];
+        if !tiff.is_null() {
+            let _: bool = msg_send![pb, setData: tiff, forType: tiff_type];
+        }
+        if ok {
+            Ok(())
+        } else {
+            Err("the pasteboard refused the picture".into())
+        }
+    })
+}
+
+/// Elsewhere the webview's clipboard API does the job (the UI falls back to it).
+#[cfg(not(target_os = "macos"))]
+fn write_png_to_clipboard(_png: &[u8]) -> Res<()> {
+    Err("not supported on this platform".into())
+}
+
 // ── ateliet:// protocol ───────────────────────────────────────────────────
 
 fn mime_for(path: &str) -> &'static str {
@@ -869,6 +920,7 @@ fn main() {
             debug_log,
             debug_take_eval,
             debug_snapshot,
+            clipboard_write_png,
             process::proc_spawn,
             process::proc_write,
             process::proc_close_stdin,

@@ -1042,6 +1042,26 @@ export class Editor extends Events {
     return { canvas: c, x: x0, y: y0 };
   }
 
+  /** What is seen (every visible layer and the paper) inside the selection, or the whole frame. */
+  async copyMerged(): Promise<{ canvas: HTMLCanvasElement; x: number; y: number } | null> {
+    if (!this.frame) return null;
+    const sel = this.selection;
+    let area = this.comp.area(this.frame);
+    if (sel) {
+      const x0 = Math.floor(sel.box.x), y0 = Math.floor(sel.box.y);
+      area = { x: x0, y: y0, w: Math.ceil(sel.box.x + sel.box.w) - x0, h: Math.ceil(sel.box.y + sel.box.h) - y0 };
+    }
+    if (area.w < 1 || area.h < 1) return null;
+    const c = await this.comp.picture(this.frame, 1, { exporting: true, area });
+    if (sel) {
+      const ctx = c.getContext("2d")!;
+      ctx.setTransform(1, 0, 0, 1, -area.x, -area.y);
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.fill(sel.path);
+    }
+    return { canvas: c, x: area.x, y: area.y };
+  }
+
   /** Clears the selected pixels of the active layer. */
   clearSelection() {
     const l = this.active;

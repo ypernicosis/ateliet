@@ -28,7 +28,7 @@ import { FileView } from "../obsidian/views.ts";
 import { setIcon } from "../obsidian/icons.ts";
 import { Menu, Modal, Notice, Setting } from "../obsidian/ui.ts";
 import { TFile } from "../obsidian/vault.ts";
-import { currentWindow, fileUrl, invoke } from "../tauri.ts";
+import { canvasBlob, copyPng, currentWindow, fileUrl, invoke } from "../tauri.ts";
 import { closePopover } from "./popover.ts";
 
 export const STORYBOARD_VIEW = "storyboard";
@@ -564,7 +564,8 @@ export class StoryboardView extends FileView {
       act("move", "Move or transform the selection (Ctrl/Cmd+T)", () => this.transform(), has);
       act("paint-bucket", "Fill with the colour", () => ed.fillSelection(), has);
       act("eraser", "Clear (Delete)", () => ed.clearSelection(), has);
-      act("copy", "Copy (Ctrl/Cmd+C)", () => this.copy(false), has);
+      act("copy", "Copy the layer's selection, to paste here or in other apps (Ctrl/Cmd+C)", () => this.copy(false), has);
+      act("copy-plus", "Copy what is seen in the selection, all layers (Ctrl/Cmd+Shift+C)", () => this.copy(false, true), has);
     } else if (id === "move") {
       const mt = this.tools.get("move") as MoveTool;
       if (ed.floating) {
@@ -1001,6 +1002,7 @@ export class StoryboardView extends FileView {
     else if (mod && lower === "a") this.selectAll();
     else if (mod && lower === "d") ed.setSelection(null);
     else if (mod && lower === "t") this.transform();
+    else if (mod && e.shiftKey && lower === "c") this.copy(false, true);
     else if (mod && lower === "c") this.copy(false);
     else if (mod && lower === "x") this.copy(true);
     else if (mod && lower === "v") used = false; // the paste event handles it
@@ -1075,19 +1077,23 @@ export class StoryboardView extends FileView {
 
   // ── clipboard and drops ─────────────────────────────────────────────────
 
-  private async copy(cut: boolean) {
+  /**
+   * Copies the selection of the active layer (or, with `merged` or when that
+   * layer has nothing to give, what is seen there) to the system clipboard,
+   * for pasting in other apps, and keeps it for pasting here in place.
+   */
+  private copy(cut: boolean, merged = false) {
     const ed = this.ed!;
-    const c = ed.copyPixels();
-    if (!c) return;
-    this.clipboard = c;
-    try {
-      const blob: Blob | null = await new Promise((r) => c.canvas.toBlob(r, "image/png"));
-      const CI = (window as any).ClipboardItem;
-      if (blob && CI && navigator.clipboard?.write) await navigator.clipboard.write([new CI({ "image/png": blob })]);
-    } catch {
-      /* the internal clipboard still works */
-    }
-    if (cut) {
+    const own = merged ? null : ed.copyPixels();
+    const pixels = own ? Promise.resolve(own) : ed.copyMerged();
+    // Handed over before anything is awaited: the clipboard wants the key press still current.
+    copyPng(pixels.then((c) => (c ? canvasBlob(c.canvas) : null))).catch(async (err) => {
+      if (await pixels) new Notice(`Copied inside Ateliet only (the system clipboard refused the picture: ${err?.message || err}).`);
+    });
+    pixels.then((c) => {
+      if (c) this.clipboard = c;
+    });
+    if (cut && own) {
       if (!ed.selection) this.selectAll();
       ed.clearSelection();
     }
@@ -1592,13 +1598,12 @@ export class StoryboardView extends FileView {
 
   private async copyFrame() {
     const ed = this.ed!;
-    const pic = await ed.comp.picture(ed.frame, 1, { exporting: true });
+    const pic = ed.comp.picture(ed.frame, 1, { exporting: true });
     try {
-      const blob: Blob | null = await new Promise((r) => pic.toBlob(r, "image/png"));
-      await navigator.clipboard.write([new (window as any).ClipboardItem({ "image/png": blob })]);
+      await copyPng(pic.then(canvasBlob));
       new Notice(hasFrames(ed.board.kind) ? "Frame copied." : "Copied.");
     } catch {
-      this.clipboard = { canvas: pic, x: 0, y: 0 };
+      this.clipboard = { canvas: await pic, x: 0, y: 0 };
       new Notice("Copied inside Ateliet (the system clipboard refused the picture).");
     }
   }
