@@ -10,6 +10,7 @@ import { installPagePreview } from "../obsidian/renderer.ts";
 import { registerFileViews } from "./media.ts";
 import { ImagesPlugin, imagesSettingsTab } from "../images/index.ts";
 import { StoryboardPlugin } from "../storyboard/index.ts";
+import { registerTools } from "../tools/index.ts";
 
 export function registerCorePlugins(app: any) {
   registerFileViews(app);
@@ -35,6 +36,7 @@ export function registerCorePlugins(app: any) {
   reg("backlink-count", "Backlink count", Object.assign(new BacklinkCountStatus(), { hidden: true }), "", true);
   reg("images", "Images", new ImagesPlugin(DEFAULT_LAYOUT), "The picture library: image mode, search by description, pictures in notes.");
   reg("storyboard", "Storyboard", new StoryboardPlugin(), "Draw frames from references: layers, colours, timeline, tracing, Clip Studio import.");
+  registerTools(app, reg);
 
   registerCoreCommands(app);
   app.workspace.editorSuggest.addSuggest(new LinkSuggest(app));

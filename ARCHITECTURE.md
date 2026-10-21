@@ -20,11 +20,15 @@
 │   vault.rs     listagem, stat, cópia                                                           │
 │   images.rs    biblioteca de imagens: varredura, índice persistente, busca vetorial e por nome │
 │   clip.rs      CLIP: tokenizer BPE, pré-processamento, inferência ONNX (ort)                   │
+│   dataview/    índice de páginas, linguagem de consultas (DQL) e funções do Dataview           │
+│   script/      QuickJS: dataviewjs e comandos do Templater, com as APIs dv/tp                  │
+│   calendar.rs  mês de notas diárias · datefmt.rs formatos moment/Luxon (en, pt)               │
 │ src/process.rs child_process para plugins (spawn/exec, stdout em eventos)                      │
 │ src/gallery.rs indexador em segundo plano por janela, download do modelo, comandos images_*    │
 │ src/pictogrep.rs pasta do Pictogrep: estado, coleções (symlinks), importação, vetores, plugins │
 │ src/pinterest.rs importação do Pinterest: gallery-dl ou leitor nativo, quadros seguidos         │
 │ src/shared.rs  comandos da biblioteca compartilhada, protocolo pgplugin://, mediador de plugins │
+│ src/tools.rs   comandos do Dataview, Templater e Calendar; um índice por vault                 │
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,6 +100,16 @@ A ordem de tentativa é a mesma do Obsidian:
 - **Canvas infinito** (`kind: "canvas"`): um quadro com `infinite` sempre ligado; `hasFrames` esconde a linha do tempo, a navegação entre quadros, o onion skin e as importações/exportações por quadro. Os quadros que o arquivo já tinha continuam no `board.json`.
 - **Divisão desenho/referência** (`split.ts`): no modo foco, `.sb-main` vira grid e a classe `ref-<lado>` com a variável `--sb-ref` decide onde fica a referência e quanto ela ocupa. No automático, para cada arranjo (lado a lado, empilhado) varre-se a fração da referência entre 20% e 65% e fica a que maximiza a menor das duas áreas na tela (o quadro encaixado com a margem do `fit`, a imagem encaixada no palco descontando as barras do painel); no empate, a menor fração, para o painel abraçar a imagem. O arranjo só troca quando o outro é 15% melhor, para não pular a cada referência. Sem bordas (canvas infinito, webtoon longo), o desenho conta como 60% da sua caixa. Fora do foco, a altura do painel de referências na barra lateral segue o formato da imagem até a divisória ser arrastada. Flutuando (`ref-float`), o `.sb-refs` sai do fluxo com `position: absolute` relativo ao `.sb-main` (a `.sb-side` não é posicionada, então o `overflow: hidden` dela não o recorta; no foco ela vira `display: contents`), e a caixa em pixels da área de trabalho fica no mesmo estado guardado, presa dentro dela a cada redimensionamento.
 - **Pictogrep** (`src/storyboard.rs`): `pictogrep_boards` lê `storyboards/` (PNGs e JSON) e `storyboards/references/`; `pictogrep_board_save` grava `0001_16x9_<stem>_<id>.png` + JSON como `saveBoard` do Pictogrep, com id derivado do storyboard e do quadro.
+
+## Ferramentas embutidas (`src/dataview/`, `src/script/`, `src/calendar.rs`, `src/tools.rs`, `ui/tools/`)
+
+Dataview, Templater e Calendar eram plugins e agora são core plugins do Ateliet. A lógica está no Rust e a interface só desenha. O carregador de plugins (`Plugins.initialize`) pula os ids `dataview`, `templater-obsidian` e `calendar` (`BUILT_IN_PLUGINS` em `ui/tools/common.ts`).
+
+- **Índice** (`dataview/index.rs`): cada nota vira uma página com frontmatter, campos inline (linha inteira `chave:: valor`, `[chave:: valor]` e `(chave:: valor)` fora de código, sob o nome original e o canônico, minúsculo e com `-`), tags (com as tags-pai em `file.tags`), links resolvidos na mesma ordem do Obsidian, back-links, itens de lista e tarefas (texto, status, filhos, seção, datas com emoji 📅 ✅ ➕ 🛫 ⏳), e `file.day` a partir do nome ou do campo `date`. O índice é construído em paralelo 3 s depois de o vault abrir, ou na primeira consulta, e os eventos do watcher do vault (`vault_init`) relêem só os caminhos alterados.
+- **Valores e expressões** (`value.rs`, `parse.rs`, `eval.rs`): os tipos do Dataview (texto, número, booleano, data, duração com partes de calendário, link, lista, objeto, função), a mesma ordenação entre tipos, campos com `-` no nome, `row["Nome com espaço"]`, `this`, indexação de listas que mapeia (`rows.file.link`), links que dão acesso aos campos da nota (`[[A]].status`), lambdas e cerca de 70 funções. `date(today)` e `dur(1 week)` são literais.
+- **Consultas** (`query.rs`): `FROM` monta o conjunto (tags com subtags, pastas ou nota, `[[link]]` = quem aponta para ela, `outgoing([[link]])`, `and`/`or`/negação). Depois as operações rodam na ordem escrita. `TASK` usa as tarefas como linhas, com os campos da página por baixo, e mostra subtarefas sob a tarefa-mãe. O resultado sai como JSON com datas e durações já formatadas (formato Luxon das configurações, nomes em inglês ou português).
+- **Scripts** (`script/`): cada bloco roda num runtime QuickJS novo, com limite de memória e de tempo (o tempo esperando o usuário num prompt não conta). O `prelude.js` monta `dv` (com `DataArray` por Proxy, que faz o `pages.file.name` funcionar), `tp`, `DateTime`/`Duration` e `moment` sobre uma única função do host (`__host(nome, json)`), que responde do índice em Rust. O `dv.el`/`dv.container` gravam uma árvore de elementos e as tabelas e listas entram nela na ordem em que o script as cria. O Templater é compilado para o corpo de uma função assíncrona (`tR += …`), então as variáveis de `<%* %>` valem nos `<% %>` seguintes. Os prompts e suggesters vão para a janela pelo evento `tp-prompt` e voltam por `tp_answer`, enquanto a thread do script espera.
+- **Interface** (`ui/tools/`): `dataview.ts` registra os processadores de bloco, o pós-processador das consultas inline e dos campos estilizados, e uma extensão do CodeMirror para o Live Preview. Re-executa os blocos visíveis depois de mudanças no vault, respeitando o intervalo das configurações. `templater.ts` tem os comandos, as janelas de prompt e aplica o que o template devolveu: texto, cursor, renomear, abrir. `calendar.ts` é uma view `calendar` (o mesmo tipo do plugin, então o layout salvo encontra a view) e cria notas diárias pelo core plugin de notas diárias.
 
 ## Área de transferência de imagens
 

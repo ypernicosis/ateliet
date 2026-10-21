@@ -7,6 +7,7 @@ import { setIcon } from "../obsidian/icons.ts";
 import { requestUrl } from "../obsidian/util.ts";
 import { eventModifiers, normalizeKey } from "../obsidian/ui.ts";
 import { invoke } from "../tauri.ts";
+import { BUILT_IN_PLUGINS } from "../tools/common.ts";
 
 class FnTab extends SettingTab {
   constructor(app: any, id: string, name: string, icon: string, private fn: (el: HTMLElement, tab: FnTab) => any) {
@@ -276,6 +277,10 @@ export class SettingsModal extends Modal {
           if (pm.failed[id]) f.createDiv({ cls: "mod-warning", text: "Failed to load — see developer console." });
         });
         s.setDesc(desc);
+        if (BUILT_IN_PLUGINS[id]) {
+          s.descEl.createDiv({ cls: "mod-warning", text: `${BUILT_IN_PLUGINS[id]} is built into Ateliet now, so this plugin is not loaded. Its settings were carried over.` });
+          continue;
+        }
         if (pm.plugins[id] && pm.plugins[id] && this.pluginTabs.some((t) => t.id === id)) {
           s.addExtraButton((b) => b.setIcon("settings").setTooltip("Options").onClick(() => this.openTabById(id)));
         }

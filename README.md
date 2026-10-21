@@ -140,6 +140,14 @@ O storyboard do Pictogrep, refeito como ferramenta de storyboard. Cada storyboar
 
 Desfazer/refazer cobre tudo (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`), e o arquivo é salvo sozinho poucos segundos depois de cada mudança, de forma atômica.
 
+## Ferramentas embutidas: Dataview, Templater e Calendar
+
+Estes três antes eram plugins da comunidade e agora fazem parte do Ateliet, com o motor em Rust. Os plugins com os mesmos ids (`dataview`, `templater-obsidian`, `calendar`) deixam de ser carregados, mesmo que continuem em `.obsidian/plugins/` e no `community-plugins.json`. Assim o Obsidian, se ainda abrir o mesmo vault, usa os dele normalmente. As configurações são lidas do `data.json` de cada plugin na primeira vez e depois ficam em `.obsidian/ateliet/<ferramenta>.json`.
+
+- **Dataview**: blocos `dataview` (`LIST`, `TABLE`, `TASK` e `CALENDAR`, com `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN` e `LIMIT`) e as funções da linguagem, consultas inline (`` `= this.campo` ``), campos inline (`chave:: valor`, `[chave:: valor]`, `(chave:: valor)`) estilizados na leitura e no Live Preview, e tarefas que se marcam pela própria lista. Os blocos `dataviewjs` e as consultas `` `$= …` `` rodam num motor JavaScript (QuickJS) embutido no Rust, com a API `dv` (`pages`, `current`, `table`, `list`, `taskList`, `paragraph`, `el`, `query`, `io.load`, `view`…), as datas do Luxon e o `moment`. A interface só desenha o resultado, com as mesmas classes do plugin, então os temas continuam valendo.
+- **Templater**: `<% %>`, `<%* %>` e o controle de espaços com `-`/`_`, rodando no mesmo motor. Inclui `tp.date`, `tp.file` (`title`, `content`, `cursor`, `rename`, `move`, `include`, `create_new`, `exists`, `find_tfile`, `selection`…), `tp.frontmatter`, `tp.system.prompt` e `suggester` (com janelas do próprio Ateliet) e `tp.config`. Comandos: inserir template (Alt+E), criar nota a partir de template (Alt+N), substituir templates na nota (Alt+R) e um comando por template configurado com atalho. Os atalhos do `hotkeys.json` continuam valendo, porque os ids dos comandos são os mesmos. Também há templates por pasta para notas novas. Fica de fora o que depende do Obsidian ou da rede: `app`, `tp.obsidian`, `tp.web` e scripts de usuário.
+- **Calendar**: um mês de notas diárias na barra lateral direita, com um ponto a cada N palavras e um círculo para tarefas abertas. Clicar num dia abre a nota ou a cria com a pasta, o formato e o modelo das configurações de notas diárias.
+
 ## Usando o mesmo vault no Obsidian e no Ateliet
 
 | O quê | Onde fica | Compartilhado? |
@@ -152,6 +160,7 @@ Desfazer/refazer cobre tudo (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`), e o arquivo é s
 | Atalhos | `.obsidian/hotkeys.json` | sim |
 | Temas e snippets | `.obsidian/themes/`, `.obsidian/snippets/` | sim |
 | Favoritos, notas diárias, templates, tipos de propriedade | `bookmarks.json`, `daily-notes.json`, `templates.json`, `types.json` | sim |
+| Configurações do Dataview, Templater e Calendar | `.obsidian/ateliet/dataview.json`, `templater.json`, `calendar.json` | **não**: na primeira vez são lidas do `data.json` do plugin |
 | Layout de abas | `.obsidian/ateliet/workspace.json` | **não**: o Ateliet só *lê* o `workspace.json` do Obsidian na primeira abertura |
 | Biblioteca de imagens (layout do modo imagens, ajustes, índice da busca) | `.obsidian/ateliet/workspace-images.json`, `images.json`, `images/index.bin` | **não**: só o Ateliet usa |
 | Biblioteca compartilhada, coleções, quadros seguidos, dados de plugins | pasta do Pictogrep (`library/`, `collections/`, `data/`) | sim, com o **Pictogrep** |
@@ -168,11 +177,11 @@ Mudanças feitas por um app aparecem ao vivo no outro: o watcher em Rust detecta
 - Abas, splits, barras laterais redimensionáveis, histórico voltar/avançar por aba e arrastar abas.
 - Configurações no estilo Obsidian: editor, arquivos e links, aparência, atalhos (gravando no `hotkeys.json`), core plugins e plugins da comunidade, com **instalação direta do catálogo oficial** de plugins e temas.
 
-Plugins testados num vault real: Dataview (incluindo queries inline no Live Preview), Tasks, Kanban (inclusive criar cartões pelo editor inline), Excalidraw, Templater, Calendar, Style Settings, Make.md, PDF++, Code Styler, Advanced Tables, Novel Word Count, Mermaid Tools, Mehrmaid, ePub Reader, Docxer, Terminal e Blender Viewer.
+Plugins testados num vault real: Tasks, Kanban (inclusive criar cartões pelo editor inline), Excalidraw, Style Settings, Make.md, PDF++, Code Styler, Advanced Tables, Novel Word Count, Mermaid Tools, Mehrmaid, ePub Reader, Docxer, Terminal e Blender Viewer.
 
 ## Limitações conhecidas
 
-- O editor do Obsidian é um modo CM5 ("hypermd") dentro do CM6. O Ateliet usa o parser lezer-markdown com as mesmas classes de token (`tokenClassNodeProp`), mas extensões que **substituem** a linguagem do editor são ignoradas. Por exemplo, o realce de `<% %>` do Templater não aparece; os comandos e templates dele funcionam.
+- O editor do Obsidian é um modo CM5 ("hypermd") dentro do CM6. O Ateliet usa o parser lezer-markdown com as mesmas classes de token (`tokenClassNodeProp`), mas extensões que **substituem** a linguagem do editor são ignoradas.
 - Não há Canvas, Graph view, Bases, Sync nem Publish. O Excalidraw recebe um stub mínimo do Canvas para embutir notas.
 - Do Node/Electron existem shims, não o ambiente completo: `fs` (síncrono e assíncrono), `path`, `os`, `child_process` (spawn/exec/execSync via Rust, sem PTY), `stream` básico, `electron.shell`/`remote` parciais. Módulos nativos como `node-pty` não funcionam.
 - Janelas pop-out abrem como abas.

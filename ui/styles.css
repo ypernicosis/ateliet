@@ -1575,3 +1575,56 @@ body.mod-macos.is-hidden-frameless:not(.is-fullscreen) .sb-root.sb-focus { paddi
 .image-notes-recent-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-notes-recent-folder { margin-left: auto; color: var(--text-faint); font-size: var(--font-ui-smaller); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; }
 .image-notes-side .markdown-source-view.mod-cm6 .cm-content, .image-notes-side .markdown-preview-view { max-width: 100%; }
+
+/* ── Dataview (built in) ────────────────────────────────────────────────── */
+.block-language-dataview, .block-language-dataviewjs { overflow-x: auto; }
+.table-view-table { width: 100%; border-collapse: collapse; }
+.table-view-table > thead > tr > th { font-weight: var(--bold-weight, 700); text-align: start; border: none; border-bottom: var(--table-header-border-width, 2px) solid var(--table-header-border-color, var(--background-modifier-border)); }
+.table-view-table > tbody > tr > td { text-align: start; border: none; vertical-align: top; }
+.table-view-table > tbody > tr:hover { background-color: var(--table-row-background-hover, var(--background-modifier-hover)); }
+.table-view-table ul, .table-view-table ol, .dataview-result-list-ul { margin-block: 0.2em; }
+.dataview.small-text { font-size: var(--font-smaller, smaller); color: var(--text-muted); margin-inline-start: 4px; font-weight: normal; }
+.dataview.small-text::before { content: "("; }
+.dataview.small-text::after { content: ")"; }
+.dataview.task-list-item { margin-block: 3px; }
+.dataview.task-list-item:hover { background-color: var(--background-modifier-hover); }
+h4.dataview-result-group { margin-block: 0.8em 0.3em; }
+div.dataview-error-box { width: 100%; min-height: 6em; display: flex; align-items: center; justify-content: center; border: 2px dashed var(--background-modifier-border); border-radius: var(--radius-m, 8px); }
+.dataview-error-message { color: var(--text-muted); text-align: center; }
+pre.dataview-error { color: var(--text-error); white-space: pre-wrap; font-size: var(--font-smaller, smaller); }
+span.dataview-error { color: var(--text-error); }
+.dataview-inline-query { white-space: normal; }
+.dataview-calendar { margin-block: 0.5em 1em; }
+.dataview-calendar-grid td { text-align: center; vertical-align: top; padding: 2px 6px; color: var(--text-faint); }
+.dataview-calendar-grid td.has-entries { color: var(--text-normal); font-weight: var(--bold-weight, 600); }
+.dataview-calendar-dot { display: block; line-height: 0.6; text-decoration: none; }
+
+/* ── Calendar (built in) ────────────────────────────────────────────────── */
+.ateliet-calendar { padding: 8px 12px; }
+.ateliet-calendar .nav { display: flex; align-items: center; justify-content: space-between; margin: 0.4em 0 0.8em; }
+.ateliet-calendar .title { margin: 0; font-size: 1.4em; font-weight: 600; }
+.ateliet-calendar .title .month { color: var(--text-normal); }
+.ateliet-calendar .title .year { color: var(--text-accent); }
+.ateliet-calendar .right-nav { display: flex; align-items: center; gap: 4px; }
+.ateliet-calendar .arrow, .ateliet-calendar .reset-button { cursor: pointer; color: var(--text-muted); border-radius: var(--radius-s, 4px); padding: 2px 6px; display: flex; align-items: center; }
+.ateliet-calendar .reset-button { font-size: var(--font-ui-smaller, 12px); text-transform: uppercase; letter-spacing: 0.05em; }
+.ateliet-calendar .arrow:hover, .ateliet-calendar .reset-button:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+.ateliet-calendar .arrow svg { width: 16px; height: 16px; }
+.ateliet-calendar table.calendar { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.ateliet-calendar th { font-size: 0.65em; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); padding: 4px 0; text-align: center; }
+.ateliet-calendar td { padding: 1px; text-align: center; }
+.ateliet-calendar .week-num { font-size: 0.65em; color: var(--text-faint); }
+.ateliet-calendar .day { cursor: pointer; border-radius: var(--radius-s, 4px); font-size: 0.85em; padding: 4px 0 2px; color: var(--text-normal); min-height: 2.4em; transition: background 0.1s; }
+.ateliet-calendar .day:hover { background: var(--background-modifier-hover); }
+.ateliet-calendar .day.weekend { background: color-mix(in srgb, var(--background-modifier-hover) 50%, transparent); }
+.ateliet-calendar .day.adjacent-month { opacity: 0.35; }
+.ateliet-calendar .day.today { color: var(--text-accent); font-weight: 700; }
+.ateliet-calendar .day.active { background: var(--interactive-accent); color: var(--text-on-accent); }
+.ateliet-calendar .dot-container { display: flex; justify-content: center; gap: 2px; height: 6px; margin-top: 2px; }
+.ateliet-calendar .dot { width: 4px; height: 4px; border-radius: 50%; }
+.ateliet-calendar .dot.filled { background: currentColor; opacity: 0.6; }
+.ateliet-calendar .dot.hollow { border: 1px solid currentColor; box-sizing: border-box; opacity: 0.7; }
+.dataview.inline-field-key, .dataview.inline-field-value, .dataview.inline-field-standalone-value { padding: 0 6px; font-family: var(--font-monospace); font-size: 0.9em; color: var(--text-normal); }
+.dataview.inline-field-key { background: var(--background-primary-alt, var(--background-secondary)); border-radius: var(--radius-s, 4px) 0 0 var(--radius-s, 4px); color: var(--text-muted); }
+.dataview.inline-field-value { background: var(--background-secondary-alt, var(--background-modifier-hover)); border-radius: 0 var(--radius-s, 4px) var(--radius-s, 4px) 0; }
+.dataview.inline-field-standalone-value { background: var(--background-secondary-alt, var(--background-modifier-hover)); border-radius: var(--radius-s, 4px); }

@@ -49,6 +49,8 @@ unicode-normalization = "0.1"
 url = "2"
 flate2 = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
