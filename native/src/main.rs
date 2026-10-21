@@ -16,6 +16,8 @@ mod panels;
 mod templater;
 mod theme;
 mod vault;
+#[cfg(feature = "clip")]
+mod vision;
 
 use std::path::PathBuf;
 

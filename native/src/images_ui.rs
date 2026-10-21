@@ -9,6 +9,8 @@ use eframe::egui::{self, Color32, RichText, Sense};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(feature = "clip")]
+use crate::vision::Vision;
 
 const MODEL_KEY: &str = "clip-vit-base-patch32-q8";
 const THUMB: u32 = 240;
@@ -86,7 +88,9 @@ pub struct Viewer {
 
 pub struct ImagesState {
     pub entries: Vec<ImageEntry>,
-    index: images::Index,
+    index: Arc<Mutex<images::Index>>,
+    #[cfg(feature = "clip")]
+    vision: Arc<Vision>,
     pub folder: Option<String>,
     pub query: String,
     /// Indices shown, in order.
@@ -106,7 +110,9 @@ impl Default for ImagesState {
     fn default() -> Self {
         ImagesState {
             entries: Vec::new(),
-            index: images::Index::new(MODEL_KEY, 512),
+            index: Arc::new(Mutex::new(images::Index::new(MODEL_KEY, 512))),
+            #[cfg(feature = "clip")]
+            vision: Arc::new(Vision::default()),
             folder: None,
             query: String::new(),
             shown: Vec::new(),
@@ -166,7 +172,9 @@ impl ImagesState {
         if let Some(rx) = &self.scanning {
             if let Ok((entries, index)) = rx.try_recv() {
                 self.entries = entries;
-                self.index = index;
+                *self.index.lock().unwrap() = index;
+                #[cfg(feature = "clip")]
+                self.vision.index(self.index.clone(), self.entries.clone(), self.root.join(".obsidian/ateliet/images/index.bin"), ctx.clone());
                 self.scanning = None;
                 self.shown_key = String::from("\u{0}");
                 self.selection.clear();
@@ -208,9 +216,11 @@ impl ImagesState {
         }
         self.shown_key = key;
         let candidates: Vec<usize> = (0..self.entries.len()).filter(|&i| self.folder.as_ref().is_none_or(|f| &self.entries[i].folder == f)).collect();
+        let index = self.index.clone();
+        let ix = index.lock().unwrap();
         self.shown = if let Some(s) = self.similar_to {
-            match self.index.vector(&self.entries[s].key).map(|v| v.to_vec()) {
-                Some(v) => images::rank(&self.entries, &self.index, &candidates, &v, &[]).into_iter().map(|x| x.0).collect(),
+            match ix.vector(&self.entries[s].key).map(|v| v.to_vec()) {
+                Some(v) => images::rank(&self.entries, &ix, &candidates, &v, &[]).into_iter().map(|x| x.0).collect(),
                 None => vec![s],
             }
         } else if self.query.trim().is_empty() {
@@ -219,8 +229,47 @@ impl ImagesState {
             c
         } else {
             let words = images::query_words(&self.query);
+            #[cfg(feature = "clip")]
+            if let Some(v) = self.vision.ready().then(|| self.vision.text_vector(&self.query)).flatten() {
+                // by description, then pictures not analysed yet whose name matches
+                let mut out: Vec<usize> = images::rank(&self.entries, &ix, &candidates, &v, &words).into_iter().map(|x| x.0).collect();
+                let unanalysed: Vec<usize> = candidates.iter().copied().filter(|&i| !ix.has_vector(&self.entries[i].key)).collect();
+                out.extend(images::rank_by_name(&self.entries, &unanalysed, &words).into_iter().map(|x| x.0));
+                self.shown = out;
+                return;
+            }
             images::rank_by_name(&self.entries, &candidates, &words).into_iter().map(|x| x.0).collect()
         };
+    }
+
+    /// Model download / analysis progress (description search).
+    #[cfg(feature = "clip")]
+    fn vision_bar(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        use std::sync::atomic::Ordering;
+        let v = &self.vision;
+        if v.downloading.load(Ordering::Relaxed) {
+            let total = v.total.load(Ordering::Relaxed).max(1) as f32;
+            let got = v.received.load(Ordering::Relaxed) as f32;
+            ui.add(egui::ProgressBar::new(got / total).desired_width(160.0).text(format!("model {:.0} / {:.0} MB", got / 1e6, total / 1e6)));
+        } else if !v.ready() {
+            if ui.button("Search by description…").on_hover_text("Downloads the CLIP model once (about 150 MB). Pictures are analysed on this computer.").clicked() {
+                v.download(ui.ctx().clone());
+            }
+        } else {
+            let waiting = v.waiting.load(Ordering::Relaxed);
+            if waiting > 0 {
+                ui.label(RichText::new(format!("analysing {} / {waiting}", v.done.load(Ordering::Relaxed))).small().color(p.muted));
+            } else if self.scanning.is_none() && !self.entries.is_empty() {
+                // a model that arrived after the scan: start analysing
+                let missing = { let ix = self.index.lock().unwrap(); self.entries.iter().any(|e| !ix.has_vector(&e.key)) };
+                if missing {
+                    v.index(self.index.clone(), self.entries.clone(), self.root.join(".obsidian/ateliet/images/index.bin"), ui.ctx().clone());
+                }
+            }
+        }
+        if let Some(e) = v.error.lock().unwrap().clone() {
+            ui.label(RichText::new(e).small().color(p.error));
+        }
     }
 
     /// Folders with pictures: (folder, count, cover index).
@@ -285,8 +334,12 @@ impl ImagesState {
             return self.viewer_ui(ui, p, vault);
         }
         let mut action = None;
-        ui.horizontal(|ui| {
-            let r = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text("Search pictures by name…").desired_width(320.0));
+        ui.horizontal_wrapped(|ui| {
+            #[cfg(feature = "clip")]
+            let hint = if self.vision.ready() { "Describe a picture…" } else { "Search pictures by name…" };
+            #[cfg(not(feature = "clip"))]
+            let hint = "Search pictures by name…";
+            let r = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(hint).desired_width(260.0));
             if r.changed() {
                 self.similar_to = None;
             }
@@ -310,6 +363,8 @@ impl ImagesState {
             if self.scanning.is_some() {
                 ui.spinner();
             }
+            #[cfg(feature = "clip")]
+            self.vision_bar(ui, p);
         });
         ui.add_space(6.0);
         self.refresh_shown();
@@ -485,9 +540,12 @@ impl ImagesState {
             ui.painter().with_clip_rect(stage).image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
         let mut similar: Vec<usize> = Vec::new();
-        if let Some(vec) = self.index.vector(&e.key).map(|x| x.to_vec()) {
-            let all: Vec<usize> = (0..self.entries.len()).collect();
-            similar = images::rank(&self.entries, &self.index, &all, &vec, &[]).into_iter().map(|x| x.0).filter(|&i| i != v.idx).take(12).collect();
+        {
+            let ix = self.index.lock().unwrap();
+            if let Some(vec) = ix.vector(&e.key).map(|x| x.to_vec()) {
+                let all: Vec<usize> = (0..self.entries.len()).collect();
+                similar = images::rank(&self.entries, &ix, &all, &vec, &[]).into_iter().map(|x| x.0).filter(|&i| i != v.idx).take(12).collect();
+            }
         }
         let users = vault.index.read().map(|ix| ix.inlinks(&e.key)).unwrap_or_default();
         let mut go_to: Option<usize> = None;
@@ -501,7 +559,7 @@ impl ImagesState {
             ui.add_space(10.0);
             ui.label(RichText::new("Similar").strong());
             if similar.is_empty() {
-                ui.label(RichText::new("Pictures are compared once the image index has analysed them (in the web shell, for now).").small().color(p.muted));
+                ui.label(RichText::new("Pictures are compared once they have been analysed for description search.").small().color(p.muted));
             }
             ui.horizontal_wrapped(|ui| {
                 for &i in &similar {

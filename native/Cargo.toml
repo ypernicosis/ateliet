@@ -8,6 +8,15 @@ edition = "2021"
 name = "ateliet-native"
 path = "src/main.rs"
 
+[features]
+# Search pictures by description (CLIP on ONNX Runtime, fetched at build time
+# like the web shell). `vision-dynamic` loads a system ONNX Runtime instead
+# (ORT_DYLIB_PATH); --no-default-features leaves image search by name only.
+default = ["vision"]
+clip = ["dep:ureq"]
+vision = ["clip", "ateliet_core/ort-bundled"]
+vision-dynamic = ["clip", "ateliet_core/ort-dynamic"]
+
 [dependencies]
 ateliet_core = { path = "../core" }
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
@@ -23,4 +32,5 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
 open = "5"
+ureq = { version = "2", optional = true }
 trash = "5"
