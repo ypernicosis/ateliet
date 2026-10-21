@@ -1,6 +1,8 @@
 //! Commands: the palette (Ctrl+P), the quick switcher (Ctrl+O), template
 //! pickers and keyboard shortcuts, including those of `hotkeys.json`.
 
+use crate::icons;
+use crate::kit;
 use crate::app::{App, LeftTab, Mode};
 use crate::config::VaultConfig;
 use crate::vault;
@@ -39,27 +41,27 @@ pub enum Cmd {
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
-    (Cmd::NewNote, "file-explorer:new-file", "Create new note"),
-    (Cmd::OpenDaily, "daily-notes", "Daily notes: Open today's daily note"),
-    (Cmd::ToggleMode, "markdown:toggle-preview", "Toggle reading view"),
-    (Cmd::Save, "editor:save-file", "Save current file"),
-    (Cmd::CloseTab, "workspace:close", "Close current tab"),
-    (Cmd::Search, "global-search:open", "Search: Search in all files"),
-    (Cmd::Switcher, "switcher:open", "Quick switcher: Open quick switcher"),
-    (Cmd::InsertTemplate, "templater-obsidian:insert-templater", "Templater: Open insert template modal"),
-    (Cmd::NewFromTemplate, "templater-obsidian:create-new-note-from-template", "Templater: Create new note from template"),
-    (Cmd::ToggleLeft, "app:toggle-left-sidebar", "Toggle left sidebar"),
-    (Cmd::ToggleRight, "app:toggle-right-sidebar", "Toggle right sidebar"),
-    (Cmd::Settings, "app:open-settings", "Open settings"),
-    (Cmd::Rename, "workspace:edit-file-title", "Rename file"),
-    (Cmd::Delete, "app:delete-file", "Delete current file"),
-    (Cmd::Outline, "outline:open", "Outline: Show outline"),
-    (Cmd::Backlinks, "backlink:open", "Backlinks: Show backlinks"),
-    (Cmd::Calendar, "calendar:show-calendar-view", "Calendar: Open view"),
-    (Cmd::ChangeVault, "app:open-vault", "Open another vault"),
-    (Cmd::ImageMode, "images:toggle-mode", "Images: Toggle image mode"),
-    (Cmd::NewStoryboard, "storyboard:new", "Storyboard: New storyboard"),
-    (Cmd::NewCanvas, "storyboard:new-canvas", "Storyboard: New infinite canvas"),
+    (Cmd::NewNote, "file-explorer:new-file", "Nova nota"),
+    (Cmd::OpenDaily, "daily-notes", "Notas diárias: Abrir a nota de hoje"),
+    (Cmd::ToggleMode, "markdown:toggle-preview", "Alternar modo leitura"),
+    (Cmd::Save, "editor:save-file", "Salvar arquivo"),
+    (Cmd::CloseTab, "workspace:close", "Fechar aba"),
+    (Cmd::Search, "global-search:open", "Busca: Buscar em todos os arquivos"),
+    (Cmd::Switcher, "switcher:open", "Navegação: Ir para arquivo"),
+    (Cmd::InsertTemplate, "templater-obsidian:insert-templater", "Templater: Inserir modelo"),
+    (Cmd::NewFromTemplate, "templater-obsidian:create-new-note-from-template", "Templater: Nova nota a partir de modelo"),
+    (Cmd::ToggleLeft, "app:toggle-left-sidebar", "Alternar barra lateral esquerda"),
+    (Cmd::ToggleRight, "app:toggle-right-sidebar", "Alternar painel direito"),
+    (Cmd::Settings, "app:open-settings", "Abrir configurações"),
+    (Cmd::Rename, "workspace:edit-file-title", "Renomear arquivo"),
+    (Cmd::Delete, "app:delete-file", "Excluir arquivo"),
+    (Cmd::Outline, "outline:open", "Estrutura: Mostrar títulos"),
+    (Cmd::Backlinks, "backlink:open", "Backlinks: Mostrar backlinks"),
+    (Cmd::Calendar, "calendar:show-calendar-view", "Calendário: Abrir"),
+    (Cmd::ChangeVault, "app:open-vault", "Abrir outro cofre"),
+    (Cmd::ImageMode, "images:toggle-mode", "Imagens: Alternar modo imagem"),
+    (Cmd::NewStoryboard, "storyboard:new", "Storyboard: Novo storyboard"),
+    (Cmd::NewCanvas, "storyboard:new-canvas", "Storyboard: Nova tela infinita"),
     (Cmd::Library, "scriptorium-omena:abrir-biblioteca", "Scriptorium: Abrir biblioteca"),
     (Cmd::Manuscript, "scriptorium-omena:abrir-manuscrito", "Scriptorium: Painel do manuscrito (capítulos)"),
     (Cmd::NewBook, "scriptorium-omena:novo-livro", "Scriptorium: Novo livro"),
@@ -342,7 +344,7 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
                         items.push((0, vault::basename(r).to_string(), vault::parent(r).to_string(), Choice::File(r.clone())));
                     }
                 } else if !pal.query.trim().is_empty() {
-                    items.push((i64::MIN + 1, format!("Create “{}”", pal.query.trim()), String::new(), Choice::Create(pal.query.trim().to_string())));
+                    items.push((i64::MIN + 1, format!("Criar “{}”", pal.query.trim()), String::new(), Choice::Create(pal.query.trim().to_string())));
                 }
             }
         }
@@ -371,48 +373,115 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
     let mut chosen: Option<usize> = None;
     let mut close = ctx.input(|i| i.key_pressed(Key::Escape));
     let placeholder = match pal.kind {
-        Kind::Commands => "Select a command…",
-        Kind::Files => "Find or create a note…",
-        Kind::Templates { .. } => "Choose a template…",
+        Kind::Commands => "Digite um comando",
+        Kind::Files => "Encontre ou crie uma nota",
+        Kind::Templates { .. } => "Escolha um modelo",
     };
     let p = app.palette;
-    egui::Window::new("palette").title_bar(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 80.0]).fixed_size([560.0, 420.0]).show(ctx, |ui| {
-        let r = ui.add(egui::TextEdit::singleline(&mut pal.query).hint_text(placeholder).desired_width(f32::INFINITY).font(egui::TextStyle::Heading));
-        r.request_focus();
-        if r.changed() {
-            pal.selected = 0;
-        }
-        ui.separator();
-        egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-            for (i, (_, title, note, _)) in items.iter().enumerate() {
-                let sel = i == pal.selected;
-                let w = ui.available_width();
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
-                if sel || resp.hovered() {
-                    ui.painter().rect_filled(rect, 4.0, if sel { p.accent.gamma_multiply(0.18) } else { p.bg_hover });
-                }
-                let font = egui::TextStyle::Body.resolve(ui.style());
-                ui.painter().text(rect.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, title, font.clone(), p.text);
-                if !note.is_empty() {
-                    let small = egui::FontId::new(font.size * 0.8, font.family.clone());
-                    ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, note, small, p.muted);
-                }
-                if sel {
-                    resp.scroll_to_me(None);
-                }
-                if resp.clicked() {
-                    chosen = Some(i);
-                }
-            }
-            if items.is_empty() {
-                ui.label(RichText::new("No results.").color(p.muted));
+    egui::Window::new("palette")
+        .title_bar(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_TOP, [0.0, 90.0])
+        .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::ZERO).corner_radius(12.0))
+        .show(ctx, |ui| {
+            ui.set_width(600.0);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 14 }).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(kit::icon(icons::SEARCH, 16.0).color(p.faint));
+                    ui.add_space(10.0);
+                    let r = ui.add(egui::TextEdit::singleline(&mut pal.query).hint_text(RichText::new(placeholder).color(p.faint)).frame(false).desired_width(f32::INFINITY).font(egui::FontId::proportional(16.0)));
+                    r.request_focus();
+                    if r.changed() {
+                        pal.selected = 0;
+                    }
+                });
+            });
+            kit::hairline(ui, p);
+            egui::Frame::new().inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+                    for (i, (_, title, note, choice)) in items.iter().enumerate() {
+                        let sel = i == pal.selected;
+                        let w = ui.available_width();
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 36.0), egui::Sense::click());
+                        if sel || resp.hovered() {
+                            ui.painter().rect_filled(rect, 7.0, if sel { p.bg_active } else { p.bg_hover });
+                        }
+                        let glyph = match choice {
+                            Choice::Cmd(_) => icons::CHEVRON_RIGHT,
+                            Choice::File(_) => icons::FILE_TEXT,
+                            Choice::Create(_) => icons::PLUS,
+                            Choice::Template(..) => icons::LAYOUT_TEMPLATE,
+                        };
+                        let cy = rect.center().y;
+                        ui.painter().text(egui::pos2(rect.left() + 20.0, cy), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(14.0), if sel { p.text } else { p.faint });
+                        // "Group: name" → the group quieter than the name
+                        let mut job = egui::text::LayoutJob::default();
+                        let body = egui::FontId::proportional(13.5);
+                        match (matches!(choice, Choice::Cmd(_)), title.split_once(": ")) {
+                            (true, Some((group, name))) => {
+                                job.append(&format!("{group}  "), 0.0, egui::TextFormat { font_id: body.clone(), color: p.faint, ..Default::default() });
+                                job.append(name, 0.0, egui::TextFormat { font_id: body.clone(), color: p.text, ..Default::default() });
+                            }
+                            _ => job.append(title, 0.0, egui::TextFormat { font_id: body.clone(), color: p.text, ..Default::default() }),
+                        }
+                        let mut right = rect.right() - 12.0;
+                        if !note.is_empty() {
+                            if matches!(choice, Choice::Cmd(_)) {
+                                // shortcut as key caps
+                                for key in note.split('+').collect::<Vec<_>>().into_iter().rev() {
+                                    let g = ui.painter().layout_no_wrap(key.to_string(), egui::FontId::proportional(11.0), p.muted);
+                                    let cap = egui::Rect::from_min_size(egui::pos2(right - g.size().x - 12.0, cy - 10.0), egui::vec2(g.size().x + 12.0, 20.0));
+                                    ui.painter().rect(cap, 5.0, p.bg_secondary, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                                    ui.painter().galley(egui::pos2(cap.left() + 6.0, cy - g.size().y / 2.0), g, p.muted);
+                                    right = cap.left() - 4.0;
+                                }
+                            } else {
+                                let g = ui.painter().layout_no_wrap(note.clone(), egui::FontId::proportional(11.5), p.faint);
+                                let max = (rect.width() * 0.4).min(g.size().x);
+                                let mut nj = egui::text::LayoutJob::single_section(note.clone(), egui::TextFormat { font_id: egui::FontId::proportional(11.5), color: p.faint, ..Default::default() });
+                                nj.wrap = egui::text::TextWrapping::truncate_at_width(max);
+                                let g = ui.fonts(|f| f.layout_job(nj));
+                                ui.painter().galley(egui::pos2(right - g.size().x, cy - g.size().y / 2.0), g, p.faint);
+                                right -= max + 12.0;
+                            }
+                        }
+                        job.wrap = egui::text::TextWrapping::truncate_at_width((right - rect.left() - 44.0).max(40.0));
+                        let g = ui.fonts(|f| f.layout_job(job));
+                        ui.painter().galley(egui::pos2(rect.left() + 40.0, cy - g.size().y / 2.0), g, p.text);
+                        if sel {
+                            resp.scroll_to_me(None);
+                        }
+                        if resp.clicked() {
+                            chosen = Some(i);
+                        }
+                    }
+                    if items.is_empty() {
+                        ui.add_space(14.0);
+                        ui.vertical_centered(|ui| ui.label(RichText::new("Nada encontrado").color(p.faint)));
+                        ui.add_space(14.0);
+                    }
+                });
+            });
+            kit::hairline(ui, p);
+            egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 18, top: 8, bottom: 9 }).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 16.0;
+                    for t in ["↑↓  navegar", "↵  abrir", "esc  fechar"] {
+                        ui.label(RichText::new(t).size(11.0).color(p.faint));
+                    }
+                });
+            });
+            if ui.input(|i| i.key_pressed(Key::Enter)) && n > 0 {
+                chosen = Some(pal.selected);
             }
         });
-        if ui.input(|i| i.key_pressed(Key::Enter)) && n > 0 {
-            chosen = Some(pal.selected);
-        }
-    });
     if let Some(i) = chosen {
+        // the Enter that chose must not also confirm whatever opens next
+        ctx.input_mut(|inp| {
+            inp.consume_key(Modifiers::NONE, Key::Enter);
+            inp.consume_key(Modifiers::COMMAND, Key::Enter);
+        });
         let choice = items.swap_remove(i).3;
         app.palette_ui = None;
         let new_tab = ctx.input(|i| i.modifiers.command);

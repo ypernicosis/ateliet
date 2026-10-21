@@ -163,25 +163,24 @@ fn properties(ui: &mut egui::Ui, text: &str, host: &dyn Host) {
     let p = host.palette();
     let yaml = text.trim_start_matches("---").trim_end().trim_end_matches("---");
     let data = syntax::parse_yaml(yaml).unwrap_or(serde_json::Value::Null);
-    egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 4)).show(ui, |ui| {
-        ui.label(egui::RichText::new("Properties").small().strong().color(p.muted));
-        egui::Grid::new(("props", text.len())).spacing([24.0, 4.0]).show(ui, |ui| {
-            if let Some(o) = data.as_object() {
-                for (k, v) in o {
-                    ui.label(egui::RichText::new(k).color(p.muted));
-                    let shown = match v {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect::<Vec<_>>().join(", "),
-                        serde_json::Value::Null => String::new(),
-                        other => other.to_string(),
-                    };
-                    ui.label(egui::RichText::new(shown).color(p.text));
-                    ui.end_row();
-                }
+    let Some(o) = data.as_object().filter(|o| !o.is_empty()) else { return };
+    egui::Frame::new().fill(p.bg_secondary).corner_radius(8.0).inner_margin(egui::Margin { left: 14, right: 14, top: 10, bottom: 10 }).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        egui::Grid::new(("props", text.len())).spacing([20.0, 5.0]).show(ui, |ui| {
+            for (k, v) in o {
+                ui.label(egui::RichText::new(k).size(13.0).color(p.faint));
+                let shown = match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect::<Vec<_>>().join(", "),
+                    serde_json::Value::Null => String::new(),
+                    other => other.to_string(),
+                };
+                ui.label(egui::RichText::new(if shown.is_empty() { "—".to_string() } else { shown }).size(13.0).color(p.text));
+                ui.end_row();
             }
         });
     });
-    ui.separator();
+    ui.add_space(host.size() * 0.6);
 }
 
 /// Draw the note in Live Preview; returns the actions of clicked links and tasks.

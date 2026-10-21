@@ -7,6 +7,9 @@ use crate::vault::{self, Folder};
 use ateliet_core::calendar::{self, MonthRequest};
 use ateliet_core::search;
 use chrono::{Datelike, NaiveDate};
+use crate::icons;
+use crate::kit;
+use crate::theme::{self, Palette};
 use eframe::egui::{self, Color32, RichText, Sense};
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver};
@@ -55,45 +58,45 @@ impl Default for CalendarState {
     }
 }
 
-fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str, active: bool) -> egui::Response {
-    let r = ui.add(egui::Button::new(RichText::new(icon).size(17.0)).frame(false).min_size(egui::vec2(30.0, 30.0)).selected(active));
-    r.on_hover_text(tip)
+fn icon_button(ui: &mut egui::Ui, glyph: &str, tip: &str, active: bool, p: Palette) -> egui::Response {
+    kit::icon_button(ui, glyph, tip, active, p)
 }
 
 pub fn ribbon(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::SidePanel::left("ribbon").exact_width(44.0).resizable(false).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(6, 8)).stroke(egui::Stroke::new(1.0_f32, p.border))).show(ctx, |ui| {
+    egui::SidePanel::left("ribbon").exact_width(48.0).resizable(false).show_separator_line(false).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 10 })).show(ctx, |ui| {
+        ui.spacing_mut().item_spacing.y = 4.0;
         ui.vertical_centered(|ui| {
-            if icon_button(ui, "🗀", "Files", app.left_open && app.left_tab == LeftTab::Files).clicked() {
+            if icon_button(ui, icons::FOLDER_CLOSED, "Arquivos", app.left_open && app.left_tab == LeftTab::Files, p).clicked() {
                 toggle_left(app, LeftTab::Files);
             }
-            if icon_button(ui, "🔍", "Search (Ctrl+Shift+F)", app.left_open && app.left_tab == LeftTab::Search).clicked() {
+            if icon_button(ui, icons::SEARCH, "Buscar (Ctrl+Shift+F)", app.left_open && app.left_tab == LeftTab::Search, p).clicked() {
                 toggle_left(app, LeftTab::Search);
             }
-            if icon_button(ui, "🔖", "Bookmarks", app.left_open && app.left_tab == LeftTab::Bookmarks).clicked() {
+            if icon_button(ui, icons::BOOKMARK, "Favoritos", app.left_open && app.left_tab == LeftTab::Bookmarks, p).clicked() {
                 toggle_left(app, LeftTab::Bookmarks);
             }
-            if icon_button(ui, "🖼", "Image mode (Ctrl+Shift+I)", app.images_mode).clicked() {
-                app.images_mode = !app.images_mode;
-            }
-            if icon_button(ui, "📚", "Scriptorium: Biblioteca", app.active_tab().is_some_and(|t| t.path == "scriptorium:library")).clicked() {
+            ui.add_space(10.0);
+            if icon_button(ui, icons::LIBRARY_BIG, "Biblioteca", app.active_tab().is_some_and(|t| t.path == "scriptorium:library"), p).clicked() {
                 app.open_view("library", None);
             }
-            ui.add_space(8.0);
-            if icon_button(ui, "📅", "Open today's daily note", false).clicked() {
+            if icon_button(ui, icons::IMAGES, "Modo imagem (Ctrl+Shift+I)", app.images_mode, p).clicked() {
+                app.images_mode = !app.images_mode;
+            }
+            if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());
             }
-            if icon_button(ui, "📝", "Templater: insert template (Alt+E)", false).clicked() {
+            if icon_button(ui, icons::LAYOUT_TEMPLATE, "Inserir modelo (Alt+E)", false, p).clicked() {
                 app.palette_ui = Some(crate::commands::Palette::templates(app, app.tabs.is_empty()));
             }
-            if icon_button(ui, "⌘", "Command palette (Ctrl+P)", false).clicked() {
+            if icon_button(ui, icons::COMMAND, "Comandos (Ctrl+P)", false, p).clicked() {
                 app.palette_ui = Some(crate::commands::Palette::commands());
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                if icon_button(ui, "⚙", "Settings", app.settings_open).clicked() {
+                if icon_button(ui, icons::SETTINGS, "Configurações", app.settings_open, p).clicked() {
                     app.settings_open = !app.settings_open;
                 }
-                if icon_button(ui, "🗄", "Open another vault", false).clicked() {
+                if icon_button(ui, icons::ARCHIVE, "Abrir outro cofre", false, p).clicked() {
                     app.save_all();
                     app.vault = None;
                     app.tabs.clear();
@@ -112,23 +115,23 @@ fn toggle_left(app: &mut App, tab: LeftTab) {
     }
 }
 
-fn header_tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, current: &mut T, tabs: &[(T, &str, &str)]) {
+fn header_tabs<T: PartialEq + Copy>(ui: &mut egui::Ui, current: &mut T, tabs: &[(T, &str, &str)], p: Palette) {
     ui.horizontal(|ui| {
-        for (t, icon, tip) in tabs {
-            if icon_button(ui, icon, tip, *current == *t).clicked() {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (t, glyph, tip) in tabs {
+            if icon_button(ui, glyph, tip, *current == *t, p).clicked() {
                 *current = *t;
             }
         }
     });
-    ui.separator();
+    ui.add_space(6.0);
 }
 
 pub fn left(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::SidePanel::left("left").resizable(true).default_width(260.0).width_range(160.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(8, 6))).show(ctx, |ui| {
-        let mut tab = app.left_tab;
-        header_tabs(ui, &mut tab, &[(LeftTab::Files, "🗀", "Files"), (LeftTab::Search, "🔍", "Search"), (LeftTab::Bookmarks, "🔖", "Bookmarks")]);
-        app.left_tab = tab;
+    egui::SidePanel::left("left").resizable(true).show_separator_line(false).default_width(264.0).width_range(180.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 8 })).show(ctx, |ui| {
+        let clip = ui.clip_rect();
+        ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
         match app.left_tab {
             LeftTab::Files => files(app, ui),
             LeftTab::Search => search_panel(app, ui),
@@ -139,25 +142,29 @@ pub fn left(app: &mut App, ctx: &egui::Context) {
 
 fn files(app: &mut App, ui: &mut egui::Ui) {
     let Some(v) = &app.vault else { return };
+    let p = app.palette;
     let name = v.name.clone();
     let tree = v.tree.clone();
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&name).strong());
+        ui.label(RichText::new(&name).font(kit::medium(theme::UI)).color(p.text));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("+ 🗀").on_hover_text("New folder").clicked() {
-                app.ask = Some(Ask { title: "New folder".into(), value: String::new(), kind: AskKind::NewFolder(String::new()) });
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if kit::icon_button_sized(ui, icons::FOLDER_PLUS, "Nova pasta", false, p, 24.0, 14.0).clicked() {
+                app.ask = Some(Ask { title: "Nova pasta".into(), value: String::new(), kind: AskKind::NewFolder(String::new()) });
             }
-            if ui.small_button("+ 🗋").on_hover_text("New note (Ctrl+N)").clicked() {
+            if kit::icon_button_sized(ui, icons::SQUARE_PEN, "Nova nota (Ctrl+N)", false, p, 24.0, 14.0).clicked() {
                 app.new_note("");
             }
         });
     });
+    ui.add_space(4.0);
     let active = app.active_path();
     let mut open: Option<(String, bool)> = None;
     let mut ask: Option<Ask> = None;
     let mut new_in: Option<String> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        folder_ui(ui, &tree, "", active.as_deref(), &mut open, &mut ask, &mut new_in, app.palette);
+        ui.spacing_mut().item_spacing.y = 1.0;
+        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, p);
     });
     if let Some((p, nt)) = open {
         app.open(&p, nt);
@@ -170,47 +177,57 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+fn file_icon(name: &str) -> &'static str {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
+    match ext.as_str() {
+        "md" => icons::FILE_TEXT,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "avif" | "psd" | "clip" => icons::IMAGE,
+        "storyboard" => icons::CLAPPERBOARD,
+        "canvas" => icons::NETWORK,
+        "mp3" | "wav" | "ogg" | "m4a" | "flac" => icons::MUSIC,
+        "mp4" | "mov" | "webm" => icons::FILM,
+        _ => icons::FILE,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, p: crate::theme::Palette) {
+fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, p: Palette) {
     for (name, sub) in &f.folders {
         let full = if path.is_empty() { name.clone() } else { format!("{path}/{name}") };
         let id = ui.make_persistent_id(("folder", &full));
-        let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-        let header = state.show_header(ui, |ui| {
-            let r = ui.add(egui::Label::new(RichText::new(name).color(p.text)).sense(Sense::click()));
-            r.context_menu(|ui| {
-                if ui.button("New note").clicked() {
-                    *new_in = Some(full.clone());
-                    ui.close_menu();
-                }
-                if ui.button("New folder").clicked() {
-                    *ask = Some(Ask { title: "New folder".into(), value: String::new(), kind: AskKind::NewFolder(full.clone()) });
-                    ui.close_menu();
-                }
-                if ui.button("Rename").clicked() {
-                    *ask = Some(Ask { title: "Rename folder".into(), value: name.clone(), kind: AskKind::Rename(full.clone()) });
-                    ui.close_menu();
-                }
-                if ui.button("Delete").clicked() {
-                    *ask = Some(Ask { title: format!("Delete the folder “{name}” and everything in it?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
-                    ui.close_menu();
-                }
-            });
-            r
+        let is_open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+        let r = kit::Row::new(name).depth(depth).chevron(is_open).show(ui, p);
+        if r.clicked() {
+            ui.data_mut(|d| d.insert_temp(id, !is_open));
+        }
+        r.context_menu(|ui| {
+            if ui.button("Nova nota").clicked() {
+                *new_in = Some(full.clone());
+                ui.close_menu();
+            }
+            if ui.button("Nova pasta").clicked() {
+                *ask = Some(Ask { title: "Nova pasta".into(), value: String::new(), kind: AskKind::NewFolder(full.clone()) });
+                ui.close_menu();
+            }
+            if ui.button("Renomear").clicked() {
+                *ask = Some(Ask { title: "Renomear pasta".into(), value: name.clone(), kind: AskKind::Rename(full.clone()) });
+                ui.close_menu();
+            }
+            if ui.button("Excluir").clicked() {
+                *ask = Some(Ask { title: format!("Excluir a pasta “{name}” e tudo dentro dela?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
+                ui.close_menu();
+            }
         });
-        let (_, hr, _) = header.body(|ui| folder_ui(ui, sub, &full, active, open, ask, new_in, p));
-        if hr.inner.clicked() {
-            let mut s = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-            s.toggle(ui);
-            s.store(ui.ctx());
+        if is_open {
+            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, p);
         }
     }
     for (name, full) in &f.files {
-        let label = if name.to_lowercase().ends_with(".md") { &name[..name.len() - 3] } else { name.as_str() };
-        let is_active = active == Some(full.as_str());
         let is_md = name.to_lowercase().ends_with(".md");
-        let text = RichText::new(label).color(if is_md { p.text } else { p.muted });
-        let r = ui.add(egui::Button::new(text).frame(false).selected(is_active).wrap_mode(egui::TextWrapMode::Truncate));
+        let label = if is_md { &name[..name.len() - 3] } else { name.as_str() };
+        let is_active = active == Some(full.as_str());
+        // files line up with the folder names above them (past the chevron)
+        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard")).show(ui, p);
         if r.clicked() {
             *open = Some((full.clone(), ui.input(|i| i.modifiers.command)));
         }
@@ -218,16 +235,16 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, active: Option<&str>, op
             *open = Some((full.clone(), true));
         }
         r.context_menu(|ui| {
-            if ui.button("Open in new tab").clicked() {
+            if ui.button("Abrir em nova aba").clicked() {
                 *open = Some((full.clone(), true));
                 ui.close_menu();
             }
-            if ui.button("Rename").clicked() {
-                *ask = Some(Ask { title: "Rename".into(), value: label.to_string(), kind: AskKind::Rename(full.clone()) });
+            if ui.button("Renomear").clicked() {
+                *ask = Some(Ask { title: "Renomear".into(), value: label.to_string(), kind: AskKind::Rename(full.clone()) });
                 ui.close_menu();
             }
-            if ui.button("Delete").clicked() {
-                *ask = Some(Ask { title: format!("Delete “{label}”?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
+            if ui.button("Excluir").clicked() {
+                *ask = Some(Ask { title: format!("Excluir “{label}”?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
                 ui.close_menu();
             }
         });
@@ -236,8 +253,9 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, active: Option<&str>, op
 
 fn search_panel(app: &mut App, ui: &mut egui::Ui) {
     let Some(v) = &app.vault else { return };
+    let p = app.palette;
     let s = &mut app.search;
-    let r = ui.add(egui::TextEdit::singleline(&mut s.query).hint_text("Search…  (tag:, path:, \"phrase\", -word)").desired_width(f32::INFINITY));
+    let r = kit::search_field(ui, &mut s.query, "Buscar no cofre", p);
     if s.run_now {
         r.request_focus();
     }
@@ -259,27 +277,35 @@ fn search_panel(app: &mut App, ui: &mut egui::Ui) {
             s.pending = None;
         }
     }
+    ui.add_space(6.0);
     if s.pending.is_some() {
         ui.spinner();
-    }
-    if !s.query.is_empty() && s.pending.is_none() {
+    } else if !s.query.is_empty() {
         let total: usize = s.results.iter().map(|r| r.total).sum();
-        ui.label(RichText::new(format!("{} files · {} matches", s.results.len(), total)).small().color(app.palette.muted));
+        ui.label(RichText::new(format!("{} arquivos · {} ocorrências", s.results.len(), total)).small().color(p.faint));
+    } else {
+        ui.label(RichText::new("tag:  path:  \"frase exata\"  -excluir").small().color(p.faint));
     }
+    ui.add_space(4.0);
     let mut open: Option<String> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
         for r in &s.results {
             let name = vault::basename(&r.path);
-            if ui.add(egui::Button::new(RichText::new(name).strong()).frame(false).wrap_mode(egui::TextWrapMode::Truncate)).clicked() {
+            if kit::Row::new(name).icon(icons::FILE_TEXT).trailing(r.total.to_string()).show(ui, p).clicked() {
                 open = Some(r.path.clone());
             }
-            for m in r.matches.iter().take(4) {
-                let text: String = m.text.chars().take(160).collect();
-                if ui.add(egui::Label::new(RichText::new(text.trim()).small().color(app.palette.muted)).sense(Sense::click()).truncate()).clicked() {
+            for m in r.matches.iter().take(3) {
+                let text: String = m.text.trim().chars().take(160).collect();
+                let resp = ui.horizontal(|ui| {
+                    ui.add_space(30.0);
+                    ui.add(egui::Label::new(RichText::new(text).small().color(p.muted)).sense(Sense::click()).truncate())
+                });
+                if resp.inner.clicked() {
                     open = Some(r.path.clone());
                 }
             }
-            ui.add_space(4.0);
+            ui.add_space(6.0);
         }
     });
     if let Some(p) = open {
@@ -289,20 +315,29 @@ fn search_panel(app: &mut App, ui: &mut egui::Ui) {
 
 fn bookmarks(app: &mut App, ui: &mut egui::Ui) {
     let Some(cfg) = &app.cfg else { return };
+    let p = app.palette;
     let b = cfg.read("bookmarks.json");
     let mut open = None;
-    fn walk(items: &[Value], ui: &mut egui::Ui, open: &mut Option<String>) {
+    fn walk(items: &[Value], ui: &mut egui::Ui, depth: usize, open: &mut Option<String>, p: Palette) {
         for it in items {
             match it["type"].as_str() {
                 Some("file") => {
                     let path = it["path"].as_str().unwrap_or_default();
                     let title = it["title"].as_str().map(str::to_string).unwrap_or_else(|| vault::basename(path).to_string());
-                    if ui.add(egui::Button::new(title).frame(false)).clicked() {
+                    if kit::Row::new(&title).depth(depth).icon(icons::FILE_TEXT).show(ui, p).clicked() {
                         *open = Some(path.to_string());
                     }
                 }
                 Some("group") => {
-                    ui.collapsing(it["title"].as_str().unwrap_or("Group"), |ui| walk(it["items"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), ui, open));
+                    let title = it["title"].as_str().unwrap_or("Grupo");
+                    let id = ui.make_persistent_id(("bm-group", title, depth));
+                    let is_open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(true);
+                    if kit::Row::new(title).depth(depth).chevron(is_open).show(ui, p).clicked() {
+                        ui.data_mut(|d| d.insert_temp(id, !is_open));
+                    }
+                    if is_open {
+                        walk(it["items"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), ui, depth + 1, open, p);
+                    }
                 }
                 _ => {}
             }
@@ -310,9 +345,10 @@ fn bookmarks(app: &mut App, ui: &mut egui::Ui) {
     }
     let items = b["items"].as_array().cloned().unwrap_or_default();
     if items.is_empty() {
-        ui.label(RichText::new("No bookmarks.").color(app.palette.muted));
+        ui.label(RichText::new("Nenhum favorito.").color(p.faint));
     }
-    walk(&items, ui, &mut open);
+    ui.spacing_mut().item_spacing.y = 1.0;
+    walk(&items, ui, 0, &mut open, p);
     if let Some(p) = open {
         app.open(&p, false);
     }
@@ -320,9 +356,11 @@ fn bookmarks(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn right(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::SidePanel::right("right").resizable(true).default_width(290.0).width_range(200.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(8, 6))).show(ctx, |ui| {
+    egui::SidePanel::right("right").resizable(true).show_separator_line(false).default_width(290.0).width_range(220.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 8 })).show(ctx, |ui| {
+        let clip = ui.clip_rect();
+        ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
         let mut tab = app.right_tab;
-        header_tabs(ui, &mut tab, &[(RightTab::Calendar, "📅", "Calendar"), (RightTab::Backlinks, "↙", "Backlinks"), (RightTab::Outline, "☰", "Outline"), (RightTab::Tags, "#", "Tags"), (RightTab::Manuscript, "📖", "Manuscrito (Scriptorium)")]);
+        header_tabs(ui, &mut tab, &[(RightTab::Calendar, icons::CALENDAR, "Calendário"), (RightTab::Backlinks, icons::LINK, "Backlinks"), (RightTab::Outline, icons::LIST, "Estrutura"), (RightTab::Tags, icons::HASH, "Tags"), (RightTab::Manuscript, icons::BOOK_TEXT, "Manuscrito")], p);
         app.right_tab = tab;
         match app.right_tab {
             RightTab::Backlinks => backlinks(app, ui),
@@ -345,8 +383,9 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
 }
 
 fn backlinks(app: &mut App, ui: &mut egui::Ui) {
+    let p = app.palette;
     let (Some(v), Some(path)) = (&app.vault, app.active_path()) else {
-        ui.label(RichText::new("No file is open.").color(app.palette.muted));
+        ui.label(RichText::new("Nenhum arquivo aberto.").color(p.faint));
         return;
     };
     let (inl, outl): (Vec<String>, Vec<String>) = {
@@ -354,18 +393,18 @@ fn backlinks(app: &mut App, ui: &mut egui::Ui) {
         (ix.inlinks(&path), ix.page(&path).map(|p| p.outlinks.iter().map(|l| l.path.clone()).collect()).unwrap_or_default())
     };
     let mut open = None;
-    ui.label(RichText::new(format!("Linked mentions ({})", inl.len())).strong());
+    ui.spacing_mut().item_spacing.y = 1.0;
+    kit::section(ui, &format!("Menções com link · {}", inl.len()), p);
     for s in &inl {
-        if ui.add(egui::Button::new(vault::basename(s)).frame(false)).clicked() {
+        if kit::Row::new(vault::basename(s)).icon(icons::ARROW_LEFT).show(ui, p).clicked() {
             open = Some(s.clone());
         }
     }
     ui.add_space(10.0);
-    ui.label(RichText::new(format!("Outgoing links ({})", outl.len())).strong());
+    kit::section(ui, &format!("Links de saída · {}", outl.len()), p);
     for s in &outl {
         let exists = v.abs(s).exists();
-        let t = RichText::new(vault::basename(s)).color(if exists { app.palette.text } else { app.palette.faint });
-        if ui.add(egui::Button::new(t).frame(false)).clicked() {
+        if kit::Row::new(vault::basename(s)).icon(icons::ARROW_RIGHT).dim(!exists).show(ui, p).clicked() {
             open = Some(s.clone());
         }
     }
@@ -375,34 +414,36 @@ fn backlinks(app: &mut App, ui: &mut egui::Ui) {
 }
 
 fn outline(app: &mut App, ui: &mut egui::Ui) {
+    let p = app.palette;
     let Some(tab) = app.tabs.get_mut(app.active) else { return };
+    if tab.view.is_some() || tab.board.is_some() {
+        ui.label(RichText::new("Sem títulos.").color(p.faint));
+        return;
+    }
     let doc = tab.doc();
     if doc.headings.is_empty() {
-        ui.label(RichText::new("No headings.").color(app.palette.muted));
+        ui.label(RichText::new("Sem títulos.").color(p.faint));
     }
+    ui.spacing_mut().item_spacing.y = 1.0;
     let min = doc.headings.iter().map(|h| h.0).min().unwrap_or(1);
     for (level, text, line) in &doc.headings {
-        ui.horizontal(|ui| {
-            ui.add_space(((level - min) as f32) * 14.0);
-            if ui.add(egui::Button::new(text).frame(false).wrap_mode(egui::TextWrapMode::Truncate)).clicked() {
-                tab.scroll_to = Some(*line);
-            }
-        });
+        if kit::Row::new(text).depth((level - min) as usize).show(ui, p).clicked() {
+            tab.scroll_to = Some(*line);
+        }
     }
 }
 
 fn tags(app: &mut App, ui: &mut egui::Ui) {
     let Some(v) = &app.vault else { return };
+    let p = app.palette;
     let tags = v.index.read().unwrap().tag_counts();
     let mut clicked = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 1.0;
         for (t, n) in &tags {
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new(t).color(app.palette.accent)).frame(false)).clicked() {
-                    clicked = Some(t.trim_start_matches('#').to_string());
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(RichText::new(n.to_string()).small().color(app.palette.muted)));
-            });
+            if kit::Row::new(t.trim_start_matches('#')).icon(icons::HASH).trailing(n.to_string()).show(ui, p).clicked() {
+                clicked = Some(t.trim_start_matches('#').to_string());
+            }
         }
     });
     if let Some(t) = clicked {
@@ -426,10 +467,11 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
     let mut first_char_upper: String = month.chars().take(1).flat_map(char::to_uppercase).collect();
     first_char_upper.push_str(&month.chars().skip(1).collect::<String>());
     ui.horizontal(|ui| {
-        ui.label(RichText::new(first_char_upper).size(18.0).strong());
-        ui.label(RichText::new(data["year"].to_string()).size(18.0).color(p.accent));
+        ui.label(RichText::new(first_char_upper).font(kit::bold(16.0)).color(p.text));
+        ui.label(RichText::new(data["year"].to_string()).font(kit::medium(16.0)).color(p.faint));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("›").clicked() {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            if kit::icon_button_sized(ui, icons::CHEVRON_RIGHT, "Próximo mês", false, p, 24.0, 14.0).clicked() {
                 if c.month == 12 {
                     c.month = 1;
                     c.year += 1;
@@ -437,12 +479,12 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
                     c.month += 1;
                 }
             }
-            if ui.small_button(if app.locale.starts_with("pt") { "Hoje" } else { "Today" }).clicked() {
+            if ui.add(egui::Button::new(RichText::new(if app.locale.starts_with("pt") { "Hoje" } else { "Today" }).size(12.0).color(p.muted)).frame(false)).clicked() {
                 let t = ateliet_core::datefmt::today();
                 c.year = t.year();
                 c.month = t.month();
             }
-            if ui.small_button("‹").clicked() {
+            if kit::icon_button_sized(ui, icons::CHEVRON_LEFT, "Mês anterior", false, p, 24.0, 14.0).clicked() {
                 if c.month == 1 {
                     c.month = 12;
                     c.year -= 1;
@@ -458,7 +500,7 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
     let cell = ((ui.available_width() - 6.0 * 2.0) / 7.0).max(24.0);
     egui::Grid::new("calendar").spacing([2.0, 2.0]).min_col_width(cell).max_col_width(cell).show(ui, |ui| {
         for w in data["weekdays"].as_array().cloned().unwrap_or_default() {
-            ui.vertical_centered(|ui| ui.label(RichText::new(w.as_str().unwrap_or_default().to_uppercase()).size(10.0).color(p.muted)));
+            ui.vertical_centered(|ui| ui.label(RichText::new(w.as_str().unwrap_or_default().chars().take(3).collect::<String>()).font(kit::medium(10.5)).color(p.faint)));
         }
         ui.end_row();
         for week in data["weeks"].as_array().cloned().unwrap_or_default() {
@@ -468,22 +510,25 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
                 let today = d["today"].as_bool().unwrap_or(false);
                 let is_active = active.as_deref() == d["path"].as_str();
                 let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, 34.0), Sense::click());
-                let bg = if is_active { p.accent } else if resp.hovered() { p.bg_hover } else { Color32::TRANSPARENT };
-                ui.painter().rect_filled(rect, 4.0, bg);
-                let color = if is_active { Color32::WHITE } else if today { p.accent } else if in_month { p.text } else { p.faint };
-                let font = egui::FontId::new(13.0, if today { egui::FontFamily::Name("bold".into()) } else { egui::FontFamily::Proportional });
-                ui.painter().text(rect.center_top() + egui::vec2(0.0, 6.0), egui::Align2::CENTER_TOP, day.to_string(), font, color);
+                let bg = if is_active { p.accent_strong } else if resp.hovered() { p.bg_hover } else { Color32::TRANSPARENT };
+                ui.painter().rect_filled(rect.shrink(1.0), 8.0, bg);
+                if today && !is_active {
+                    ui.painter().rect_stroke(rect.shrink(1.5), 8.0, egui::Stroke::new(1.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                }
+                let color = if is_active { p.on_accent } else if today { p.accent_strong } else if in_month { p.text } else { p.faint };
+                let font = if today { kit::bold(12.5) } else { egui::FontId::proportional(12.5) };
+                ui.painter().text(rect.center_top() + egui::vec2(0.0, 7.0), egui::Align2::CENTER_TOP, day.to_string(), font, color);
                 let dots = d["dots"].as_u64().unwrap_or(0) as usize;
                 let tasks = d["openTasks"].as_u64().unwrap_or(0) > 0;
                 let n = dots + tasks as usize;
-                let dot_color = if is_active { Color32::WHITE } else { p.muted };
+                let dot_color = if is_active { p.on_accent } else { p.faint };
                 for i in 0..n {
                     let x = rect.center().x + (i as f32 - (n as f32 - 1.0) / 2.0) * 6.0;
                     let c = egui::pos2(x, rect.bottom() - 7.0);
                     if i < dots {
-                        ui.painter().circle_filled(c, 2.0, dot_color);
+                        ui.painter().circle_filled(c, 1.8, dot_color);
                     } else {
-                        ui.painter().circle_stroke(c, 2.0, egui::Stroke::new(1.0_f32, dot_color));
+                        ui.painter().circle_stroke(c, 1.8, egui::Stroke::new(1.0_f32, dot_color));
                     }
                 }
                 if resp.clicked() {
@@ -502,45 +547,88 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::TopBottomPanel::top("tabs").frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(6, 4))).show(ctx, |ui| {
+    egui::TopBottomPanel::top("tabs").show_separator_line(false).exact_height(42.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 8, right: 8, top: 7, bottom: 0 })).show(ctx, |ui| {
+        let clip = ui.clip_rect();
+        ui.painter().hline(clip.x_range(), clip.bottom() - 0.5, egui::Stroke::new(1.0_f32, p.border));
         let mut close = None;
         let mut select = None;
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(if app.left_open { "◀" } else { "▶" }).frame(false)).on_hover_text("Toggle left sidebar").clicked() {
-                    app.left_open = !app.left_open;
-                }
-                for (i, t) in app.tabs.iter().enumerate() {
-                    let active = i == app.active;
-                    let fill = if active { p.bg } else { Color32::TRANSPARENT };
-                    egui::Frame::new().fill(fill).corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
-                        let name = format!("{}{}", t.title(), if t.dirty() { " •" } else { "" });
-                        let r = ui.add(egui::Label::new(RichText::new(name).color(if active { p.text } else { p.muted })).sense(Sense::click()).truncate());
-                        if r.clicked() {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (g, tip) = if app.left_open { (icons::PANEL_LEFT_CLOSE, "Esconder barra lateral") } else { (icons::PANEL_LEFT_OPEN, "Mostrar barra lateral") };
+            if icon_button(ui, g, tip, false, p).clicked() {
+                app.left_open = !app.left_open;
+            }
+            ui.add_space(4.0);
+            let right_w = 70.0;
+            let avail = (ui.available_width() - right_w).max(100.0);
+            let n = app.tabs.len().max(1) as f32;
+            let tab_w = (avail / n - 2.0).clamp(110.0, 220.0);
+            egui::ScrollArea::horizontal().max_width(avail).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (i, t) in app.tabs.iter().enumerate() {
+                        let active = i == app.active;
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(tab_w, 35.0), Sense::click());
+                        let rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 0.5));
+                        let hovered = r.hovered();
+                        let shape = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y + 1.0));
+                        if active {
+                            ui.painter().rect(shape, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, p.bg, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                            // the active tab opens onto the page
+                            ui.painter().hline(shape.x_range().shrink(1.0), shape.bottom() - 0.5, egui::Stroke::new(2.0_f32, p.bg));
+                        } else if hovered {
+                            ui.painter().rect_filled(shape.shrink2(egui::vec2(0.0, 3.0)).translate(egui::vec2(0.0, -2.0)), 7.0, p.bg_hover);
+                        }
+                        let glyph = match &t.view {
+                            Some(_) => icons::LIBRARY_BIG,
+                            None if t.board.is_some() => icons::CLAPPERBOARD,
+                            None => icons::FILE_TEXT,
+                        };
+                        let cy = rect.center().y - 1.0;
+                        ui.painter().text(egui::pos2(rect.left() + 16.0, cy), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(13.0), if active { p.muted } else { p.faint });
+                        let title = format!("{}{}", t.title(), if t.dirty() { " •" } else { "" });
+                        let color = if active { p.text } else { p.muted };
+                        let mut job = egui::text::LayoutJob::single_section(title, egui::TextFormat { font_id: if active { kit::medium(12.5) } else { egui::FontId::proportional(12.5) }, color, ..Default::default() });
+                        job.wrap = egui::text::TextWrapping::truncate_at_width(tab_w - if active || hovered { 58.0 } else { 38.0 });
+                        let galley = ui.fonts(|f| f.layout_job(job));
+                        ui.painter().galley(egui::pos2(rect.left() + 29.0, cy - galley.size().y / 2.0), galley, color);
+                        if active || hovered {
+                            let xr = egui::Rect::from_center_size(egui::pos2(rect.right() - 16.0, cy), egui::vec2(20.0, 20.0));
+                            let xresp = ui.interact(xr, ui.id().with(("close-tab", i)), Sense::click());
+                            if xresp.hovered() {
+                                ui.painter().rect_filled(xr, 5.0, p.bg_active);
+                            }
+                            ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, icons::X, kit::icon_font(12.0), p.muted);
+                            if xresp.clicked() {
+                                close = Some(i);
+                            }
+                        }
+                        if r.clicked() && close.is_none() {
                             select = Some(i);
                         }
                         if r.middle_clicked() {
                             close = Some(i);
                         }
-                        if ui.add(egui::Button::new(RichText::new("×").color(p.faint)).frame(false)).clicked() {
-                            close = Some(i);
-                        }
-                    });
-                }
-                if ui.add(egui::Button::new("+").frame(false)).on_hover_text("New note").clicked() {
-                    app.new_note("");
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Button::new(if app.right_open { "▶" } else { "◀" }).frame(false)).on_hover_text("Toggle right sidebar").clicked() {
-                        app.right_open = !app.right_open;
                     }
-                    if let Some(t) = app.tabs.get_mut(app.active) {
-                        let (icon, tip) = if t.mode == Mode::Edit { ("📖", "Reading view (Ctrl+E)") } else { ("✏", "Editing view (Ctrl+E)") };
-                        if ui.add(egui::Button::new(icon).frame(false)).on_hover_text(tip).clicked() {
+                    if kit::icon_button_sized(ui, icons::PLUS, "Nova nota", false, p, 26.0, 14.0).clicked() {
+                        app.new_note("");
+                    }
+                });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                let (g, tip) = if app.right_open { (icons::PANEL_RIGHT_CLOSE, "Esconder painel direito") } else { (icons::PANEL_RIGHT_OPEN, "Mostrar painel direito") };
+                if icon_button(ui, g, tip, false, p).clicked() {
+                    app.right_open = !app.right_open;
+                }
+                if let Some(t) = app.tabs.get_mut(app.active) {
+                    if t.view.is_none() && t.board.is_none() {
+                        let (g, tip) = if t.mode == Mode::Edit { (icons::BOOK_OPEN, "Modo leitura (Ctrl+E)") } else { (icons::PENCIL, "Modo edição (Ctrl+E)") };
+                        if icon_button(ui, g, tip, false, p).clicked() {
                             t.mode = if t.mode == Mode::Edit { Mode::Read } else { Mode::Edit };
                         }
                     }
-                });
+                }
             });
         });
         if let Some(i) = select {
@@ -554,22 +642,31 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
 
 pub fn status_bar(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::TopBottomPanel::bottom("status").frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(10, 3))).show(ctx, |ui| {
+    egui::TopBottomPanel::bottom("status").show_separator_line(false).exact_height(26.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::symmetric(14, 4))).show(ctx, |ui| {
         ui.horizontal(|ui| {
+            let small = |s: String| RichText::new(s).size(11.5).color(p.faint);
             if app.vault.as_ref().is_some_and(|v| !v.indexed.load(std::sync::atomic::Ordering::SeqCst)) {
-                ui.spinner();
-                ui.label(RichText::new("Indexing…").small().color(p.muted));
+                ui.add(egui::Spinner::new().size(11.0).color(p.faint));
+                ui.label(small("Indexando…".into()));
             }
             if app.templater.running > 0 {
-                ui.label(RichText::new("Running template…").small().color(p.muted));
+                ui.label(small("Executando modelo…".into()));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if let Some(t) = app.tabs.get(app.active) {
-                    let words = ateliet_core::calendar::count_words(&t.text);
+                ui.spacing_mut().item_spacing.x = 14.0;
+                if let Some(t) = app.tabs.get(app.active).filter(|t| t.view.is_none() && t.board.is_none()) {
+                    let words = ateliet_core::scriptorium::count_words(&t.text);
                     let chars = t.text.chars().count();
                     let back = app.vault.as_ref().map(|v| v.index.read().map(|ix| ix.inlinks(&t.path).len()).unwrap_or(0)).unwrap_or(0);
-                    ui.label(RichText::new(format!("{back} backlinks")).small().color(p.muted));
-                    ui.label(RichText::new(format!("{words} words  {chars} characters")).small().color(p.muted));
+                    ui.label(small(format!("{back} {}", if back == 1 { "backlink" } else { "backlinks" })));
+                    ui.label(small(format!("{} caracteres", ateliet_core::scriptorium::fmt_n(chars as i64))));
+                    ui.label(small(format!("{} palavras", ateliet_core::scriptorium::fmt_n(words as i64))));
+                    if let Some(sc) = app.sc.as_ref() {
+                        let today = sc.settings.today_words(None);
+                        if today > 0 {
+                            ui.label(RichText::new(format!("{} hoje", ateliet_core::scriptorium::fmt_n(today))).size(11.5).color(p.accent_strong));
+                        }
+                    }
                 }
             });
         });
@@ -579,44 +676,64 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
 pub fn empty_state(app: &mut App, ui: &mut egui::Ui) {
     let p = app.palette;
     ui.vertical_centered(|ui| {
-        ui.add_space(ui.available_height() * 0.3);
-        ui.label(RichText::new("No file is open").size(22.0).color(p.muted));
-        ui.add_space(12.0);
-        if ui.link("Create new note (Ctrl+N)").clicked() {
-            app.new_note("");
-        }
-        if ui.link("Go to file (Ctrl+O)").clicked() {
-            app.palette_ui = Some(crate::commands::Palette::files());
-        }
-        if ui.link("Open today's daily note").clicked() {
-            app.open_daily(ateliet_core::datefmt::today().date());
-        }
-        ui.add_space(16.0);
-        let recent: Vec<String> = app.recent.iter().take(8).cloned().collect();
-        for r in recent {
-            if ui.add(egui::Button::new(RichText::new(vault::basename(&r)).color(p.muted)).frame(false)).clicked() {
-                app.open(&r, true);
+        ui.add_space((ui.available_height() * 0.26).max(30.0));
+        ui.label(kit::icon(icons::FEATHER, 30.0).color(p.faint));
+        ui.add_space(14.0);
+        ui.label(RichText::new("Nada aberto").font(kit::medium(17.0)).color(p.text));
+        ui.add_space(4.0);
+        ui.label(RichText::new("Comece uma nota, abra um arquivo ou volte ao livro.").color(p.muted));
+        ui.add_space(22.0);
+        ui.allocate_ui(egui::vec2(300.0, 200.0), |ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
+            let rows = [(icons::SQUARE_PEN, "Nova nota", "Ctrl+N"), (icons::SEARCH, "Ir para arquivo", "Ctrl+O"), (icons::CALENDAR_DAYS, "Nota de hoje", ""), (icons::LIBRARY_BIG, "Biblioteca", "")];
+            for (i, (g, label, key)) in rows.into_iter().enumerate() {
+                if kit::Row::new(label).icon(g).trailing(key).show(ui, p).clicked() {
+                    match i {
+                        0 => app.new_note(""),
+                        1 => app.palette_ui = Some(crate::commands::Palette::files()),
+                        2 => app.open_daily(ateliet_core::datefmt::today().date()),
+                        _ => app.open_view("library", None),
+                    }
+                }
             }
-        }
+            let recent: Vec<String> = app.recent.iter().filter(|r| !r.starts_with("scriptorium:")).take(6).cloned().collect();
+            if !recent.is_empty() {
+                ui.add_space(18.0);
+                kit::section(ui, "Recentes", p);
+                for r in recent {
+                    if kit::Row::new(vault::basename(&r)).icon(icons::FILE_TEXT).show(ui, p).clicked() {
+                        app.open(&r, true);
+                    }
+                }
+            }
+        });
     });
 }
 
 // ── dialogs ────────────────────────────────────────────────────────────────
 
 pub fn ask_dialog(app: &mut App, ctx: &egui::Context) {
+    let p = app.palette;
     let Some(ask) = &mut app.ask else { return };
     let mut done: Option<bool> = None;
-    egui::Window::new(ask.title.clone()).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 140.0]).show(ctx, |ui| {
-        if !matches!(ask.kind, AskKind::ConfirmDelete(_)) {
-            let r = ui.add(egui::TextEdit::singleline(&mut ask.value).desired_width(340.0));
+    let confirm = matches!(ask.kind, AskKind::ConfirmDelete(_));
+    egui::Window::new(ask.title.clone()).title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 140.0]).show(ctx, |ui| {
+        ui.set_width(400.0);
+        ui.label(RichText::new(&ask.title).font(kit::medium(15.0)).color(p.text));
+        ui.add_space(12.0);
+        if confirm {
+            ui.label(RichText::new("Os arquivos vão para a lixeira.").color(p.muted));
+        } else {
+            let r = ui.add(egui::TextEdit::singleline(&mut ask.value).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 7)));
             r.request_focus();
         }
-        ui.horizontal(|ui| {
-            let ok_label = if matches!(ask.kind, AskKind::ConfirmDelete(_)) { "Delete" } else { "OK" };
-            if ui.button(ok_label).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        ui.add_space(16.0);
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let ok = if confirm { kit::danger(ui, "Excluir", p) } else { kit::primary(ui, "Confirmar", p) };
+            if ok.clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 done = Some(true);
             }
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if kit::button(ui, None, "Cancelar", p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 done = Some(false);
             }
         });
@@ -647,9 +764,15 @@ pub fn toasts(app: &mut App, ctx: &egui::Context) {
     if app.toasts.is_empty() {
         return;
     }
-    egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, [-16.0, -36.0]).show(ctx, |ui| {
+    let p = app.palette;
+    egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -44.0]).show(ctx, |ui| {
         for t in &app.toasts {
-            egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(&t.text));
+            let fill = if p.dark { egui::Color32::from_rgb(0xee, 0xee, 0xea) } else { egui::Color32::from_rgb(0x22, 0x22, 0x21) };
+            let text = if p.dark { egui::Color32::from_rgb(0x1a, 0x1a, 0x1a) } else { egui::Color32::from_rgb(0xf4, 0xf4, 0xf1) };
+            egui::Frame::new().fill(fill).corner_radius(9.0).inner_margin(egui::Margin::symmetric(14, 9)).shadow(egui::Shadow { offset: [0, 6], blur: 20, spread: 0, color: egui::Color32::from_black_alpha(40) }).show(ui, |ui| {
+                ui.label(RichText::new(&t.text).color(text));
+            });
+            ui.add_space(6.0);
         }
     });
     ctx.request_repaint_after(std::time::Duration::from_millis(500));

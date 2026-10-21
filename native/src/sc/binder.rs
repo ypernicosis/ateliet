@@ -3,6 +3,8 @@
 
 use super::library::Cx;
 use super::{color, Action};
+use crate::icons;
+use crate::kit;
 use ateliet_core::scriptorium::book::{self, STATUS};
 use ateliet_core::scriptorium::fmt_n;
 use eframe::egui::{self, RichText, Sense};
@@ -34,6 +36,7 @@ impl Binder {
             return acts;
         };
         let books = book::books(&ix, &author);
+        ui.add_space(2.0);
         if books.len() > 1 {
             let mut pick = book.path.clone();
             egui::ComboBox::from_id_salt("binder-book").selected_text(book.title.clone()).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
@@ -46,32 +49,33 @@ impl Binder {
                 acts.push(Action::SelectBook(pick));
             }
         } else {
-            ui.label(RichText::new(&book.title).strong().size(16.0).color(p.text));
+            ui.label(RichText::new(&book.title).font(kit::medium(15.0)).color(p.text));
         }
         let stats = cx.sc.stats(&ix, &book);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} palavras", fmt_n(stats.words as i64))).color(p.text));
-            ui.label(RichText::new(format!("· hoje {}", fmt_n(cx.sc.settings.today_words(Some(&book.path))))).color(p.muted));
+            ui.label(RichText::new(format!("{} palavras · {} hoje", fmt_n(stats.words as i64), fmt_n(cx.sc.settings.today_words(Some(&book.path))))).size(12.0).color(p.muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                if kit::icon_button_sized(ui, icons::USER_PLUS, "Novo personagem", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::NewCharacter(book.path.clone()));
+                }
+                if kit::icon_button_sized(ui, icons::LIBRARY_BIG, "Biblioteca", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::View("library".into(), Some(book.path.clone())));
+                }
+                if kit::icon_button_sized(ui, icons::FILE_PLUS, "Novo capítulo", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::NewChapter(book.path.clone()));
+                }
+            });
         });
         if book.goal > 0 {
-            let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), Sense::hover());
-            ui.painter().rect_filled(r, 2.0, p.bg);
+            ui.add_space(4.0);
+            let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 3.0), Sense::hover());
+            ui.painter().rect_filled(r, 1.5, p.bg_active);
             let mut f = r;
-            f.set_width(r.width() * (stats.words as f32 / book.goal as f32).min(1.0));
-            ui.painter().rect_filled(f, 2.0, p.accent);
+            f.set_width((r.width() * (stats.words as f32 / book.goal as f32).min(1.0)).max(3.0));
+            ui.painter().rect_filled(f, 1.5, p.accent_strong);
         }
-        ui.horizontal(|ui| {
-            if ui.small_button("+ Capítulo").on_hover_text("Novo capítulo").clicked() {
-                acts.push(Action::NewChapter(book.path.clone()));
-            }
-            if ui.small_button("📚").on_hover_text("Biblioteca").clicked() {
-                acts.push(Action::View("library".into(), Some(book.path.clone())));
-            }
-            if ui.small_button("👤").on_hover_text("Novo personagem").clicked() {
-                acts.push(Action::NewCharacter(book.path.clone()));
-            }
-        });
-        ui.separator();
+        ui.add_space(12.0);
 
         let files: Vec<String> = stats.per.iter().map(|c| c.info.path.clone()).collect();
         let mut last_part = String::new();
@@ -82,7 +86,7 @@ impl Binder {
                 let info = &c.info;
                 if !info.part.is_empty() && info.part != last_part {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(info.part.to_uppercase()).small().strong().color(p.faint));
+                    kit::section(ui, &info.part, p);
                 }
                 last_part = info.part.clone();
                 if info.numbered && info.include {
@@ -90,30 +94,20 @@ impl Binder {
                 }
                 let is_active = active == Some(info.path.as_str());
                 let id = egui::Id::new(("binder-row", &info.path));
+                let words = if info.goal > 0 { format!("{}/{}", fmt_n(c.words as i64), fmt_n(info.goal)) } else { fmt_n(c.words as i64) };
+                let num = if info.numbered { n.to_string() } else { match info.tipo.as_str() { "prologo" => "P", "epilogo" => "E", "interludio" => "I", _ => "·" }.to_string() };
+                let label = format!("{num}   {}", info.title);
                 let row = ui.dnd_drag_source(id, idx, |ui| {
-                    egui::Frame::new().fill(if is_active { p.bg } else { egui::Color32::TRANSPARENT }).corner_radius(4.0).inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            let (dot, dr) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), Sense::click());
-                            ui.painter().circle_filled(dot.center(), 4.5, color(book::status_color(&info.status)));
-                            if dr.on_hover_text(format!("{} (clique para mudar)", book::status_label(&info.status))).clicked() {
-                                let i = STATUS.iter().position(|s| s.0 == info.status).unwrap_or(1);
-                                acts.push(Action::SetFm(info.path.clone(), "status".into(), Some(json!(STATUS[(i + 1) % STATUS.len()].0))));
-                            }
-                            let num = if info.numbered { n.to_string() } else { match info.tipo.as_str() { "prologo" => "P", "epilogo" => "E", "interludio" => "I", _ => "·" }.to_string() };
-                            ui.label(RichText::new(num).small().color(p.faint));
-                            let words = if info.goal > 0 { format!("{}/{}", fmt_n(c.words as i64), fmt_n(info.goal)) } else { fmt_n(c.words as i64) };
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(words).small().color(p.faint));
-                                let t = RichText::new(&info.title).color(if !info.include { p.faint } else if is_active { p.text } else { p.muted });
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    ui.add(egui::Label::new(if info.include { t } else { t.strikethrough() }).truncate());
-                                });
-                            });
-                        });
-                    });
+                    kit::Row::new(&label).dot(color(book::status_color(&info.status))).selected(is_active).dim(!info.include).trailing(words.clone()).show(ui, p)
                 });
                 let r = ui.interact(row.response.rect, id.with("click"), Sense::click());
+                // the status dot cycles the status
+                let dot = egui::Rect::from_center_size(egui::pos2(row.response.rect.left() + 12.0, row.response.rect.center().y), egui::vec2(16.0, 16.0));
+                let dr = ui.interact(dot, id.with("dot"), Sense::click()).on_hover_text(format!("{} (clique para mudar)", book::status_label(&info.status)));
+                if dr.clicked() {
+                    let i = STATUS.iter().position(|s| s.0 == info.status).unwrap_or(1);
+                    acts.push(Action::SetFm(info.path.clone(), "status".into(), Some(json!(STATUS[(i + 1) % STATUS.len()].0))));
+                }
                 if r.clicked() {
                     acts.push(Action::Open(info.path.clone(), ui.input(|i| i.modifiers.command)));
                 }
@@ -169,7 +163,7 @@ impl Binder {
                 });
             }
             ui.add_space(8.0);
-            if ui.add(egui::Button::new(RichText::new("+ Novo capítulo").color(p.muted)).frame(false)).clicked() {
+            if kit::quiet(ui, Some(icons::PLUS), "Novo capítulo", p).clicked() {
                 acts.push(Action::NewChapter(book.path.clone()));
             }
         });

@@ -27,7 +27,6 @@ pub struct BookStats {
     pub chapters: usize,
     pub per: Vec<ChapterStats>,
     pub characters: usize,
-    pub maps: usize,
     pub last_edited: Option<String>,
 }
 
@@ -105,7 +104,6 @@ impl Sc {
             chapters: per.len(),
             per,
             characters: book::characters(ix, book).len(),
-            maps: book::notes_of_kind(ix, book, "mapa").len(),
             last_edited: last.map(|(_, p)| p),
         });
         self.stats.insert(book.path.clone(), (ix.generation, s.clone()));

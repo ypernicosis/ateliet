@@ -161,7 +161,9 @@ impl App {
     }
 
     pub fn form_ui(&mut self, ctx: &eframe::egui::Context) {
+        let p = self.palette;
         let Some(form) = self.form.as_mut() else { return };
+        form.palette = p;
         let (values, close) = form.show(ctx);
         if close {
             let form = self.form.take().unwrap();

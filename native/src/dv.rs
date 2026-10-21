@@ -179,23 +179,34 @@ pub fn render(r: &mut Renderer, ui: &mut egui::Ui, res: &Value) {
             }
             r.in_cell = true;
             egui::ScrollArea::horizontal().id_salt(("dvtable", headers.join("|"), rows.len())).show(ui, |ui| {
-                egui::Grid::new(ui.next_auto_id()).striped(true).spacing([20.0, 6.0]).show(ui, |ui| {
+                let mut ys: Vec<f32> = Vec::new();
+                let g = egui::Grid::new(ui.next_auto_id()).striped(false).spacing([28.0, 9.0]).show(ui, |ui| {
                     for (i, h) in headers.iter().enumerate() {
                         let mut runs = Runs::new();
-                        runs.push(h, TextFormat { font_id: FontId::new(size, FontFamily::Name("bold".into())), color: p.text, ..Default::default() });
+                        runs.push(h, TextFormat { font_id: FontId::new(size * 0.88, FontFamily::Name("bold".into())), color: p.muted, ..Default::default() });
                         if i == 0 {
-                            runs.push(&format!(" ({})", rows.len()), TextFormat { font_id: FontId::new(size * 0.8, FontFamily::Proportional), color: p.muted, ..Default::default() });
+                            runs.push(&format!("  {}", rows.len()), TextFormat { font_id: FontId::new(size * 0.75, FontFamily::Proportional), color: p.faint, ..Default::default() });
                         }
                         runs.show_cell(ui);
                     }
                     ui.end_row();
+                    ys.push(ui.cursor().top() - 4.5);
                     for row in &rows {
                         for cell in row.as_array().cloned().unwrap_or_default() {
                             ui.vertical(|ui| value_cell(r, ui, &cell, size));
                         }
                         ui.end_row();
+                        ys.push(ui.cursor().top() - 4.5);
                     }
                 });
+                let x = g.response.rect.x_range();
+                let last = ys.len().saturating_sub(1);
+                for (k, y) in ys.into_iter().enumerate() {
+                    if k == last && k > 0 {
+                        break;
+                    }
+                    ui.painter().hline(x, y, egui::Stroke::new(1.0_f32, if k == 0 { p.border_strong } else { p.border }));
+                }
             });
             r.in_cell = false;
         }
@@ -206,7 +217,7 @@ pub fn render(r: &mut Renderer, ui: &mut egui::Ui, res: &Value) {
             }
             for it in items {
                 ui.horizontal_top(|ui| {
-                    ui.label(RichText::new("•").size(size).color(p.muted));
+                    markdown::bullet(ui, size, p.faint, false);
                     ui.vertical(|ui| {
                         let id = &it["id"];
                         let val = &it["value"];
@@ -227,7 +238,7 @@ pub fn render(r: &mut Renderer, ui: &mut egui::Ui, res: &Value) {
                             if let Value::Array(sub) = val {
                                 for x in sub {
                                     ui.horizontal_top(|ui| {
-                                        ui.label(RichText::new("◦").size(size).color(p.muted));
+                                        markdown::bullet(ui, size, p.faint, true);
                                         let mut runs = Runs::new();
                                         value_runs(r, &mut runs, x, size, true);
                                         if let Some(a) = runs.show(ui) {
@@ -317,7 +328,7 @@ fn task_list(r: &mut Renderer, ui: &mut egui::Ui, tasks: &[Value], size: f32) {
                     }
                 }
                 _ => {
-                    ui.label(RichText::new("•").size(size).color(p.muted));
+                    markdown::bullet(ui, size, p.faint, false);
                 }
             }
             ui.vertical(|ui| {
@@ -372,13 +383,16 @@ fn js_node(r: &mut Renderer, ui: &mut egui::Ui, node: &Value, size: f32) {
         if BLOCK_TAGS.contains(&tag.as_str()) {
             flush(r, ui, &mut runs);
             if tag == "hr" {
-                ui.separator();
+                ui.add_space(size * 0.6);
+                let (rr, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), egui::Sense::hover());
+                ui.painter().hline(rr.x_range(), rr.center().y, egui::Stroke::new(1.0_f32, p.border_strong));
+                ui.add_space(size * 0.6);
                 continue;
             }
-            let sz = if heading { size * [1.75, 1.45, 1.25, 1.12, 1.05, 1.0][(tag[1..].parse::<usize>().unwrap_or(1)).clamp(1, 6) - 1] } else { size };
+            let sz = if heading { size * [1.6, 1.32, 1.16, 1.05, 1.0, 0.92][(tag[1..].parse::<usize>().unwrap_or(1)).clamp(1, 6) - 1] } else { size };
             let mut inner = Runs::new();
             if heading {
-                ui.add_space(size * 0.3);
+                ui.add_space(size * 0.8);
             }
             for key in ["text", "markdown"] {
                 if let Some(v) = el.get(key).filter(|v| !v.is_null()) {
@@ -405,7 +419,7 @@ fn js_node(r: &mut Renderer, ui: &mut egui::Ui, node: &Value, size: f32) {
             }
             if tag == "li" {
                 ui.horizontal_top(|ui| {
-                    ui.label(RichText::new("•").size(size).color(p.muted));
+                    markdown::bullet(ui, size, p.faint, false);
                     ui.vertical(|ui| {
                         flush(r, ui, &mut inner);
                         js_node(r, ui, el, size);

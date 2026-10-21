@@ -11,6 +11,8 @@ mod editor;
 mod fonts;
 mod form;
 mod host;
+mod icons;
+mod kit;
 mod images_ui;
 mod live;
 mod markdown;

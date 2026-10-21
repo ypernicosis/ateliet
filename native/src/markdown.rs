@@ -603,6 +603,18 @@ impl Default for Runs {
     }
 }
 
+/// A list bullet the height of a line of text at `size`.
+pub fn bullet(ui: &mut egui::Ui, size: f32, color: Color32, hollow: bool) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(size * 1.1, (size * 1.62).round()), Sense::hover());
+    let c = rect.center();
+    let r = (size * 0.16).max(2.2);
+    if hollow {
+        ui.painter().circle_stroke(c, r, Stroke::new(1.0_f32, color));
+    } else {
+        ui.painter().circle_filled(c, r, color);
+    }
+}
+
 pub struct Renderer<'h> {
     pub host: &'h mut dyn Host,
     pub actions: Vec<Action>,
@@ -627,20 +639,21 @@ pub fn callout_color(kind: &str, p: &crate::theme::Palette) -> Color32 {
 }
 
 fn callout_icon(kind: &str) -> &'static str {
+    use crate::icons as i;
     match kind {
-        "info" => "ℹ",
-        "todo" => "☑",
-        "tip" | "hint" | "important" => "🔥",
-        "abstract" | "summary" | "tldr" => "📋",
-        "success" | "check" | "done" => "✔",
-        "question" | "help" | "faq" => "❓",
-        "warning" | "caution" | "attention" => "⚠",
-        "failure" | "fail" | "missing" => "✖",
-        "danger" | "error" => "⚡",
-        "bug" => "🐞",
-        "example" => "📑",
-        "quote" | "cite" => "❝",
-        _ => "✎",
+        "info" => i::INFO,
+        "todo" => i::CIRCLE_DOT,
+        "tip" | "hint" | "important" => i::FLAME,
+        "abstract" | "summary" | "tldr" => i::CLIPBOARD,
+        "success" | "check" | "done" => i::CHECK,
+        "question" | "help" | "faq" => i::CIRCLE_HELP,
+        "warning" | "caution" | "attention" => i::TRIANGLE_ALERT,
+        "failure" | "fail" | "missing" => i::X,
+        "danger" | "error" => i::TRIANGLE_ALERT,
+        "bug" => i::TRIANGLE_ALERT,
+        "example" => i::LIST,
+        "quote" | "cite" => i::QUOTE,
+        _ => i::PENCIL,
     }
 }
 
@@ -652,7 +665,8 @@ impl<'h> Renderer<'h> {
     fn fmt(&self, size: f32, style: Style) -> TextFormat {
         let p = self.host.palette();
         let family = if style.bold { FontFamily::Name("bold".into()) } else if style.italic { FontFamily::Name("italic".into()) } else { FontFamily::Proportional };
-        let mut f = TextFormat { font_id: FontId::new(size, family), color: p.text, ..Default::default() };
+        let lh = if size > self.host.size() * 1.1 { 1.28 } else { 1.62 };
+        let mut f = TextFormat { font_id: FontId::new(size, family), color: p.text, line_height: Some((size * lh).round()), valign: egui::Align::Center, ..Default::default() };
         if style.italic && style.bold {
             f.italics = true;
         }
@@ -715,7 +729,8 @@ impl<'h> Renderer<'h> {
                         let text = &sub.job.text[section.byte_range.clone()];
                         section.format.color = if ok { p.link() } else { p.link().gamma_multiply(0.6) };
                         if matches!(target, Target::Tag(_)) {
-                            section.format.background = p.accent.gamma_multiply(0.12);
+                            section.format.background = p.accent_soft;
+                            section.format.color = p.accent_strong;
                         } else {
                             section.format.underline = Stroke::new(1.0_f32, section.format.color.gamma_multiply(if ok { 0.5 } else { 0.3 }));
                         }
@@ -781,9 +796,15 @@ impl<'h> Renderer<'h> {
     }
 
     pub fn blocks(&mut self, ui: &mut egui::Ui, blocks: &[Block]) {
+        let size = self.host.size();
         for (i, b) in blocks.iter().enumerate() {
             if i > 0 {
-                ui.add_space(self.host.size() * 0.45);
+                // headings bring their own space above
+                let gap = match b {
+                    Block::Heading { level, .. } => size * if *level <= 2 { 1.5 } else { 1.1 },
+                    _ => size * 0.7,
+                };
+                ui.add_space(gap);
             }
             self.block(ui, b);
         }
@@ -794,38 +815,42 @@ impl<'h> Renderer<'h> {
         let p = self.host.palette();
         match b {
             Block::Heading { level, inlines, line } => {
-                let scale = [1.75, 1.45, 1.25, 1.12, 1.05, 1.0][(*level as usize).clamp(1, 6) - 1];
-                ui.add_space(size * 0.4);
+                let scale = [1.6, 1.32, 1.16, 1.05, 1.0, 0.92][(*level as usize).clamp(1, 6) - 1];
                 let top = ui.cursor().min;
                 self.paragraph(ui, inlines, size * scale, Style { bold: true, ..Default::default() }, None);
                 if self.scroll_to == Some(*line) && self.depth == 0 {
                     ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(10.0, size * scale)), Some(egui::Align::TOP));
                     self.scroll_to = None;
                 }
-                if *level <= 1 {
-                    ui.add_space(2.0);
-                }
+                ui.add_space(size * 0.05);
             }
             Block::Para(inl) => self.paragraph(ui, inl, size, Style::default(), None),
             Block::List { start, items } => {
                 for (n, it) in items.iter().enumerate() {
+                    if n > 0 {
+                        ui.add_space(size * 0.2);
+                    }
                     ui.horizontal_top(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let marker_w = size * 1.4;
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        let marker_w = size * 1.3;
                         match it.task {
                             Some(c) => {
                                 let mut checked = c != ' ';
-                                let r = ui.add_sized([marker_w, size * 1.3], egui::Checkbox::without_text(&mut checked));
+                                let r = ui.add_sized([marker_w, (size * 1.62).round()], egui::Checkbox::without_text(&mut checked));
                                 if r.clicked() {
                                     self.actions.push(Action::ToggleTask(it.line, c));
                                 }
                             }
                             None => {
-                                let text = match start {
-                                    Some(s) => format!("{}.", s + n as u64),
-                                    None => "•".to_string(),
-                                };
-                                ui.add_sized([marker_w, size * 1.3], egui::Label::new(egui::RichText::new(text).size(size).color(p.muted)));
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_w, (size * 1.62).round()), Sense::hover());
+                                match start {
+                                    Some(s) => {
+                                        ui.painter().text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, format!("{}.", s + n as u64), FontId::proportional(size), p.muted);
+                                    }
+                                    None => {
+                                        ui.painter().circle_filled(egui::pos2(rect.center().x, rect.center().y), (size * 0.16).max(2.2), p.faint);
+                                    }
+                                }
                             }
                         }
                         ui.vertical(|ui| {
@@ -844,22 +869,25 @@ impl<'h> Renderer<'h> {
                 }
             }
             Block::Quote(body) => {
-                let resp = egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
+                let resp = egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
                 let r = resp.response.rect;
-                ui.painter().line_segment([r.left_top(), r.left_bottom()], Stroke::new(2.5_f32, p.accent.gamma_multiply(0.7)));
+                ui.painter().line_segment([r.left_top() + egui::vec2(1.0, 2.0), r.left_bottom() + egui::vec2(1.0, -2.0)], Stroke::new(2.0_f32, p.border_strong));
             }
             Block::Callout { kind, title, body, folded, line } => {
                 let color = callout_color(kind, &p);
                 let id = ui.make_persistent_id(("callout", self.host.source().to_string(), *line));
                 let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(folded != &Some(true));
-                egui::Frame::new().fill(color.gamma_multiply(0.1)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                let fill = if p.dark { color.gamma_multiply(0.14) } else { color.gamma_multiply(0.07) };
+                egui::Frame::new().fill(fill).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin { left: 16, right: 16, top: 12, bottom: 12 }).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     let mut runs = Runs::new();
-                    let tf = TextFormat { font_id: FontId::new(size, FontFamily::Name("bold".into())), color, ..Default::default() };
-                    runs.push(&format!("{}  ", callout_icon(kind)), tf.clone());
+                    let tf = TextFormat { font_id: FontId::new(size * 0.95, FontFamily::Name("icons".into())), color, valign: egui::Align::Center, ..Default::default() };
+                    runs.push(callout_icon(kind), tf.clone());
+                    runs.push("  ", self.fmt(size, Style::default()));
                     self.runs(&mut runs, title, size, Style { bold: true, ..Default::default() }, Some(color));
                     if folded.is_some() {
-                        runs.push(if open { "  ▾" } else { "  ▸" }, tf);
+                        runs.push("  ", self.fmt(size, Style::default()));
+                        runs.push(if open { crate::icons::CHEVRON_DOWN } else { crate::icons::CHEVRON_RIGHT }, tf);
                     }
                     let resp_before = ui.cursor();
                     if let Some(a) = runs.show(ui) {
@@ -869,7 +897,7 @@ impl<'h> Renderer<'h> {
                         ui.data_mut(|d| d.insert_temp(id, open));
                     }
                     if open && !body.is_empty() {
-                        ui.add_space(6.0);
+                        ui.add_space(size * 0.4);
                         self.blocks(ui, body);
                     }
                 });
@@ -881,7 +909,7 @@ impl<'h> Renderer<'h> {
                     crate::dv::render(self, ui, &res);
                     return;
                 }
-                egui::Frame::new().fill(p.code_bg).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::ScrollArea::horizontal().id_salt(("code", text.len(), lang)).show(ui, |ui| {
                         ui.add(egui::Label::new(egui::RichText::new(text).monospace().size(size * 0.85).color(p.text)).extend());
@@ -892,27 +920,40 @@ impl<'h> Renderer<'h> {
                 let cols = header.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
                 self.in_cell = true;
                 egui::ScrollArea::horizontal().id_salt(("table", rows.len(), cols)).show(ui, |ui| {
-                    egui::Grid::new(ui.next_auto_id()).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
+                    // hairlines between rows instead of stripes
+                    let mut ys: Vec<f32> = Vec::new();
+                    let g = egui::Grid::new(ui.next_auto_id()).striped(false).spacing([28.0, 9.0]).show(ui, |ui| {
                         for c in 0..cols {
                             let cell = header.get(c).cloned().unwrap_or_default();
-                            self.paragraph(ui, &cell, size, Style { bold: true, ..Default::default() }, None);
+                            self.paragraph(ui, &cell, size * 0.88, Style { bold: true, ..Default::default() }, Some(p.muted));
                         }
                         ui.end_row();
+                        ys.push(ui.cursor().top() - 4.5);
                         for r in rows {
                             for c in 0..cols {
                                 let cell = r.get(c).cloned().unwrap_or_default();
                                 ui.vertical(|ui| self.paragraph(ui, &cell, size, Style::default(), None));
                             }
                             ui.end_row();
+                            ys.push(ui.cursor().top() - 4.5);
                         }
                     });
+                    let x = g.response.rect.x_range();
+                    let last = ys.len().saturating_sub(1);
+                    for (k, y) in ys.into_iter().enumerate() {
+                        if k == last && k > 0 {
+                            break;
+                        }
+                        ui.painter().hline(x, y, Stroke::new(1.0_f32, if k == 0 { p.border_strong } else { p.border }));
+                    }
                 });
                 self.in_cell = false;
             }
             Block::Rule => {
-                ui.add_space(4.0);
-                ui.separator();
-                ui.add_space(4.0);
+                ui.add_space(size * 0.6);
+                let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
+                ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, p.border_strong));
+                ui.add_space(size * 0.6);
             }
             Block::Html(h) => {
                 let text = strip_tags(h);
@@ -934,7 +975,7 @@ impl<'h> Renderer<'h> {
                 }
                 match self.host.embed(target) {
                     Some((path, doc)) => {
-                        egui::Frame::new().stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+                        egui::Frame::new().fill(p.bg_secondary).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             let mut runs = Runs::new();
                             let f = TextFormat { font_id: FontId::new(size * 0.8, FontFamily::Proportional), color: p.muted, ..Default::default() };
