@@ -2,3 +2,11 @@ folder folder-open folder-plus folder-closed file file-text file-plus files sear
  corner-down-right arrow-up-down square-check list-checks align-left align-center layout-grid layout-list panels-top-left mic volume-2 skip-back skip-forward bell plug puzzle component
  tablet
  scan-face route scroll message-square-quote shield swords heart graduation-cap arrow-right-left user-round replace contact-round
+calendar-range
+key-round
+trending-up
+list-filter
+milestone
+sprout
+wheat
+unlink

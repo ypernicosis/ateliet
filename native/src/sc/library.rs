@@ -175,6 +175,9 @@ impl Library {
                             if kit::button(ui, Some(icons::LIST_TREE), "Manuscrito", p).clicked() {
                                 acts.push(Action::View("binder".into(), Some(b.path.clone())));
                             }
+                            if kit::button(ui, Some(icons::WAYPOINTS), "Enredo", p).clicked() {
+                                acts.push(Action::View("enredo".into(), Some(b.path.clone())));
+                            }
                             if kit::button(ui, Some(icons::USERS), "Elenco", p).clicked() {
                                 acts.push(Action::View("cast".into(), Some(b.path.clone())));
                             }

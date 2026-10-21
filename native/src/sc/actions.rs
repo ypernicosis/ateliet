@@ -54,9 +54,9 @@ impl App {
                 self.right_tab = crate::app::RightTab::Manuscript;
                 self.binder.book = book;
             }
-            "cast" => {
+            "cast" | "enredo" => {
                 if let Some(b) = book {
-                    self.open(&format!("scriptorium:cast:{b}"), true);
+                    self.open(&format!("scriptorium:{view}:{b}"), true);
                 }
             }
             _ => self.open(&format!("scriptorium:{view}"), true),

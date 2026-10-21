@@ -5,6 +5,8 @@
 pub mod actions;
 pub mod binder;
 pub mod cast_ui;
+pub mod enredo_more;
+pub mod enredo_ui;
 pub mod picker;
 pub mod sheet_ui;
 pub mod export_ui;
@@ -158,6 +160,7 @@ pub enum View {
     Library(library::Library),
     Cast(cast_ui::CastView),
     Sheet(Box<sheet_ui::SheetView>),
+    Enredo(Box<enredo_ui::EnredoView>),
 }
 
 impl View {
@@ -166,13 +169,19 @@ impl View {
             View::Library(_) => "Biblioteca".into(),
             View::Cast(_) => "Elenco".into(),
             View::Sheet(s) => s.title(),
+            View::Enredo(e) => e.title(),
         }
     }
 
     pub fn from_path(path: &str) -> Option<View> {
         match path {
             "scriptorium:library" => Some(View::Library(library::Library::default())),
-            _ => path.strip_prefix("scriptorium:cast:").map(|b| View::Cast(cast_ui::CastView::new(b))),
+            _ => {
+                if let Some(b) = path.strip_prefix("scriptorium:enredo:") {
+                    return Some(View::Enredo(Box::new(enredo_ui::EnredoView::new(b))));
+                }
+                path.strip_prefix("scriptorium:cast:").map(|b| View::Cast(cast_ui::CastView::new(b)))
+            }
         }
     }
 }

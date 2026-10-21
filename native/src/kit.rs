@@ -262,3 +262,56 @@ pub fn scrim(ctx: &egui::Context, p: Palette) {
         ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(if p.dark { 110 } else { 46 }));
     });
 }
+
+/// A segmented control: icon + label pills on a soft track. Returns the
+/// index clicked.
+pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize, p: Palette) -> Option<usize> {
+    let mut out = None;
+    egui::Frame::new().fill(p.bg_secondary).corner_radius(9.0).inner_margin(3.0).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, (glyph, label)) in items.iter().enumerate() {
+                let on = i == selected;
+                let mut job = egui::text::LayoutJob::default();
+                if !glyph.is_empty() {
+                    job.append(glyph, 0.0, egui::TextFormat { font_id: icon_font(13.0), color: if on { p.text } else { p.muted }, valign: egui::Align::Center, ..Default::default() });
+                }
+                if !label.is_empty() {
+                    job.append(label, if glyph.is_empty() { 0.0 } else { 6.0 }, egui::TextFormat { font_id: if on { medium(12.5) } else { FontId::proportional(12.5) }, color: if on { p.text } else { p.muted }, valign: egui::Align::Center, ..Default::default() });
+                }
+                let g = ui.fonts(|f| f.layout_job(job));
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(g.size().x + 20.0, 26.0), Sense::click());
+                if on {
+                    ui.painter().rect(rect, 7.0, p.bg, Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                } else if r.hovered() {
+                    ui.painter().rect_filled(rect, 7.0, p.bg_hover);
+                }
+                ui.painter().galley(rect.center() - g.size() / 2.0, g, p.text);
+                if r.clicked() {
+                    out = Some(i);
+                }
+            }
+        });
+    });
+    out
+}
+
+/// A small outlined pill with an optional icon (pickers, filters).
+pub fn chip(ui: &mut Ui, glyph: Option<&str>, label: &str, active: bool, p: Palette) -> Response {
+    let mut job = egui::text::LayoutJob::default();
+    let fg = if active { p.accent_strong } else { p.muted };
+    if let Some(g) = glyph {
+        job.append(g, 0.0, egui::TextFormat { font_id: icon_font(12.5), color: fg, valign: egui::Align::Center, ..Default::default() });
+    }
+    job.append(label, if glyph.is_some() { 6.0 } else { 0.0 }, egui::TextFormat { font_id: FontId::proportional(12.5), color: if active { p.accent_strong } else { p.text }, valign: egui::Align::Center, ..Default::default() });
+    job.wrap = egui::text::TextWrapping::truncate_at_width(260.0);
+    let g = ui.fonts(|f| f.layout_job(job));
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(g.size().x + 20.0, 26.0), Sense::click());
+    let fill = if active { p.accent_soft } else if r.hovered() { p.bg_hover } else { Color32::TRANSPARENT };
+    ui.painter().rect(rect, 13.0, fill, Stroke::new(1.0_f32, if active { p.accent_soft } else { p.border_strong }), egui::StrokeKind::Inside);
+    ui.painter().galley(egui::pos2(rect.left() + 10.0, rect.center().y - g.size().y / 2.0), g, p.text);
+    if r.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    r
+}

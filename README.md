@@ -45,9 +45,10 @@ Já funciona:
 - **Navegação**: explorador de arquivos (criar, renomear, apagar), busca, favoritos, backlinks e links de saída, sumário, tags, paleta de comandos (Ctrl/Cmd+P), troca rápida de nota (Ctrl/Cmd+O) e os atalhos do `hotkeys.json`.
 - **Modo imagens** (Ctrl/Cmd+Shift+I): mosaico de todas as imagens, coleções por pasta, busca por nome e por descrição (CLIP, baixado na primeira vez), imagens parecidas, visualizador com zoom e inserção na nota.
 - **Storyboard**: arquivos `.storyboard` abrem num editor de desenho (lápis, caneta, pincel, marcador, borracha, conta-gotas), com quadros, reprodução, camadas com modos de mistura, papel de cebola, desfazer e exportação de PNG.
-- **Scriptorium**: Biblioteca de livros (capa, números, meta, últimos 14 dias, estante por série), painel do Manuscrito com status, partes e reordenação por arrastar, criação de livros, capítulos e personagens, estatísticas diárias no mesmo `data.json` do plugin.
+- **Scriptorium**: Biblioteca de livros (capa, números, meta, últimos 14 dias, estante por série), painel do Manuscrito com status, partes e reordenação por arrastar, criação de livros, capítulos e personagens, estatísticas diárias no mesmo `data.json` do plugin. Fichas de personagem e elenco, modo foco com sprints, exportação para EPUB, DOCX, Markdown e leitor web.
+- **Enredo**: Grade (tramas × capítulos, com as cenas nos cruzamentos e arrastar entre células), Escaleta, Cronologia (eras, eventos do mundo, ordem de leitura), Pistas (plantar e colher) e Arcos de personagem, com um painel lateral para editar a cena, a trama, a pista, o arco ou o capítulo planejado. Os dados ficam no mesmo `Enredo/Enredo.md` do plugin.
 
-Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), os temas CSS, as demais telas do Scriptorium (enredo, mundo, mapas, diagramação e exportação), as páginas e balões do storyboard, a biblioteca compartilhada com o Pictogrep e o botão de atualizar.
+Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), os temas CSS, as estruturas narrativas (batidas) e o Mural/Relações do Enredo, a visão de saga, as telas de mundo, mapas, trilha, diagramação, PDF e capa, as páginas e balões do storyboard, a biblioteca compartilhada com o Pictogrep e o botão de atualizar.
 
 ## Instalando no macOS
 

@@ -583,6 +583,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         let glyph = match &t.view {
                             Some(crate::sc::View::Sheet(_)) => icons::CONTACT,
                             Some(crate::sc::View::Cast(_)) => icons::USERS,
+                            Some(crate::sc::View::Enredo(_)) => icons::WAYPOINTS,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
                             None => icons::FILE_TEXT,
