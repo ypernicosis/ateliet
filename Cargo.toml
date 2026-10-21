@@ -50,6 +50,16 @@ libc = "0.2"
 objc2 = "0.6"
 block2 = "0.6"
 
+# The drawing engine and image decoding are too slow unoptimised to draw with.
+[profile.dev.package.ateliet_core]
+opt-level = 2
+[profile.dev.package.image]
+opt-level = 2
+[profile.dev.package.png]
+opt-level = 2
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+
 [profile.release]
 opt-level = 3
 lto = true
