@@ -10,7 +10,7 @@ use crate::theme::{self, Palette};
 use crate::vault::{self, Vault};
 use crate::{commands, editor};
 use ateliet_core::dataview::Settings;
-use eframe::egui::{self, Key, KeyboardShortcut, Modifiers};
+use eframe::egui::{self, KeyboardShortcut};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -538,7 +538,7 @@ impl App {
                         let _ = v.write(path, &out.text);
                     }
                     self.vault.as_mut().unwrap().rescan();
-                    self.open(path, false);
+                    self.open(path, true);
                     if let Some(t) = self.tabs.get_mut(self.active) {
                         t.text = out.text.clone();
                         t.saved = out.text.clone();

@@ -6,6 +6,7 @@ use crate::config::VaultConfig;
 use crate::vault;
 use eframe::egui::{self, Key, KeyboardShortcut, Modifiers, RichText};
 
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cmd {
     NewNote,
@@ -349,17 +350,21 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
         egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
             for (i, (_, title, note, _)) in items.iter().enumerate() {
                 let sel = i == pal.selected;
-                let resp = ui.horizontal(|ui| {
-                    let r = ui.add(egui::Button::new(RichText::new(title).color(p.text)).frame(false).selected(sel).min_size(egui::vec2(380.0, 24.0)));
-                    if !note.is_empty() {
-                        ui.label(RichText::new(note).small().color(p.muted));
-                    }
-                    r
-                });
-                if sel {
-                    resp.inner.scroll_to_me(None);
+                let w = ui.available_width();
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
+                if sel || resp.hovered() {
+                    ui.painter().rect_filled(rect, 4.0, if sel { p.accent.gamma_multiply(0.18) } else { p.bg_hover });
                 }
-                if resp.inner.clicked() {
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                ui.painter().text(rect.left_center() + egui::vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, title, font.clone(), p.text);
+                if !note.is_empty() {
+                    let small = egui::FontId::new(font.size * 0.8, font.family.clone());
+                    ui.painter().text(rect.right_center() - egui::vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, note, small, p.muted);
+                }
+                if sel {
+                    resp.scroll_to_me(None);
+                }
+                if resp.clicked() {
                     chosen = Some(i);
                 }
             }
