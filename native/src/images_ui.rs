@@ -443,22 +443,22 @@ impl ImagesState {
                             }
                         }
                         resp.context_menu(|ui| {
-                            if ui.button("Imagens semelhantes").clicked() {
+                            if kit::menu_item(ui, icons::SCAN_SEARCH, "Imagens semelhantes", p) {
                                 self.similar_to = Some(i);
                                 self.query.clear();
                                 ui.close_menu();
                             }
-                            if ui.button("Inserir na nota").clicked() {
+                            if kit::menu_item(ui, icons::CORNER_DOWN_RIGHT, "Inserir na nota", p) {
                                 action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
                                 ui.close_menu();
                             }
-                            if ui.button(if sel { "Desmarcar" } else { "Selecionar" }).clicked() {
+                            if kit::menu_item(ui, icons::SQUARE_CHECK, if sel { "Desmarcar" } else { "Selecionar" }, p) {
                                 if !self.selection.remove(&i) {
                                     self.selection.insert(i);
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("Abrir no app padrão").clicked() {
+                            if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
                                 let _ = open::that(&self.entries[i].abs);
                                 ui.close_menu();
                             }

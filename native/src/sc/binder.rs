@@ -30,7 +30,7 @@ impl Binder {
         let book = from_active.or_else(|| self.book.as_deref().and_then(|b| book::book_by_path(&ix, b, &author))).or_else(|| cx.sc.current_book(&ix, None));
         let Some(book) = book else {
             ui.label(RichText::new("Nenhum livro ainda.").color(p.muted));
-            if ui.button("Novo livro").clicked() {
+            if kit::menu_item(ui, icons::BOOK_PLUS, "Novo livro", p) {
                 acts.push(Action::NewBook);
             }
             return acts;
@@ -128,44 +128,44 @@ impl Binder {
                     ui.painter().hline(row.response.rect.x_range(), y, egui::Stroke::new(2.0_f32, p.accent));
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Abrir em nova aba").clicked() {
+                    if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir em nova aba", p) {
                         acts.push(Action::Open(info.path.clone(), true));
                         ui.close_menu();
                     }
-                    if ui.button("Renomear…").clicked() {
+                    if kit::menu_item(ui, icons::PENCIL, "Renomear…", p) {
                         acts.push(Action::RenameChapter(info.path.clone(), info.title.clone()));
                         ui.close_menu();
                     }
-                    ui.separator();
+                    kit::menu_sep(ui, p);
                     for (k, label, _) in STATUS {
-                        if ui.radio(info.status == k, format!("Status: {label}")).clicked() {
+                        if kit::menu_check(ui, info.status == k, &format!("Status: {label}"), p) {
                             acts.push(Action::SetFm(info.path.clone(), "status".into(), Some(json!(k))));
                             ui.close_menu();
                         }
                     }
-                    ui.separator();
-                    if ui.button("Definir parte / arco…").clicked() {
+                    kit::menu_sep(ui, p);
+                    if kit::menu_item(ui, icons::BOOKMARK, "Definir parte / arco…", p) {
                         acts.push(Action::ChapterPart(info.path.clone(), info.part.clone()));
                         ui.close_menu();
                     }
-                    if ui.button(if info.include { "Excluir da exportação" } else { "Incluir na exportação" }).clicked() {
+                    if kit::menu_item(ui, if info.include { icons::EYE_OFF } else { icons::EYE }, if info.include { "Excluir da exportação" } else { "Incluir na exportação" }, p) {
                         acts.push(Action::SetFm(info.path.clone(), "incluir".into(), if info.include { Some(Json::Bool(false)) } else { None }));
                         ui.close_menu();
                     }
-                    if ui.add_enabled(idx > 0, egui::Button::new("Subir")).clicked() {
+                    if kit::menu_entry(ui, icons::ARROW_UP, "Subir", "", idx > 0, false, p) {
                         let mut a = files.clone();
                         a.swap(idx - 1, idx);
                         acts.push(Action::Reorder(a));
                         ui.close_menu();
                     }
-                    if ui.add_enabled(idx + 1 < files.len(), egui::Button::new("Descer")).clicked() {
+                    if kit::menu_entry(ui, icons::ARROW_DOWN, "Descer", "", idx + 1 < files.len(), false, p) {
                         let mut a = files.clone();
                         a.swap(idx + 1, idx);
                         acts.push(Action::Reorder(a));
                         ui.close_menu();
                     }
-                    ui.separator();
-                    if ui.button("Mover para a lixeira").clicked() {
+                    kit::menu_sep(ui, p);
+                    if kit::menu_danger(ui, icons::TRASH_2, "Mover para a lixeira", p) {
                         acts.push(Action::Trash(info.path.clone()));
                         ui.close_menu();
                     }

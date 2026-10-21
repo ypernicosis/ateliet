@@ -282,11 +282,11 @@ impl SheetView {
                     acts.push(Action::Open(link.clone(), true));
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Usar como retrato").clicked() {
+                    if kit::menu_item(ui, icons::CONTACT, "Usar como retrato", p) {
                         make_portrait = Some(link.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Remover da galeria").clicked() {
+                    if kit::menu_item(ui, icons::X, "Remover da galeria", p) {
                         remove = Some(i);
                         ui.close_menu();
                     }
@@ -362,16 +362,16 @@ impl SheetView {
                     }
                     egui::popup_below_widget(ui, popup, &mr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                         ui.set_min_width(150.0);
-                        if ui.button("Renomear").clicked() {
+                        if kit::menu_item(ui, icons::PENCIL, "Renomear", p) {
                             self.rename_attr = Some((k.clone(), attr_label(k)));
                         }
-                        if ui.button("Mover para cima").clicked() {
+                        if kit::menu_item(ui, icons::ARROW_UP, "Mover para cima", p) {
                             op = Some((k.clone(), "up"));
                         }
-                        if ui.button("Mover para baixo").clicked() {
+                        if kit::menu_item(ui, icons::ARROW_DOWN, "Mover para baixo", p) {
                             op = Some((k.clone(), "down"));
                         }
-                        if ui.button("Remover").clicked() {
+                        if kit::menu_danger(ui, icons::TRASH_2, "Remover", p) {
                             op = Some((k.clone(), "remove"));
                         }
                     });
@@ -570,15 +570,15 @@ impl SheetView {
                         }
                         egui::popup_below_widget(ui, popup, &mr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                             ui.set_min_width(180.0);
-                            if target.is_none() && ui.button(format!("Criar ficha para {name}")).clicked() {
+                            if target.is_none() && kit::menu_item(ui, icons::FILE_PLUS, &format!("Criar ficha para {name}"), p) {
                                 acts.push(Action::CreateSheetFor { sheet: self.path.clone(), list: key.clone(), idx, name: name.clone() });
                             }
                             for other in lists.iter().filter(|o| *o != key) {
-                                if ui.button(format!("Mover para {}", attr_label(other))).clicked() {
+                                if kit::menu_item(ui, icons::ARROW_RIGHT_LEFT, &format!("Mover para {}", attr_label(other)), p) {
                                     list_op = Some((format!("{key}\u{1}{other}"), idx, "move"));
                                 }
                             }
-                            if ui.button("Tirar da lista").clicked() {
+                            if kit::menu_item(ui, icons::X, "Tirar da lista", p) {
                                 list_op = Some((key.clone(), idx, "remove"));
                             }
                         });
@@ -689,13 +689,13 @@ impl SheetView {
                     }
                     egui::popup_below_widget(ui, popup, &mr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                         ui.set_min_width(150.0);
-                        if ui.button("Mover para cima").clicked() {
+                        if kit::menu_item(ui, icons::ARROW_UP, "Mover para cima", p) {
                             op = Some("up");
                         }
-                        if ui.button("Mover para baixo").clicked() {
+                        if kit::menu_item(ui, icons::ARROW_DOWN, "Mover para baixo", p) {
                             op = Some("down");
                         }
-                        if ui.button("Remover seção").clicked() {
+                        if kit::menu_danger(ui, icons::TRASH_2, "Remover seção", p) {
                             op = Some("remove");
                         }
                     });

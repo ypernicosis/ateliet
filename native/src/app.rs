@@ -322,7 +322,7 @@ impl App {
             match crate::board_ui::BoardEditor::open(path, v.abs(path)) {
                 Ok(b) => Some(Box::new(b)),
                 Err(e) => {
-                    self.toast(format!("Could not open {path}: {e}"));
+                    self.toast(format!("Não foi possível abrir {path}: {e}"));
                     return;
                 }
             }
@@ -381,7 +381,7 @@ impl App {
             _ => {
                 let name = if file.to_lowercase().ends_with(".md") { file.to_string() } else { format!("{file}.md") };
                 if let Err(e) = v.write(&name, "") {
-                    self.toast(format!("Could not create {name}: {e}"));
+                    self.toast(format!("Não foi possível criar {name}: {e}"));
                     return;
                 }
                 v.index.write().unwrap().update(std::slice::from_ref(&name));
@@ -448,7 +448,7 @@ impl App {
                 t.last_edit = None;
             }
             Err(e) => {
-                let msg = format!("Could not save {}: {e}", t.path);
+                let msg = format!("Não foi possível salvar {}: {e}", t.path);
                 self.toast(msg);
             }
         }
@@ -462,10 +462,10 @@ impl App {
 
     pub fn new_note(&mut self, folder: &str) {
         let Some(v) = &self.vault else { return };
-        let base = if folder.is_empty() { "Untitled".to_string() } else { format!("{folder}/Untitled") };
+        let base = if folder.is_empty() { "Sem título".to_string() } else { format!("{folder}/Sem título") };
         let path = v.available_path(&base, "md");
         if let Err(e) = v.write(&path, "") {
-            self.toast(format!("Could not create a note: {e}"));
+            self.toast(format!("Não foi possível criar a nota: {e}"));
             return;
         }
         self.vault.as_mut().unwrap().rescan();
@@ -473,7 +473,7 @@ impl App {
         if let Some(t) = self.tabs.get_mut(self.active) {
             t.mode = Mode::Edit;
         }
-        self.ask = Some(Ask { title: "Name of the new note".into(), value: "Untitled".into(), kind: AskKind::Rename(path) });
+        self.ask = Some(Ask { title: "Nome da nova nota".into(), value: "Sem título".into(), kind: AskKind::Rename(path) });
     }
 
     /// A new storyboard (or infinite canvas) next to the open note.
@@ -490,7 +490,7 @@ impl App {
                 self.vault.as_mut().unwrap().rescan();
                 self.open(&path, true);
             }
-            Err(e) => self.toast(format!("Could not create {path}: {e}")),
+            Err(e) => self.toast(format!("Não foi possível criar {path}: {e}")),
         }
     }
 
@@ -512,7 +512,7 @@ impl App {
             let _ = std::fs::create_dir_all(d);
         }
         if let Err(e) = std::fs::rename(v.abs(from), v.abs(&to)) {
-            self.toast(format!("Could not rename: {e}"));
+            self.toast(format!("Não foi possível renomear: {e}"));
             return;
         }
         let prefix = format!("{from}/");
@@ -541,7 +541,7 @@ impl App {
             trash::delete(&abs).map_err(std::io::Error::other)
         };
         if let Err(e) = res {
-            self.toast(format!("Could not delete: {e}"));
+            self.toast(format!("Não foi possível excluir: {e}"));
             return;
         }
         let prefix = format!("{path}/");
@@ -562,7 +562,7 @@ impl App {
                 self.vault.as_mut().unwrap().rescan();
                 self.open(&p, false);
             }
-            Err(e) => self.toast(format!("Could not create the daily note: {e}")),
+            Err(e) => self.toast(format!("Não foi possível criar a nota diária: {e}")),
         }
     }
 

@@ -170,11 +170,11 @@ pub fn hud(ctx: &egui::Context, p: Palette, session: i64, chapter: Option<i64>, 
                     });
                     let r = ui.interact(r.response.rect, egui::Id::new("sprint-pill"), Sense::click()).on_hover_text("Pausar ou encerrar");
                     r.context_menu(|ui| {
-                        if ui.button(if s.paused() { "Retomar" } else { "Pausar" }).clicked() {
+                        if kit::menu_item(ui, if s.paused() { icons::PLAY } else { icons::PAUSE }, if s.paused() { "Retomar" } else { "Pausar" }, p) {
                             act = Some(HudAction::PauseSprint);
                             ui.close_menu();
                         }
-                        if ui.button("Encerrar agora").clicked() {
+                        if kit::menu_item(ui, icons::CIRCLE_STOP, "Encerrar agora", p) {
                             act = Some(HudAction::StopSprint);
                             ui.close_menu();
                         }

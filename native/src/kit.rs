@@ -315,3 +315,52 @@ pub fn chip(ui: &mut Ui, glyph: Option<&str>, label: &str, active: bool, p: Pale
     }
     r
 }
+
+/// A context-menu entry: icon, label, optional shortcut on the right.
+/// Closes the menu when clicked.
+pub fn menu_item(ui: &mut Ui, glyph: &str, label: &str, p: Palette) -> bool {
+    menu_entry(ui, glyph, label, "", true, false, p)
+}
+
+/// A destructive entry (shown in the error colour).
+pub fn menu_danger(ui: &mut Ui, glyph: &str, label: &str, p: Palette) -> bool {
+    menu_entry(ui, glyph, label, "", true, true, p)
+}
+
+pub fn menu_entry(ui: &mut Ui, glyph: &str, label: &str, keys: &str, enabled: bool, danger: bool, p: Palette) -> bool {
+    let need = ui.fonts(|f| f.layout_no_wrap(label.to_string(), FontId::proportional(UI), p.text).size().x + if keys.is_empty() { 0.0 } else { f.layout_no_wrap(keys.to_string(), FontId::proportional(UI_SMALL), p.faint).size().x + 24.0 }) + 52.0;
+    let w = need.max(220.0).max(ui.min_rect().width());
+    let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 28.0), if enabled { Sense::click() } else { Sense::hover() });
+    let rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right().max(ui.min_rect().right()), rect.bottom()));
+    if r.hovered() && enabled {
+        ui.painter().rect_filled(rect, 5.0, p.bg_hover);
+    }
+    let fg = if !enabled { p.faint } else if danger { p.error } else { p.text };
+    let cy = rect.center().y;
+    if !glyph.is_empty() {
+        ui.painter().text(egui::pos2(rect.left() + 15.0, cy), Align2::CENTER_CENTER, glyph, icon_font(14.0), if danger && enabled { p.error } else if enabled { p.muted } else { p.faint });
+    }
+    ui.painter().text(egui::pos2(rect.left() + 32.0, cy), Align2::LEFT_CENTER, label, FontId::proportional(UI), fg);
+    if !keys.is_empty() {
+        ui.painter().text(egui::pos2(rect.right() - 10.0, cy), Align2::RIGHT_CENTER, keys, FontId::proportional(UI_SMALL), p.faint);
+    }
+    let clicked = enabled && r.clicked();
+    if clicked {
+        ui.close_menu();
+    }
+    clicked
+}
+
+/// A context-menu entry with a check mark when on.
+pub fn menu_check(ui: &mut Ui, on: bool, label: &str, p: Palette) -> bool {
+    menu_entry(ui, if on { icons::CHECK } else { "" }, label, "", true, false, p)
+}
+
+/// A thin line between groups of a menu.
+pub fn menu_sep(ui: &mut Ui, p: Palette) {
+    ui.add_space(3.0);
+    let w = ui.min_rect().width().max(220.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), Sense::hover());
+    ui.painter().hline(rect.x_range().shrink(6.0), rect.center().y, Stroke::new(1.0_f32, p.border));
+    ui.add_space(3.0);
+}

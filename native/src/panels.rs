@@ -11,6 +11,19 @@ use crate::icons;
 use crate::kit;
 use crate::theme::{self, Palette};
 use eframe::egui::{self, Color32, RichText, Sense};
+
+enum FileCmd {
+    Bookmark,
+    Reveal,
+    External,
+}
+
+enum TabCmd {
+    CloseOthers,
+    CloseRight,
+    Reveal,
+    OpenExternal,
+}
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver};
 
@@ -162,9 +175,11 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
     let mut open: Option<(String, bool)> = None;
     let mut ask: Option<Ask> = None;
     let mut new_in: Option<String> = None;
+    let marks = app.cfg.as_ref().map(|c| bookmarked(&c.read("bookmarks.json"))).unwrap_or_default();
+    let mut cmd: Option<(String, FileCmd)> = None;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, p);
+        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, &marks, &mut cmd, p);
     });
     if let Some((p, nt)) = open {
         app.open(&p, nt);
@@ -174,6 +189,21 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
     }
     if let Some(f) = new_in {
         app.new_note(&f);
+    }
+    if let Some((path, c)) = cmd {
+        match c {
+            FileCmd::Bookmark => {
+                if let Some(cfg) = &app.cfg {
+                    toggle_bookmark(cfg, &path);
+                }
+            }
+            FileCmd::Reveal | FileCmd::External => {
+                if let Some(v) = &app.vault {
+                    let abs = v.abs(&path);
+                    let _ = open::that(if matches!(c, FileCmd::Reveal) { abs.parent().map(|d| d.to_path_buf()).unwrap_or(abs) } else { abs });
+                }
+            }
+        }
     }
 }
 
@@ -191,7 +221,46 @@ fn file_icon(name: &str) -> &'static str {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, p: Palette) {
+/// Bookmarked paths (the files at any depth of `bookmarks.json`).
+fn bookmarked(b: &Value) -> Vec<String> {
+    fn walk(items: &[Value], out: &mut Vec<String>) {
+        for it in items {
+            if let Some(p) = it["path"].as_str() {
+                out.push(p.to_string());
+            }
+            walk(it["items"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(b["items"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), &mut out);
+    out
+}
+
+/// Add or remove a file from the top level of `bookmarks.json`.
+fn toggle_bookmark(cfg: &VaultConfig, path: &str) {
+    let mut b = cfg.read("bookmarks.json");
+    let mut items = b["items"].as_array().cloned().unwrap_or_default();
+    fn strip(items: &mut Vec<Value>, path: &str) -> bool {
+        let before = items.len();
+        items.retain(|it| it["path"] != path);
+        let mut hit = items.len() != before;
+        for it in items.iter_mut() {
+            if let Some(sub) = it["items"].as_array_mut() {
+                hit |= strip(sub, path);
+            }
+        }
+        hit
+    }
+    if !strip(&mut items, path) {
+        let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        items.push(serde_json::json!({ "type": "file", "ctime": ms, "path": path }));
+    }
+    b = serde_json::json!({ "items": items });
+    cfg.merge("bookmarks.json", b);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, marks: &[String], cmd: &mut Option<(String, FileCmd)>, p: Palette) {
     for (name, sub) in &f.folders {
         let full = if path.is_empty() { name.clone() } else { format!("{path}/{name}") };
         let id = ui.make_persistent_id(("folder", &full));
@@ -201,25 +270,29 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
             ui.data_mut(|d| d.insert_temp(id, !is_open));
         }
         r.context_menu(|ui| {
-            if ui.button("Nova nota").clicked() {
+            if kit::menu_item(ui, icons::FILE_PLUS, "Nova nota", p) {
                 *new_in = Some(full.clone());
                 ui.close_menu();
             }
-            if ui.button("Nova pasta").clicked() {
+            if kit::menu_item(ui, icons::FOLDER_PLUS, "Nova pasta", p) {
                 *ask = Some(Ask { title: "Nova pasta".into(), value: String::new(), kind: AskKind::NewFolder(full.clone()) });
                 ui.close_menu();
             }
-            if ui.button("Renomear").clicked() {
+            if kit::menu_item(ui, icons::FOLDER_OPEN, "Mostrar na pasta", p) {
+                *cmd = Some((format!("{full}/."), FileCmd::Reveal));
+            }
+            kit::menu_sep(ui, p);
+            if kit::menu_item(ui, icons::PENCIL, "Renomear", p) {
                 *ask = Some(Ask { title: "Renomear pasta".into(), value: name.clone(), kind: AskKind::Rename(full.clone()) });
                 ui.close_menu();
             }
-            if ui.button("Excluir").clicked() {
+            if kit::menu_danger(ui, icons::TRASH_2, "Excluir", p) {
                 *ask = Some(Ask { title: format!("Excluir a pasta “{name}” e tudo dentro dela?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
                 ui.close_menu();
             }
         });
         if is_open {
-            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, p);
+            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, marks, cmd, p);
         }
     }
     for (name, full) in &f.files {
@@ -235,15 +308,31 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
             *open = Some((full.clone(), true));
         }
         r.context_menu(|ui| {
-            if ui.button("Abrir em nova aba").clicked() {
+            if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir em nova aba", p) {
                 *open = Some((full.clone(), true));
-                ui.close_menu();
             }
-            if ui.button("Renomear").clicked() {
+            let marked = marks.iter().any(|m| m == full);
+            if kit::menu_item(ui, icons::BOOKMARK, if marked { "Remover dos favoritos" } else { "Favoritar" }, p) {
+                *cmd = Some((full.clone(), FileCmd::Bookmark));
+            }
+            kit::menu_sep(ui, p);
+            if kit::menu_item(ui, icons::LINK, "Copiar link", p) {
+                ui.ctx().copy_text(format!("[[{label}]]"));
+            }
+            if kit::menu_item(ui, icons::COPY, "Copiar caminho", p) {
+                ui.ctx().copy_text(full.clone());
+            }
+            if kit::menu_item(ui, icons::FOLDER_OPEN, "Mostrar na pasta", p) {
+                *cmd = Some((full.clone(), FileCmd::Reveal));
+            }
+            if !is_md && kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
+                *cmd = Some((full.clone(), FileCmd::External));
+            }
+            kit::menu_sep(ui, p);
+            if kit::menu_item(ui, icons::PENCIL, "Renomear", p) {
                 *ask = Some(Ask { title: "Renomear".into(), value: label.to_string(), kind: AskKind::Rename(full.clone()) });
-                ui.close_menu();
             }
-            if ui.button("Excluir").clicked() {
+            if kit::menu_danger(ui, icons::TRASH_2, "Excluir", p) {
                 *ask = Some(Ask { title: format!("Excluir “{label}”?"), value: String::new(), kind: AskKind::ConfirmDelete(full.clone()) });
                 ui.close_menu();
             }
@@ -551,6 +640,8 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         let clip = ui.clip_rect();
         ui.painter().hline(clip.x_range(), clip.bottom() - 0.5, egui::Stroke::new(1.0_f32, p.border));
         let mut close = None;
+        let mut tab_cmd: Option<(usize, TabCmd)> = None;
+        let n_tabs = app.tabs.len();
         let mut select = None;
         let mut focus = false;
         ui.horizontal(|ui| {
@@ -613,6 +704,33 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         if r.middle_clicked() {
                             close = Some(i);
                         }
+                        let is_file = !t.path.starts_with("scriptorium:");
+                        r.context_menu(|ui| {
+                            if kit::menu_entry(ui, icons::X, "Fechar", "Ctrl+W", true, false, p) {
+                                close = Some(i);
+                            }
+                            if kit::menu_entry(ui, "", "Fechar as outras", "", n_tabs > 1, false, p) {
+                                tab_cmd = Some((i, TabCmd::CloseOthers));
+                            }
+                            if kit::menu_entry(ui, "", "Fechar as da direita", "", i + 1 < n_tabs, false, p) {
+                                tab_cmd = Some((i, TabCmd::CloseRight));
+                            }
+                            if is_file {
+                                kit::menu_sep(ui, p);
+                                if kit::menu_item(ui, icons::COPY, "Copiar caminho", p) {
+                                    ui.ctx().copy_text(t.path.clone());
+                                }
+                                if kit::menu_item(ui, icons::LINK, "Copiar link", p) {
+                                    ui.ctx().copy_text(format!("[[{}]]", vault::basename(&t.path)));
+                                }
+                                if kit::menu_item(ui, icons::FOLDER_OPEN, "Mostrar na pasta", p) {
+                                    tab_cmd = Some((i, TabCmd::Reveal));
+                                }
+                                if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
+                                    tab_cmd = Some((i, TabCmd::OpenExternal));
+                                }
+                            }
+                        });
                     }
                     if kit::icon_button_sized(ui, icons::PLUS, "Nova nota", false, p, 26.0, 14.0).clicked() {
                         app.new_note("");
@@ -641,6 +759,27 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         }
         if let Some(i) = close {
             app.close_tab(i);
+        }
+        if let Some((i, cmd)) = tab_cmd {
+            match cmd {
+                TabCmd::CloseOthers => {
+                    for j in (0..app.tabs.len()).rev().filter(|j| *j != i) {
+                        app.close_tab(j);
+                    }
+                }
+                TabCmd::CloseRight => {
+                    for j in (i + 1..app.tabs.len()).rev() {
+                        app.close_tab(j);
+                    }
+                }
+                TabCmd::Reveal | TabCmd::OpenExternal => {
+                    if let (Some(v), Some(t)) = (&app.vault, app.tabs.get(i)) {
+                        let abs = v.abs(&t.path);
+                        let target = if matches!(cmd, TabCmd::Reveal) { abs.parent().map(|d| d.to_path_buf()).unwrap_or(abs) } else { abs };
+                        let _ = open::that(target);
+                    }
+                }
+            }
         }
         if focus {
             app.toggle_focus();

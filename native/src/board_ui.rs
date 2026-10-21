@@ -115,7 +115,7 @@ impl BoardEditor {
                 self.last_change = None;
                 self.error = None;
             }
-            Err(e) => self.error = Some(format!("Could not save: {e}")),
+            Err(e) => self.error = Some(format!("Não foi possível salvar: {e}")),
         }
     }
 
@@ -663,11 +663,11 @@ impl BoardEditor {
                     go = Some(i);
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Mover para cima").clicked() && i > 0 {
+                    if kit::menu_item(ui, icons::ARROW_UP, "Mover para cima", p) && i > 0 {
                         swap = Some((i, i - 1));
                         ui.close_menu();
                     }
-                    if ui.button("Mover para baixo").clicked() && i + 1 < n {
+                    if kit::menu_item(ui, icons::ARROW_DOWN, "Mover para baixo", p) && i + 1 < n {
                         swap = Some((i, i + 1));
                         ui.close_menu();
                     }

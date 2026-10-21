@@ -273,6 +273,7 @@ dependencies = [
 name = "ateliet-native"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "ateliet_core",
  "chrono",
  "dirs 6.0.0",
