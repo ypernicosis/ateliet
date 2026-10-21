@@ -180,6 +180,9 @@ impl Library {
                             if kit::button(ui, Some(icons::USER_PLUS), "Personagem", p).clicked() {
                                 acts.push(Action::NewCharacter(b.path.clone()));
                             }
+                            if kit::button(ui, Some(icons::DOWNLOAD), "Exportar", p).clicked() {
+                                acts.push(Action::Export(b.path.clone()));
+                            }
                         });
                         ui.add_space(10.0);
                         ui.horizontal(|ui| {

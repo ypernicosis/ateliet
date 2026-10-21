@@ -184,3 +184,4 @@ pub const BELL: &str = "\u{e05d}";
 pub const PLUG: &str = "\u{e382}";
 pub const PUZZLE: &str = "\u{e29b}";
 pub const COMPONENT: &str = "\u{e2ac}";
+pub const TABLET: &str = "\u{e181}";

@@ -138,6 +138,7 @@ impl App {
                 self.form = Some(Form::new("Mover capítulo para a lixeira?", Purpose::ConfirmTrash { path: p }, "Mover", vec![]).with_note(&format!("\"{name}\" vai para a lixeira (pode ser recuperado).")));
             }
             Action::Continue(b) => self.continue_book(&b),
+            Action::Export(b) => self.open_export(&b),
         }
     }
 
@@ -158,6 +159,33 @@ impl App {
             t.cursor = t.text.chars().count();
         }
         self.open_view("binder", Some(b.to_string()));
+    }
+
+    pub fn open_export(&mut self, b: &str) {
+        let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_ref()) else { return };
+        let title = book::book_by_path(&v.index.read().unwrap(), b, &sc.author()).map(|x| x.title).unwrap_or_default();
+        let last: Vec<String> = sc.settings.data["ultimosFormatos"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| if x == "epub" { "epub".to_string() } else { x.to_string() }).collect()).unwrap_or_default();
+        self.export = Some(crate::sc::export_ui::ExportDialog::new(b, &title, &last));
+    }
+
+    pub fn export_ui(&mut self, ctx: &eframe::egui::Context) {
+        let p = self.palette;
+        let (Some(d), Some(v), Some(sc)) = (self.export.as_mut(), self.vault.as_ref(), self.sc.as_mut()) else { return };
+        let opts = ateliet_core::scriptorium::export::Options {
+            typography: sc.settings.data["tipografia"].as_bool().unwrap_or(true),
+            soft_break: sc.settings.str("quebraSimples", "paragrafo"),
+            author: sc.author(),
+        };
+        let (open, remember) = d.show(ctx, p, v.root.clone(), v.index.clone(), opts);
+        if let Some(f) = remember {
+            sc.settings.set("ultimosFormatos", json!(f));
+            if let Some(v) = self.vault.as_mut() {
+                v.rescan();
+            }
+        }
+        if !open {
+            self.export = None;
+        }
     }
 
     pub fn form_ui(&mut self, ctx: &eframe::egui::Context) {

@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod binder;
+pub mod export_ui;
 pub mod library;
 
 use crate::vault::Vault;
@@ -53,6 +54,7 @@ pub enum Action {
     ChapterPart(String, String),
     Trash(String),
     Continue(String),
+    Export(String),
 }
 
 impl Sc {

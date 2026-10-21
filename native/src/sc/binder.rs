@@ -56,6 +56,9 @@ impl Binder {
             ui.label(RichText::new(format!("{} palavras · {} hoje", fmt_n(stats.words as i64), fmt_n(cx.sc.settings.today_words(Some(&book.path))))).size(12.0).color(p.muted));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
+                if kit::icon_button_sized(ui, icons::DOWNLOAD, "Exportar", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::Export(book.path.clone()));
+                }
                 if kit::icon_button_sized(ui, icons::USER_PLUS, "Novo personagem", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::NewCharacter(book.path.clone()));
                 }

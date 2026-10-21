@@ -38,6 +38,7 @@ pub enum Cmd {
     NewChapter,
     NewCharacter,
     ContinueBook,
+    ExportBook,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -68,6 +69,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::NewChapter, "scriptorium-omena:novo-capitulo", "Scriptorium: Novo capítulo"),
     (Cmd::NewCharacter, "scriptorium-omena:novo-personagem", "Scriptorium: Novo personagem"),
     (Cmd::ContinueBook, "scriptorium-omena:continuar", "Scriptorium: Continuar escrevendo"),
+    (Cmd::ExportBook, "scriptorium-omena:exportar", "Scriptorium: Exportar livro…"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -152,10 +154,11 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.open_view("binder", b);
         }
         Cmd::NewBook => app.new_book_form(),
-        Cmd::NewChapter | Cmd::NewCharacter | Cmd::ContinueBook => match app.current_book() {
+        Cmd::NewChapter | Cmd::NewCharacter | Cmd::ContinueBook | Cmd::ExportBook => match app.current_book() {
             Some(b) => app.sc_apply(match c {
                 Cmd::NewChapter => crate::sc::Action::NewChapter(b.path),
                 Cmd::NewCharacter => crate::sc::Action::NewCharacter(b.path),
+                Cmd::ExportBook => crate::sc::Action::Export(b.path),
                 _ => crate::sc::Action::Continue(b.path),
             }),
             None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),

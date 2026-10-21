@@ -143,6 +143,7 @@ pub struct App {
     pub sc: Option<crate::sc::Sc>,
     pub binder: crate::sc::binder::Binder,
     pub form: Option<crate::form::Form>,
+    pub export: Option<crate::sc::export_ui::ExportDialog>,
     themed: bool,
     last_generation: u64,
 }
@@ -187,6 +188,7 @@ impl App {
             sc: None,
             binder: Default::default(),
             form: None,
+            export: None,
             themed: false,
             last_generation: 0,
         };
@@ -739,6 +741,7 @@ impl eframe::App for App {
         commands::show_palette(self, ctx);
         panels::ask_dialog(self, ctx);
         self.form_ui(ctx);
+        self.export_ui(ctx);
         panels::settings_window(self, ctx);
         self.templater.show_prompt(ctx, self.palette);
         panels::toasts(self, ctx);
