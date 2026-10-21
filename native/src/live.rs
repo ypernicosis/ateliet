@@ -232,7 +232,14 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
                 }
             }
         }
-        ui.add_space(size * 0.45);
+        // the same rhythm as the reading view: more room above headings
+        if i > 0 {
+            let gap = match seg.doc.blocks.first() {
+                Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
+                _ => size * 0.7,
+            };
+            ui.add_space(gap);
+        }
         let top = ui.cursor().min;
         let before = actions.len();
         if seg.frontmatter {
@@ -252,8 +259,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         if clicked && actions.len() == before {
             open = Some((i, true));
         }
-        if ui.rect_contains_pointer(rect) {
-            ui.painter().rect_stroke(rect.expand(3.0), 4.0, egui::Stroke::new(1.0_f32, host.palette().border), egui::StrokeKind::Outside);
+        if ui.rect_contains_pointer(rect) && actions.len() == before {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
     }
     if active.is_some() && !drawn_editor {
@@ -321,7 +328,7 @@ fn editor_block(ui: &mut egui::Ui, tab: &mut Tab, id: egui::Id, st: &editor::Sty
     }
     let before = tab.live.buf.clone();
     let p = st.p;
-    egui::Frame::new().fill(p.bg_secondary.gamma_multiply(0.5)).corner_radius(egui::CornerRadius::same(4)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+    egui::Frame::new().fill(p.bg_secondary).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
         ui.add(editor::editor_widget(&mut tab.live.buf, id, &mut tab.live.highlight, st, 1));
     });
     if tab.live.buf != before {

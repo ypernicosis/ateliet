@@ -31,7 +31,7 @@ cargo install tauri-cli --version "^2"
 
 ## Interface nativa (sem WebKit)
 
-A interface está sendo migrada para uma versão nativa em Rust (`native/`, desenhada com egui). Ela não usa webview nem GTK e abre o mesmo vault, com as mesmas notas e configurações. O binário tem cerca de 13 MB.
+A interface está sendo migrada para uma versão nativa em Rust (`native/`, desenhada com egui). Ela não usa webview nem GTK e abre o mesmo vault, com as mesmas notas e configurações. O binário tem cerca de 14 MB, com a fonte Inter e os ícones Lucide embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
 
 ```sh
 cargo run -p ateliet-native --release -- ~/caminho/do/vault
@@ -43,9 +43,11 @@ Já funciona:
 - **Markdown do Obsidian**: wikilinks e embeds (notas, seções e imagens), tags, callouts dobráveis, realce, campos inline, tarefas com status personalizados que se marcam clicando, tabelas e código.
 - **Ferramentas embutidas**: blocos `dataview`, `dataviewjs` e consultas inline, desenhados a partir do núcleo; Templater com as janelas de prompt e de escolha; calendário de notas diárias.
 - **Navegação**: explorador de arquivos (criar, renomear, apagar), busca, favoritos, backlinks e links de saída, sumário, tags, paleta de comandos (Ctrl/Cmd+P), troca rápida de nota (Ctrl/Cmd+O) e os atalhos do `hotkeys.json`.
-- **Modo imagens** (Ctrl/Cmd+Shift+I): mosaico de todas as imagens, coleções por pasta, busca por nome, imagens parecidas, visualizador com zoom e inserção na nota.
+- **Modo imagens** (Ctrl/Cmd+Shift+I): mosaico de todas as imagens, coleções por pasta, busca por nome e por descrição (CLIP, baixado na primeira vez), imagens parecidas, visualizador com zoom e inserção na nota.
+- **Storyboard**: arquivos `.storyboard` abrem num editor de desenho (lápis, caneta, pincel, marcador, borracha, conta-gotas), com quadros, reprodução, camadas com modos de mistura, papel de cebola, desfazer e exportação de PNG.
+- **Scriptorium**: Biblioteca de livros (capa, números, meta, últimos 14 dias, estante por série), painel do Manuscrito com status, partes e reordenação por arrastar, criação de livros, capítulos e personagens, estatísticas diárias no mesmo `data.json` do plugin.
 
-Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), os temas CSS, o storyboard, a busca de imagens por descrição, a biblioteca compartilhada com o Pictogrep e o botão de atualizar.
+Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), os temas CSS, as demais telas do Scriptorium (enredo, mundo, mapas, diagramação e exportação), as páginas e balões do storyboard, a biblioteca compartilhada com o Pictogrep e o botão de atualizar.
 
 ## Instalando no macOS
 
