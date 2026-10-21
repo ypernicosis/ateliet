@@ -28,6 +28,8 @@ pub enum Cmd {
     Calendar,
     ChangeVault,
     ImageMode,
+    NewStoryboard,
+    NewCanvas,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -50,6 +52,8 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Calendar, "calendar:show-calendar-view", "Calendar: Open view"),
     (Cmd::ChangeVault, "app:open-vault", "Open another vault"),
     (Cmd::ImageMode, "images:toggle-mode", "Images: Toggle image mode"),
+    (Cmd::NewStoryboard, "storyboard:new", "Storyboard: New storyboard"),
+    (Cmd::NewCanvas, "storyboard:new-canvas", "Storyboard: New infinite canvas"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -127,6 +131,8 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             let folder = app.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
             app.new_note(&folder);
         }
+        Cmd::NewStoryboard => app.new_board("animatic"),
+        Cmd::NewCanvas => app.new_board("canvas"),
         Cmd::OpenDaily => app.open_daily(ateliet_core::datefmt::today().date()),
         Cmd::ToggleMode => {
             if let Some(t) = app.tabs.get_mut(app.active) {

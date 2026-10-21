@@ -2,6 +2,7 @@
 //! as the web shell, drawn with egui (no web view, no GTK).
 
 mod app;
+mod board_ui;
 mod commands;
 mod config;
 mod daily;

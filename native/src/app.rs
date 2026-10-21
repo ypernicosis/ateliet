@@ -36,6 +36,8 @@ pub struct Tab {
     /// A heading line to scroll to on the next frame.
     pub scroll_to: Option<usize>,
     pub live: crate::live::LiveState,
+    /// A `.storyboard` file open in the drawing editor.
+    pub board: Option<Box<crate::board_ui::BoardEditor>>,
 }
 
 impl Tab {
@@ -263,7 +265,9 @@ impl App {
     /// Open a note (or focus its tab). Non-markdown files open in the system app.
     pub fn open(&mut self, path: &str, new_tab: bool) {
         let Some(v) = &self.vault else { return };
-        if !path.to_lowercase().ends_with(".md") {
+        let lower = path.to_lowercase();
+        let is_board = lower.ends_with(".storyboard");
+        if !lower.ends_with(".md") && !is_board {
             let _ = open::that(v.abs(path));
             return;
         }
@@ -271,8 +275,20 @@ impl App {
             self.active = i;
             return;
         }
-        let text = std::fs::read_to_string(v.abs(path)).unwrap_or_default();
-        let tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default() };
+        let board = if is_board {
+            match crate::board_ui::BoardEditor::open(path, v.abs(path)) {
+                Ok(b) => Some(Box::new(b)),
+                Err(e) => {
+                    self.toast(format!("Could not open {path}: {e}"));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let text = if is_board { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None };
+        tab.board = board;
         if new_tab || self.tabs.is_empty() {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
@@ -336,6 +352,10 @@ impl App {
     pub fn save_tab(&mut self, i: usize) {
         let Some(v) = &self.vault else { return };
         let Some(t) = self.tabs.get_mut(i) else { return };
+        if let Some(b) = t.board.as_mut() {
+            b.save();
+            return;
+        }
         if !t.dirty() {
             return;
         }
@@ -371,6 +391,24 @@ impl App {
             t.mode = Mode::Edit;
         }
         self.ask = Some(Ask { title: "Name of the new note".into(), value: "Untitled".into(), kind: AskKind::Rename(path) });
+    }
+
+    /// A new storyboard (or infinite canvas) next to the open note.
+    pub fn new_board(&mut self, kind: &str) {
+        let Some(v) = &self.vault else { return };
+        let folder = self.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
+        let name = if kind == "canvas" { "Canvas" } else { "Storyboard" };
+        let base = if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") };
+        let path = v.available_path(&base, "storyboard");
+        let (w, h) = (1920, 1080);
+        match crate::board_ui::BoardEditor::create(&path, v.abs(&path), kind, w, h) {
+            Ok(mut b) => {
+                b.save();
+                self.vault.as_mut().unwrap().rescan();
+                self.open(&path, true);
+            }
+            Err(e) => self.toast(format!("Could not create {path}: {e}")),
+        }
     }
 
     /// Rename/move a file and update the open tabs (links elsewhere are kept as they are).
@@ -753,6 +791,13 @@ impl App {
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
+                return;
+            }
+            let p = self.palette;
+            if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
+                if let Some(msg) = b.ui(ui, p) {
+                    self.toast(msg);
+                }
                 return;
             }
             self.note_ui(ui, &mut actions, true);
