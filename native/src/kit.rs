@@ -303,7 +303,9 @@ pub fn chip(ui: &mut Ui, glyph: Option<&str>, label: &str, active: bool, p: Pale
     if let Some(g) = glyph {
         job.append(g, 0.0, egui::TextFormat { font_id: icon_font(12.5), color: fg, valign: egui::Align::Center, ..Default::default() });
     }
-    job.append(label, if glyph.is_some() { 6.0 } else { 0.0 }, egui::TextFormat { font_id: FontId::proportional(12.5), color: if active { p.accent_strong } else { p.text }, valign: egui::Align::Center, ..Default::default() });
+    if !label.is_empty() {
+        job.append(label, if glyph.is_some() { 6.0 } else { 0.0 }, egui::TextFormat { font_id: FontId::proportional(12.5), color: if active { p.accent_strong } else { p.text }, valign: egui::Align::Center, ..Default::default() });
+    }
     job.wrap = egui::text::TextWrapping::truncate_at_width(260.0);
     let g = ui.fonts(|f| f.layout_job(job));
     let (rect, r) = ui.allocate_exact_size(egui::vec2(g.size().x + 20.0, 26.0), Sense::click());

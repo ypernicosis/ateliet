@@ -7,6 +7,7 @@ pub mod book;
 pub mod css;
 pub mod docx;
 pub mod enredo;
+pub mod estruturas;
 pub mod export;
 pub mod manuscript;
 pub mod sheet;

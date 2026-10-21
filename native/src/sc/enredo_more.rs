@@ -155,6 +155,7 @@ impl EnredoView {
                 Sel::Pista(id) => self.draw_pista(ui, p, id, cols),
                 Sel::Arco(id) => self.draw_arc(ui, p, id, cols, acts),
                 Sel::Evento(id) => self.draw_event(ui, p, id),
+                Sel::Batida(key) => self.draw_beat(ui, p, key, cols),
             };
             if changed {
                 self.changed();
@@ -272,6 +273,12 @@ impl EnredoView {
             s["status"] = json!(STATUS[k].0);
             ch = true;
         }
+        // beats of the structures, and their questions
+        if let Some(sid) = new_trama_for.take() {
+            self.new_trama = Some((String::new(), Some(sid)));
+        }
+        ch |= self.scene_beats(ui, p, i, id, cols);
+        let s = &mut self.data["cenas"][i];
         // details
         let has_details = ["local", "quando", "objetivo", "conflito", "desfecho", "valor"].iter().any(|k| !en::str_of(s, k).is_empty());
         sec(ui, p, "Detalhes", icons::LIST, has_details, |ui| {

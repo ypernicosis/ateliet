@@ -40,6 +40,8 @@ pub enum Sel {
     Pista(String),
     Arco(String),
     Evento(String),
+    /// `application:beat`
+    Batida(String),
 }
 
 pub enum CardCmd {
@@ -85,6 +87,12 @@ pub struct EnredoView {
     pub(super) crono_zoom: Option<f32>,
     pub(super) reading_order: bool,
     pub(super) confirm: Option<String>,
+    /// The structures applied to the book, with where their beats fall.
+    pub(super) apps: Vec<super::enredo_st::App>,
+    pub(super) st_cache: std::collections::HashMap<String, (Option<SystemTime>, ateliet_core::scriptorium::estruturas::Structure)>,
+    pub(super) st_dialog: Option<super::enredo_st::StDialog>,
+    pub(super) st_editor: Option<Box<super::enredo_st::StEditor>>,
+    pub(super) st_folder: String,
 }
 
 pub fn status_color(k: &str) -> Color32 {
@@ -133,6 +141,11 @@ impl EnredoView {
             crono_zoom: None,
             reading_order: false,
             confirm: None,
+            apps: Vec::new(),
+            st_cache: Default::default(),
+            st_dialog: None,
+            st_editor: None,
+            st_folder: String::new(),
         }
     }
 
@@ -237,6 +250,12 @@ impl EnredoView {
         }
         let cols = en::chapters(&ix, &b, &self.data);
         let chars: Vec<String> = book::characters(&ix, &b);
+        let words: Vec<usize> = {
+            let stats = cx.sc.stats(&ix, &b);
+            cols.iter().map(|c| stats.per.iter().find(|x| x.info.path == c.path).map(|x| x.words).unwrap_or(0)).collect()
+        };
+        self.st_folder = ateliet_core::scriptorium::estruturas::folder(&cx.sc.settings.str("pastaEstruturas", ""));
+        self.resolve(&root, &cols, &words);
         self.keys(ui);
 
         egui::TopBottomPanel::top(ui.id().with("en-bar")).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 20, right: 16, top: 12, bottom: 10 })).show_separator_line(true).show_inside(ui, |ui| {
@@ -259,11 +278,13 @@ impl EnredoView {
         self.trama_dialog(ui.ctx(), p);
         self.era_dialog(ui.ctx(), p);
         self.arc_dialog(ui.ctx(), p, &ix);
+        self.structures_dialog(ui.ctx(), p, &cols, &ix, &root);
+        self.structure_editor(ui.ctx(), p, &ix, &root, &author, &mut acts);
         acts
     }
 
     fn keys(&mut self, ui: &egui::Ui) {
-        if ui.ctx().memory(|m| m.focused().is_some() || m.any_popup_open()) || self.new_trama.is_some() || self.era.is_some() || self.arc_pick {
+        if ui.ctx().memory(|m| m.focused().is_some() || m.any_popup_open()) || self.new_trama.is_some() || self.era.is_some() || self.arc_pick || self.st_dialog.is_some() || self.st_editor.is_some() {
             return;
         }
         let (esc, n, num) = ui.input(|i| {
@@ -304,6 +325,8 @@ impl EnredoView {
             ui.add_space(14.0);
             // narrow tabs: icons only, so the chips on the right keep their room
             let wide = ui.available_width() > 900.0;
+            let roomy = ui.available_width() > 1040.0;
+            let short = |t: &str| if roomy { t.to_string() } else { String::new() };
             let items: Vec<(&str, &str)> = MODES.iter().map(|m| (m.1, if wide { m.2 } else { "" })).collect();
             let cur = MODES.iter().position(|m| m.0 == self.mode).unwrap_or(0);
             if let Some(i) = kit::segmented(ui, &items, cur, p) {
@@ -319,8 +342,19 @@ impl EnredoView {
                 if kit::primary_icon(ui, icons::PLUS, lab, p).on_hover_text(format!("Nova {} (N)", lab.to_lowercase())).clicked() {
                     self.primary();
                 }
+                if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Arcos) {
+                    let lab = match self.apps.len() {
+                        0 => "Sem estrutura".to_string(),
+                        1 => self.apps[0].st.nome.clone(),
+                        n => format!("{n} estruturas"),
+                    };
+                    let tip = if self.apps.is_empty() { "Escolher estruturas narrativas".to_string() } else { self.apps.iter().map(|x| format!("{} — {}", x.st.nome, ateliet_core::scriptorium::estruturas::scope_label(&x.a, cols))).collect::<Vec<_>>().join("\n") };
+                    if kit::chip(ui, Some(icons::MILESTONE), &short(&lab), !self.apps.is_empty(), p).on_hover_text(format!("{lab}\n{tip}")).clicked() {
+                        self.st_dialog = Some(super::enredo_st::StDialog::default());
+                    }
+                }
                 if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Cronologia) {
-                    let fr = kit::chip(ui, Some(icons::LIST_FILTER), if self.filtered() { "Filtrado" } else { "Filtrar" }, self.filtered(), p);
+                    let fr = kit::chip(ui, Some(icons::LIST_FILTER), &short(if self.filtered() { "Filtrado" } else { "Filtrar" }), self.filtered(), p).on_hover_text("Filtrar");
                     let popup = ui.make_persistent_id("en-filter");
                     if fr.clicked() {
                         ui.memory_mut(|m| m.toggle_popup(popup));
@@ -333,7 +367,7 @@ impl EnredoView {
                 if matches!(self.mode, Mode::Grade | Mode::Escaleta) {
                     let parts = en::parts(cols);
                     if !parts.is_empty() {
-                        let ar = kit::chip(ui, Some(icons::BOOKMARK), self.arco.as_deref().unwrap_or("Todos os arcos"), self.arco.is_some(), p);
+                        let ar = kit::chip(ui, Some(icons::BOOKMARK), &short(self.arco.as_deref().unwrap_or("Todos os arcos")), self.arco.is_some(), p).on_hover_text(self.arco.as_deref().unwrap_or("Todos os arcos").to_string());
                         let popup = ui.make_persistent_id("en-arc");
                         if ar.clicked() {
                             ui.memory_mut(|m| m.toggle_popup(popup));
@@ -614,7 +648,9 @@ impl EnredoView {
                 (PAD * 2.0 + m * CARD + (m - 1.0).max(0.0) * GAP + 24.0).max(80.0)
             })
             .collect();
-        let top_h = if has_parts { PARTH } else { 0.0 } + HEADH;
+        let head_h = if has_parts { PARTH } else { 0.0 } + HEADH;
+        let bands = self.bands(ui, lo, n, COLW);
+        let top_h = head_h + bands.iter().map(|b| b.h).sum::<f32>();
         let total = vec2(LAB + COLW * (n + 1) as f32 + ADD, top_h + row_h.iter().sum::<f32>());
         let mut zones: Vec<Zone> = Vec::new();
         let mut new_scene: Option<(Option<String>, String)> = None;
@@ -624,6 +660,7 @@ impl EnredoView {
         let mut toggle_arc: Option<String> = None;
         let mut add_trama = false;
         let mut card_cmd = None;
+        let mut open_structures: Option<usize> = None;
         let dragging = Self::dragging(ui);
         egui::ScrollArea::both().id_salt("en-grade").auto_shrink([false, false]).show(ui, |ui| {
             let avail = ui.available_size();
@@ -689,8 +726,19 @@ impl EnredoView {
                 painter.line_segment([pos2(o.x, y + h), pos2(o.x + total.x.max(avail.x), y + h)], hair);
                 y += h;
             }
+            // structure bands, over the chapters they cover
+            let band_clip = Rect::from_min_max(pos2((lab_x + LAB).max(sx(1)), head_y + head_h), pos2(sx(n + 1).min(clip.right()), clip.bottom()));
+            let mut by = o.y + head_h;
+            for band in &bands {
+                if let Some(s) = self.paint_band(ui, band, pos2(sx(1), by), band_clip, p) {
+                    select = Some(s);
+                }
+                painter.rect_filled(Rect::from_min_size(pos2(sx(0), by), vec2(COLW, band.h)), 0.0, p.bg_secondary);
+                painter.line_segment([pos2(o.x, by + band.h), pos2(o.x + total.x.max(avail.x), by + band.h)], hair);
+                by += band.h;
+            }
             // header (sticky on top)
-            let head = Rect::from_min_size(pos2(o.x, head_y), vec2(total.x.max(avail.x), top_h));
+            let head = Rect::from_min_size(pos2(o.x, head_y), vec2(total.x.max(avail.x), head_h));
             painter.rect_filled(head, 0.0, p.bg);
             painter.line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0_f32, p.border_strong));
             let hy = head_y + if has_parts { PARTH } else { 0.0 };
@@ -794,8 +842,17 @@ impl EnredoView {
                     select = Some(Sel::Trama(tid.clone()));
                 }
             }
+            let mut by = o.y + head_h;
+            for band in &bands {
+                let r = Rect::from_min_size(pos2(lab_x, by), vec2(LAB, band.h));
+                by += band.h;
+                let vr = r.intersect(Rect::from_min_max(pos2(clip.left(), head_y + head_h), clip.max));
+                if vr.is_positive() && self.paint_band_label(ui, band, r, vr, p) {
+                    open_structures = Some(band.app);
+                }
+            }
             // corner
-            let corner = Rect::from_min_size(pos2(lab_x, head_y), vec2(LAB, top_h));
+            let corner = Rect::from_min_size(pos2(lab_x, head_y), vec2(LAB, head_h));
             painter.rect_filled(corner, 0.0, p.bg);
             painter.line_segment([corner.right_top(), corner.right_bottom()], Stroke::new(1.0_f32, p.border_strong));
             painter.line_segment([corner.left_bottom(), corner.right_bottom()], Stroke::new(1.0_f32, p.border_strong));
@@ -833,6 +890,9 @@ impl EnredoView {
             self.new_trama = Some((String::new(), None));
         }
         self.card_cmd(card_cmd, acts);
+        if let Some(i) = open_structures {
+            self.st_dialog = Some(super::enredo_st::StDialog { focus: self.apps.get(i).map(|x| x.id()) });
+        }
     }
 
     fn trama_dialog(&mut self, ctx: &egui::Context, p: Palette) {
@@ -936,6 +996,17 @@ impl EnredoView {
                                         match &c.planned {
                                             Some(pl) => select = Some(Sel::Plan(en::str_of(pl, "id").to_string())),
                                             None => open_ch = Some(c.path.clone()),
+                                        }
+                                    }
+                                    let gi = all.iter().position(|x| x.path == c.path).unwrap_or(0);
+                                    for (key, label, k) in self.beats_at(gi) {
+                                        let col = super::enredo_st::band_color(k, p);
+                                        let r = ui.add(egui::Label::new(RichText::new(format!("◆ {label}")).size(11.5).color(col)).sense(Sense::click()).truncate());
+                                        if r.hovered() {
+                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        if r.clicked() {
+                                            select = Some(Sel::Batida(key));
                                         }
                                     }
                                 }
