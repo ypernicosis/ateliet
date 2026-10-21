@@ -51,3 +51,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+The built-in Dataview, Templater and Calendar tools (`src/dataview/`, `src/script/`, `src/calendar.rs`, `ui/tools/`) reimplement the query language, script APIs and behaviour of the Dataview (https://github.com/blacksmithgu/obsidian-dataview), Templater (https://github.com/SilentVoid13/Templater) and Calendar (https://github.com/liamcain/obsidian-calendar-plugin) plugins for Obsidian, all distributed under the MIT License, so that notes written for them keep working. No code from those projects is included.
+
+The script engine embeds QuickJS (https://bellard.org/quickjs/, MIT License, Copyright (c) 2017-2021 Fabrice Bellard and Charlie Gordon) through the rquickjs crate (MIT License).

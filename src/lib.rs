@@ -8,6 +8,10 @@
 //! - `images`   — the image library: scan, index, vector and name search
 //! - `clip`     — CLIP tokenizer, preprocessing and ONNX inference
 //! - `clipstudio` — Clip Studio Paint `.clip` files: layers as pictures
+//! - `datefmt`  — moment/Luxon date formats in English and Portuguese
+//! - `dataview` — the Dataview index, query language and functions
+//! - `script`   — QuickJS for `dataviewjs` blocks and Templater commands
+//! - `calendar` — a month of daily notes for the calendar view
 
 pub mod metadata;
 pub mod render;
@@ -18,3 +22,7 @@ pub mod vault;
 pub mod clip;
 pub mod images;
 pub mod clipstudio;
+pub mod datefmt;
+pub mod dataview;
+pub mod script;
+pub mod calendar;

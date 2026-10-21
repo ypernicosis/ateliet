@@ -8,6 +8,7 @@ mod pinterest;
 mod process;
 mod shared;
 mod storyboard;
+mod tools;
 mod update;
 
 use ateliet_core::{metadata, render, search, vault};
@@ -192,7 +193,7 @@ struct VaultInfo {
 }
 
 #[tauri::command]
-async fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<'_, AppState>, path: String) -> Res<VaultInfo> {
+async fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<'_, AppState>, tools: State<'_, tools::Shared>, path: String) -> Res<VaultInfo> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("Vault not found: {path}"));
@@ -218,6 +219,8 @@ async fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<'
     let label = window.label().to_string();
     let root2 = root.clone();
     let app2 = app.clone();
+    let tools2 = tools.inner().clone();
+    tools2.prewarm(root.clone());
     std::thread::spawn(move || {
         while let Ok(first) = rx.recv() {
             let mut batch: HashSet<PathBuf> = HashSet::from([first]);
@@ -236,6 +239,9 @@ async fn vault_init(app: tauri::AppHandle, window: tauri::Window, state: State<'
                 .map(|p| vault::rel_path(&root2, p))
                 .filter(|r| !r.is_empty() && !r.starts_with(".git/") && r != ".git" && !r.starts_with(".trash"))
                 .collect();
+            if !rels.is_empty() {
+                tools2.touched(&root2, &rels);
+            }
             if !rels.is_empty() && app2.emit_to(label.as_str(), "vault-fs", rels).is_err() {
                 break;
             }
@@ -344,13 +350,15 @@ async fn vault_metadata_all(state: State<'_, AppState>, path: String, config_dir
     .map_err(e2s)?
 }
 
+// Async so a long note is parsed off the main thread (synchronous commands
+// run on it on macOS and would freeze the window while typing).
 #[tauri::command]
-fn md_parse(text: String) -> Value {
+async fn md_parse(text: String) -> Value {
     metadata::parse(&text)
 }
 
 #[tauri::command]
-fn md_render(text: String) -> Vec<render::Block> {
+async fn md_render(text: String) -> Vec<render::Block> {
     render::render(&text)
 }
 
@@ -875,6 +883,7 @@ fn main() {
         .manage(process::Procs::default())
         .manage(gallery::Galleries::default())
         .manage(std::sync::Arc::new(pinterest::Downloads::default()))
+        .manage(tools::Shared::default())
         .register_asynchronous_uri_scheme_protocol("ateliet", |_ctx, req, responder| {
             // A bounded pool: a wall of 100 previews must not start 100 decoders at once.
             serve_pool().spawn(move || responder.respond(serve(req)));
@@ -954,6 +963,12 @@ fn main() {
             shared::pinterest_followed,
             shared::pinterest_forget,
             shared::pinterest_check,
+            tools::dv_query,
+            tools::dv_inline,
+            tools::dv_js,
+            tools::tp_run,
+            tools::tp_answer,
+            tools::calendar_month,
         ])
         .setup(|app| {
             // `ateliet <vault-path>` opens that vault; otherwise reopen the last one.

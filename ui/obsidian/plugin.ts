@@ -5,6 +5,7 @@ import { MarkdownPreviewRenderer } from "./renderer.ts";
 import { Notice, Scope, normalizeModifiers } from "./ui.ts";
 import { normalizePath } from "./util.ts";
 import { isMac } from "../tauri.ts";
+import { BUILT_IN_PLUGINS } from "../tools/common.ts";
 
 // ── Plugin ────────────────────────────────────────────────────────────────
 
@@ -404,11 +405,16 @@ export class Plugins extends Events {
     for (const id of enabled) if (this.manifests[id]) this.enabledPlugins.add(id);
     for (const id of enabled) {
       if (!this.manifests[id]) continue;
+      if (BUILT_IN_PLUGINS[id]) {
+        console.info(`[ateliet] plugin ${id} skipped: ${BUILT_IN_PLUGINS[id]} is built into Ateliet`);
+        continue;
+      }
       await this.loadPlugin(id);
     }
   }
 
   async loadPlugin(id: string): Promise<Plugin | null> {
+    if (BUILT_IN_PLUGINS[id]) return null;
     const manifest = this.manifests[id];
     if (!manifest || this.plugins[id]) return this.plugins[id] || null;
     const started = performance.now();
