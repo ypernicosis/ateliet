@@ -5,6 +5,8 @@
 
 use crate::vault;
 use ateliet_core::images::{self, ImageEntry, Source};
+use crate::icons;
+use crate::kit;
 use eframe::egui::{self, Color32, RichText, Sense};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -250,15 +252,15 @@ impl ImagesState {
         if v.downloading.load(Ordering::Relaxed) {
             let total = v.total.load(Ordering::Relaxed).max(1) as f32;
             let got = v.received.load(Ordering::Relaxed) as f32;
-            ui.add(egui::ProgressBar::new(got / total).desired_width(160.0).text(format!("model {:.0} / {:.0} MB", got / 1e6, total / 1e6)));
+            ui.add(egui::ProgressBar::new(got / total).desired_width(160.0).text(format!("modelo {:.0} de {:.0} MB", got / 1e6, total / 1e6)));
         } else if !v.ready() {
-            if ui.button("Search by description…").on_hover_text("Downloads the CLIP model once (about 150 MB). Pictures are analysed on this computer.").clicked() {
+            if kit::button(ui, Some(icons::SPARKLES), "Buscar por descrição", p).on_hover_text("Baixa o modelo CLIP uma vez (cerca de 150 MB). As imagens são analisadas neste computador.").clicked() {
                 v.download(ui.ctx().clone());
             }
         } else {
             let waiting = v.waiting.load(Ordering::Relaxed);
             if waiting > 0 {
-                ui.label(RichText::new(format!("analysing {} / {waiting}", v.done.load(Ordering::Relaxed))).small().color(p.muted));
+                ui.label(RichText::new(format!("analisando {} de {waiting}", v.done.load(Ordering::Relaxed))).small().color(p.muted));
             } else if self.scanning.is_none() && !self.entries.is_empty() {
                 // a model that arrived after the scan: start analysing
                 let missing = { let ix = self.index.lock().unwrap(); self.entries.iter().any(|e| !ix.has_vector(&e.key)) };
@@ -291,38 +293,45 @@ impl ImagesState {
     /// The collections column (left side in image mode).
     pub fn collections_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         self.poll(ui.ctx());
-        ui.label(RichText::new("Collections").strong());
-        ui.add_space(4.0);
+        ui.label(RichText::new("Imagens").font(kit::medium(13.5)).color(p.text));
+        ui.add_space(8.0);
+        ui.spacing_mut().item_spacing.y = 2.0;
         let all = self.entries.len();
-        if ui.add(egui::Button::new(format!("All pictures  ({all})")).frame(false).selected(self.folder.is_none())).clicked() {
+        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none()).show(ui, p).clicked() {
             self.folder = None;
             self.similar_to = None;
             self.viewer = None;
         }
+        ui.add_space(10.0);
+        kit::section(ui, "Coleções", p);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
             for (folder, n, cover) in self.folders() {
-                let name = if folder.is_empty() { "(vault root)".to_string() } else { folder.rsplit('/').next().unwrap_or(&folder).to_string() };
+                let name = if folder.is_empty() { "Raiz do cofre".to_string() } else { folder.rsplit('/').next().unwrap_or(&folder).to_string() };
                 let sel = self.folder.as_deref() == Some(folder.as_str());
-                let resp = ui.horizontal(|ui| {
-                    let (rect, r) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), Sense::click());
-                    match self.thumb(cover) {
-                        Some(t) => {
-                            egui::Image::new((t, egui::vec2(36.0, 36.0))).corner_radius(4).paint_at(ui, rect);
-                        }
-                        None => {
-                            ui.painter().rect_filled(rect, 4.0, p.bg_hover);
-                        }
+                let w = ui.available_width();
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 44.0), Sense::click());
+                ui.painter().rect_filled(rect, 8.0, if sel { p.bg_active } else if r.hovered() { p.bg_hover } else { Color32::TRANSPARENT });
+                let thumb = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(32.0, 32.0));
+                match self.thumb(cover) {
+                    Some(t) => {
+                        let e = &self.entries[cover];
+                        let (iw, ih) = (e.width.max(1) as f32, e.height.max(1) as f32);
+                        let k = (iw / ih).max(1e-3);
+                        let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
+                        ui.painter().add(egui::epaint::RectShape::filled(thumb, 6.0, Color32::WHITE).with_texture(t, uv));
                     }
-                    let l = ui.add(egui::Button::new(RichText::new(format!("{name}  ")).color(p.text)).frame(false).selected(sel));
-                    ui.label(RichText::new(n.to_string()).small().color(p.muted));
-                    r.clicked() || l.clicked()
-                });
-                if resp.inner {
+                    None => {
+                        ui.painter().rect_filled(thumb, 6.0, p.bg_active);
+                    }
+                }
+                ui.painter().text(egui::pos2(thumb.right() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, if sel { kit::medium(13.0) } else { egui::FontId::proportional(13.0) }, p.text);
+                ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), egui::FontId::proportional(11.5), p.faint);
+                if r.on_hover_text(&folder).clicked() {
                     self.folder = Some(folder.clone());
                     self.similar_to = None;
                     self.viewer = None;
                 }
-                resp.response.on_hover_text(&folder);
             }
         });
     }
@@ -335,28 +344,35 @@ impl ImagesState {
         }
         let mut action = None;
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
             #[cfg(feature = "clip")]
-            let hint = if self.vision.ready() { "Describe a picture…" } else { "Search pictures by name…" };
+            let hint = if self.vision.ready() { "Descreva uma imagem" } else { "Buscar imagens pelo nome" };
             #[cfg(not(feature = "clip"))]
-            let hint = "Search pictures by name…";
-            let r = ui.add(egui::TextEdit::singleline(&mut self.query).hint_text(hint).desired_width(260.0));
-            if r.changed() {
+            let hint = "Buscar imagens pelo nome";
+            ui.allocate_ui(egui::vec2(320.0, 30.0), |ui| {
+                let r = kit::search_field(ui, &mut self.query, hint, p);
+                if r.changed() {
+                    self.similar_to = None;
+                }
+            });
+            if self.similar_to.is_some() && kit::button(ui, Some(icons::X), "Semelhantes", p).on_hover_text("Voltar a todas as imagens").clicked() {
                 self.similar_to = None;
             }
-            if self.similar_to.is_some() && ui.button("✖ Similar").on_hover_text("Back to all pictures").clicked() {
-                self.similar_to = None;
-            }
-            ui.add(egui::Slider::new(&mut self.cell, 90.0..=320.0).show_value(false)).on_hover_text("Size");
+            ui.add_space(4.0);
+            ui.label(kit::icon(icons::LAYOUT_GRID, 13.0).color(p.faint));
+            ui.spacing_mut().slider_width = 90.0;
+            ui.add(egui::Slider::new(&mut self.cell, 90.0..=320.0).show_value(false)).on_hover_text("Tamanho das miniaturas");
             if !self.selection.is_empty() {
-                ui.label(RichText::new(format!("{} selected", self.selection.len())).color(p.muted));
-                if ui.button("Insert in note").clicked() {
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("{} {}", self.selection.len(), if self.selection.len() == 1 { "selecionada" } else { "selecionadas" })).color(p.muted));
+                if kit::primary(ui, "Inserir na nota", p).clicked() {
                     let keys = self.selected_keys();
                     action = Some(ImageAction::Insert(keys));
                 }
-                if ui.button("New note").clicked() {
+                if kit::button(ui, Some(icons::FILE_PLUS), "Nova nota", p).clicked() {
                     action = Some(ImageAction::NewNote(self.selected_keys()));
                 }
-                if ui.button("Clear").clicked() {
+                if kit::quiet(ui, None, "Limpar", p).clicked() {
                     self.selection.clear();
                 }
             }
@@ -366,18 +382,22 @@ impl ImagesState {
             #[cfg(feature = "clip")]
             self.vision_bar(ui, p);
         });
-        ui.add_space(6.0);
+        ui.add_space(14.0);
         self.refresh_shown();
         if self.shown.is_empty() {
             ui.vertical_centered(|ui| {
-                ui.add_space(80.0);
-                ui.label(RichText::new(if self.scanning.is_some() { "Looking for pictures…" } else { "No pictures." }).size(18.0).color(p.muted));
+                ui.add_space(90.0);
+                ui.label(kit::icon(icons::IMAGES, 30.0).color(p.faint));
+                ui.add_space(12.0);
+                ui.label(RichText::new(if self.scanning.is_some() { "Procurando imagens…" } else { "Nenhuma imagem" }).font(kit::medium(15.0)).color(p.muted));
             });
             return action;
         }
-        let cell = self.cell;
-        let gap = 6.0;
-        let cols = ((ui.available_width() + gap) / (cell + gap)).floor().max(1.0) as usize;
+        let gap = 10.0;
+        // as many columns as the chosen size allows, stretched to fill the width
+        let avail_w = ui.available_width() - 4.0;
+        let cols = ((avail_w + gap) / (self.cell + gap)).floor().max(1.0) as usize;
+        let cell = ((avail_w - gap * (cols as f32 - 1.0)) / cols as f32).floor();
         let rows = self.shown.len().div_ceil(cols);
         let shown = self.shown.clone();
         let mut open: Option<usize> = None;
@@ -388,23 +408,31 @@ impl ImagesState {
                     for c in 0..cols {
                         let Some(&i) = shown.get(r * cols + c) else { break };
                         let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click());
-                        ui.painter().rect_filled(rect, 6.0, p.bg_secondary);
+                        ui.painter().rect_filled(rect, 10.0, p.bg_secondary);
                         if let Some(t) = self.thumb(i) {
+                            // fill the square, cropping the long side
                             let e = &self.entries[i];
-                            let (w, h) = (e.width.max(1) as f32, e.height.max(1) as f32);
-                            let s = (cell / w).min(cell / h);
-                            let size = egui::vec2(w * s, h * s);
-                            let r2 = egui::Rect::from_center_size(rect.center(), size);
-                            egui::Image::new((t, size)).corner_radius(4).paint_at(ui, r2);
+                            let k = (e.width.max(1) as f32 / e.height.max(1) as f32).max(1e-3);
+                            let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
+                            ui.painter().add(egui::epaint::RectShape::filled(rect, 10.0, Color32::WHITE).with_texture(t, uv));
                         }
                         let sel = self.selection.contains(&i);
-                        if sel {
-                            ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(3.0_f32, p.accent), egui::StrokeKind::Inside);
-                        } else if resp.hovered() {
-                            ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                        if resp.hovered() || sel {
+                            // a soft shade at the foot with the name
+                            let foot = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 30.0), rect.max);
+                            ui.painter().rect_filled(foot, egui::CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, Color32::from_black_alpha(110));
+                            let mut job = egui::text::LayoutJob::single_section(self.entries[i].name.clone(), egui::TextFormat { font_id: egui::FontId::proportional(11.5), color: Color32::WHITE, ..Default::default() });
+                            job.wrap = egui::text::TextWrapping::truncate_at_width(cell - 20.0);
+                            let g = ui.fonts(|f| f.layout_job(job));
+                            ui.painter().galley(egui::pos2(foot.left() + 10.0, foot.center().y - g.size().y / 2.0), g, Color32::WHITE);
                         }
-                        let name = self.entries[i].name.clone();
-                        let resp = resp.on_hover_text(name);
+                        if sel {
+                            ui.painter().rect_stroke(rect, 10.0, egui::Stroke::new(3.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                            let c = egui::pos2(rect.right() - 16.0, rect.top() + 16.0);
+                            ui.painter().circle_filled(c, 10.0, p.accent_strong);
+                            ui.painter().text(c, egui::Align2::CENTER_CENTER, icons::CHECK, kit::icon_font(12.0), p.on_accent);
+                        }
+                        let resp = resp;
                         if resp.clicked() {
                             if ui.input(|inp| inp.modifiers.command || inp.modifiers.shift) {
                                 if !self.selection.remove(&i) {
@@ -415,22 +443,22 @@ impl ImagesState {
                             }
                         }
                         resp.context_menu(|ui| {
-                            if ui.button("Find similar pictures").clicked() {
+                            if ui.button("Imagens semelhantes").clicked() {
                                 self.similar_to = Some(i);
                                 self.query.clear();
                                 ui.close_menu();
                             }
-                            if ui.button("Insert in note").clicked() {
+                            if ui.button("Inserir na nota").clicked() {
                                 action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
                                 ui.close_menu();
                             }
-                            if ui.button(if sel { "Unselect" } else { "Select" }).clicked() {
+                            if ui.button(if sel { "Desmarcar" } else { "Selecionar" }).clicked() {
                                 if !self.selection.remove(&i) {
                                     self.selection.insert(i);
                                 }
                                 ui.close_menu();
                             }
-                            if ui.button("Open in default app").clicked() {
+                            if ui.button("Abrir no app padrão").clicked() {
                                 let _ = open::that(&self.entries[i].abs);
                                 ui.close_menu();
                             }
@@ -459,32 +487,37 @@ impl ImagesState {
         let mut close = false;
         let mut step: i64 = 0;
         ui.horizontal(|ui| {
-            if ui.button("← Back").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if kit::icon_button(ui, icons::ARROW_LEFT, "Voltar (Esc)", false, p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 close = true;
             }
-            ui.label(RichText::new(&e.name).strong());
-            ui.label(RichText::new(format!("{}×{}", e.width, e.height)).small().color(p.muted));
+            ui.add_space(4.0);
+            ui.label(RichText::new(&e.name).font(kit::medium(14.0)).color(p.text));
+            ui.label(RichText::new(format!("{} × {}", e.width, e.height)).size(12.0).color(p.faint));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if kit::icon_button(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", false, p).clicked() {
+                    let _ = open::that(&e.abs);
+                }
+                if kit::icon_button(ui, icons::FILE_PLUS, "Nova nota com esta imagem", false, p).clicked() {
+                    action = Some(ImageAction::NewNote(vec![e.key.clone()]));
+                }
+                ui.add_space(6.0);
+                if kit::primary(ui, "Inserir na nota", p).clicked() {
+                    action = Some(ImageAction::Insert(vec![e.key.clone()]));
+                }
+                ui.add_space(6.0);
+                if kit::icon_button(ui, icons::SCAN_SEARCH, "Tamanho real (1)", false, p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Num1)) {
+                    v.fit = false;
+                    v.zoom = 1.0;
+                    v.offset = egui::Vec2::ZERO;
+                }
+                if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar (0)", false, p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Num0)) {
+                    v.fit = true;
+                    v.offset = egui::Vec2::ZERO;
+                }
+            });
         });
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Fit").clicked() || ui.input(|i| i.key_pressed(egui::Key::Num0)) {
-                v.fit = true;
-                v.offset = egui::Vec2::ZERO;
-            }
-            if ui.button("1:1").clicked() || ui.input(|i| i.key_pressed(egui::Key::Num1)) {
-                v.fit = false;
-                v.zoom = 1.0;
-                v.offset = egui::Vec2::ZERO;
-            }
-            if ui.button("Insert in note").clicked() {
-                action = Some(ImageAction::Insert(vec![e.key.clone()]));
-            }
-            if ui.button("New note with it").clicked() {
-                action = Some(ImageAction::NewNote(vec![e.key.clone()]));
-            }
-            if ui.button("Open in default app").clicked() {
-                let _ = open::that(&e.abs);
-            }
-        });
+        ui.add_space(8.0);
         if ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             step = 1;
         }
@@ -505,7 +538,7 @@ impl ImagesState {
         let stage = egui::Rect::from_min_max(avail.min, egui::pos2(avail.max.x - side_w - 10.0, avail.max.y));
         let side = egui::Rect::from_min_max(egui::pos2(stage.max.x + 10.0, avail.min.y), avail.max);
         let resp = ui.allocate_rect(stage, Sense::click_and_drag());
-        ui.painter().rect_filled(stage, 6.0, if p.dark { Color32::from_gray(18) } else { Color32::from_gray(235) });
+        ui.painter().rect_filled(stage, 10.0, if p.dark { Color32::from_gray(18) } else { p.bg_secondary });
         if let Some(t) = &v.tex {
             let size = t.size_vec2();
             let fit = (stage.width() / size.x).min(stage.height() / size.y).min(1.0);
@@ -550,23 +583,34 @@ impl ImagesState {
         let users = vault.index.read().map(|ix| ix.inlinks(&e.key)).unwrap_or_default();
         let mut go_to: Option<usize> = None;
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(side), |ui| {
-            ui.label(RichText::new(format!("Notes using it ({})", users.len())).strong());
+            ui.spacing_mut().item_spacing.y = 2.0;
+            kit::section(ui, &format!("Notas que usam · {}", users.len()), p);
+            if users.is_empty() {
+                ui.label(RichText::new("Nenhuma ainda.").size(12.0).color(p.faint));
+            }
             for n in &users {
-                if ui.add(egui::Button::new(vault::basename(n)).frame(false)).clicked() {
+                if kit::Row::new(vault::basename(n)).icon(icons::FILE_TEXT).show(ui, p).clicked() {
                     action = Some(ImageAction::OpenNote(n.clone()));
                 }
             }
-            ui.add_space(10.0);
-            ui.label(RichText::new("Similar").strong());
+            ui.add_space(14.0);
+            kit::section(ui, "Semelhantes", p);
             if similar.is_empty() {
-                ui.label(RichText::new("Pictures are compared once they have been analysed for description search.").small().color(p.muted));
+                ui.label(RichText::new("Aparecem depois que as imagens forem analisadas para a busca por descrição.").size(12.0).color(p.faint));
             }
             ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                 for &i in &similar {
                     let (rect, r) = ui.allocate_exact_size(egui::vec2(72.0, 72.0), Sense::click());
-                    ui.painter().rect_filled(rect, 4.0, p.bg_secondary);
+                    ui.painter().rect_filled(rect, 8.0, p.bg_secondary);
                     if let Some(t) = self.thumb(i) {
-                        egui::Image::new((t, egui::vec2(72.0, 72.0))).maintain_aspect_ratio(true).corner_radius(4).paint_at(ui, rect);
+                        let e = &self.entries[i];
+                        let k = (e.width.max(1) as f32 / e.height.max(1) as f32).max(1e-3);
+                        let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
+                        ui.painter().add(egui::epaint::RectShape::filled(rect, 8.0, Color32::WHITE).with_texture(t, uv));
+                    }
+                    if r.hovered() {
+                        ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                     }
                     if r.clicked() {
                         go_to = Some(i);

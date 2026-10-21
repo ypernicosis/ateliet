@@ -201,6 +201,7 @@ pub fn apply(ctx: &egui::Context, a: &Appearance) -> Palette {
     s.combo_height = 280.0;
     s.text_edit_width = 240.0;
     s.slider_width = 120.0;
+    s.slider_rail_height = 4.0;
     s.scroll = egui::style::ScrollStyle::floating();
     s.scroll.bar_width = 8.0;
     s.scroll.floating_width = 3.0;

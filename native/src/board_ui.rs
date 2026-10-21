@@ -6,6 +6,8 @@ use ateliet_core::board::brush::{BrushKind, BrushSettings, Point, Stroke};
 use ateliet_core::board::compose::{self, Options, Overlay, Pictures};
 use ateliet_core::board::doc::{self, BoardDoc, TileKey};
 use ateliet_core::board::tile::{DabMode, Tile, TILE};
+use crate::icons;
+use crate::kit;
 use eframe::egui::{self, Color32, RichText, Sense};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -329,7 +331,7 @@ impl BoardEditor {
         let mut toast = None;
         let stage = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(stage, Sense::click_and_drag());
-        ui.painter().rect_filled(stage, 0.0, if p.dark { Color32::from_gray(28) } else { Color32::from_gray(205) });
+        ui.painter().rect_filled(stage, 0.0, if p.dark { Color32::from_gray(22) } else { Color32::from_rgb(0xec, 0xec, 0xe9) });
         if self.fit && !self.doc.infinite() {
             let (w, h) = (self.doc.width() as f32, self.doc.height() as f32);
             self.zoom = ((stage.width() - 60.0) / w).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
@@ -401,7 +403,7 @@ impl BoardEditor {
         let (cw, ch) = (self.doc.width() as f32, self.doc.height() as f32);
         if !self.doc.infinite() {
             let page = egui::Rect::from_min_size(origin, egui::vec2(cw, ch) * self.zoom);
-            clip.rect_filled(page.translate(egui::vec2(3.0, 4.0)), 0.0, Color32::from_black_alpha(40));
+            clip.add(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) }.as_shape(page, 2.0));
         }
         let view0 = to_canvas(stage.min, self.zoom, origin);
         let view1 = to_canvas(stage.max, self.zoom, origin);
@@ -460,30 +462,55 @@ impl BoardEditor {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         ui.horizontal_wrapped(|ui| {
-            for (t, icon, tip) in [
-                (Tool::Brush(BrushKind::Pencil), "✏", "Pencil (B)"),
-                (Tool::Brush(BrushKind::Pen), "✒", "Pen (P)"),
-                (Tool::Brush(BrushKind::Brush), "🖌", "Brush"),
-                (Tool::Brush(BrushKind::Marker), "▮", "Marker"),
-                (Tool::Brush(BrushKind::Eraser), "⌫", "Eraser (E)"),
-                (Tool::Hand, "✋", "Hand (H, or hold Space)"),
-                (Tool::Picker, "💧", "Pick a colour (I)"),
-            ] {
-                if ui.add(egui::Button::new(RichText::new(icon).size(16.0)).selected(self.tool == t).min_size(egui::vec2(30.0, 28.0))).on_hover_text(tip).clicked() {
-                    self.tool = t;
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            // tools: a segmented group
+            egui::Frame::new().fill(p.bg_secondary).corner_radius(9.0).inner_margin(3.0).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (t, glyph, tip) in [
+                    (Tool::Brush(BrushKind::Pencil), icons::PENCIL, "Lápis (B)"),
+                    (Tool::Brush(BrushKind::Pen), icons::PEN_TOOL, "Caneta (P)"),
+                    (Tool::Brush(BrushKind::Brush), icons::PAINTBRUSH, "Pincel"),
+                    (Tool::Brush(BrushKind::Marker), icons::HIGHLIGHTER, "Marcador"),
+                    (Tool::Brush(BrushKind::Eraser), icons::ERASER, "Borracha (E)"),
+                    (Tool::Hand, icons::HAND, "Mão (H, ou segure Espaço)"),
+                    (Tool::Picker, icons::PIPETTE, "Conta-gotas (I)"),
+                ] {
+                    let sel = self.tool == t;
+                    let (rect, r) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), Sense::click());
+                    if sel {
+                        ui.painter().rect(rect, 7.0, p.bg, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                    } else if r.hovered() {
+                        ui.painter().rect_filled(rect, 7.0, p.bg_hover);
+                    }
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(15.0), if sel { p.text } else { p.muted });
+                    if r.on_hover_text(tip).clicked() {
+                        self.tool = t;
+                    }
                 }
+            });
+            ui.add_space(6.0);
+            // colour: the current one as a disc that opens a picker, then the palette
+            let c = Color32::from_rgb(self.color[0], self.color[1], self.color[2]);
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+            ui.painter().circle_filled(rect.center(), 11.0, c);
+            ui.painter().circle_stroke(rect.center(), 13.0, egui::Stroke::new(1.0_f32, p.border_strong));
+            let popup = ui.make_persistent_id("board-colour");
+            if r.on_hover_text("Cor").clicked() {
+                ui.memory_mut(|m| m.toggle_popup(popup));
             }
-            ui.separator();
-            let mut c = Color32::from_rgb(self.color[0], self.color[1], self.color[2]);
-            if ui.color_edit_button_srgba(&mut c).changed() {
-                self.color = [c.r(), c.g(), c.b()];
-            }
-            for sw in self.doc.palette().into_iter().take(12) {
+            egui::popup_below_widget(ui, popup, &ui.interact(rect, popup.with("anchor"), Sense::hover()), egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                let mut cc = c;
+                if egui::color_picker::color_picker_color32(ui, &mut cc, egui::color_picker::Alpha::Opaque) {
+                    self.color = [cc.r(), cc.g(), cc.b()];
+                }
+            });
+            for sw in self.doc.palette().into_iter().take(10) {
                 let col = ateliet_core::board::tile::parse_color(&sw);
-                let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), Sense::click());
-                ui.painter().rect_filled(rect, 3.0, Color32::from_rgb(col[0], col[1], col[2]));
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(18.0, 28.0), Sense::click());
+                let cc = Color32::from_rgb(col[0], col[1], col[2]);
+                ui.painter().circle_filled(rect.center(), if r.hovered() { 7.5 } else { 6.5 }, cc);
                 if col == self.color {
-                    ui.painter().rect_stroke(rect.expand(2.0), 3.0, egui::Stroke::new(1.5_f32, p.accent), egui::StrokeKind::Outside);
+                    ui.painter().circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5_f32, p.text));
                 }
                 if r.on_hover_text(&sw).clicked() {
                     self.color = col;
@@ -492,63 +519,88 @@ impl BoardEditor {
                     }
                 }
             }
-            ui.end_row();
+            ui.add_space(8.0);
             if let Some(k) = self.brush() {
                 let s = self.settings.get_mut(&k).unwrap();
-                ui.add(egui::Slider::new(&mut s.size, 1.0..=300.0).logarithmic(true).text("size").max_decimals(0));
-                ui.add(egui::Slider::new(&mut s.opacity, 0.05..=1.0).text("opacity").max_decimals(2));
-                ui.add(egui::Slider::new(&mut s.smoothing, 0.0..=0.95).text("steady").max_decimals(2));
-                ui.end_row();
-            }
-            ui.separator();
-            if ui.add_enabled(!self.undo.is_empty(), egui::Button::new("↶")).on_hover_text("Undo (Ctrl+Z)").clicked() {
-                self.undo();
-            }
-            if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("↷")).on_hover_text("Redo (Ctrl+Shift+Z)").clicked() {
-                self.redo();
-            }
-            let mut onion = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
-            if ui.toggle_value(&mut onion, "🧅").on_hover_text("Onion skin").changed() {
-                self.doc.board["onion"]["enabled"] = json!(onion);
-                self.invalidate();
-                self.dirty = true;
-            }
-            if ui.button("⛶").on_hover_text("Fit (0)").clicked() {
-                self.fit = true;
-            }
-            ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).small().color(p.muted));
-            if ui.button("Export PNG").on_hover_text("This frame as a PNG next to the storyboard").clicked() {
-                let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
-                let png = ateliet_core::board::tile::encode_png(&px, w, h);
-                let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let out = self.abs.with_file_name(format!("{stem} - {}.png", self.frame + 1));
-                if let Err(e) = std::fs::write(&out, png) {
-                    self.error = Some(e.to_string());
+                ui.label(kit::icon(icons::CIRCLE, 12.0).color(p.faint)).on_hover_text("Tamanho");
+                ui.spacing_mut().slider_width = 90.0;
+                ui.add(egui::Slider::new(&mut s.size, 1.0..=300.0).logarithmic(true).show_value(false));
+                ui.label(RichText::new(format!("{:.0}", s.size)).size(12.0).color(p.muted));
+                let more = ui.make_persistent_id("brush-more");
+                let r = kit::icon_button(ui, icons::SLIDERS_HORIZONTAL, "Opacidade e estabilização", false, p);
+                if r.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(more));
                 }
+                egui::popup_below_widget(ui, more, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    ui.set_min_width(220.0);
+                    ui.spacing_mut().slider_width = 150.0;
+                    ui.label(RichText::new("Opacidade").size(12.0).color(p.muted));
+                    ui.add(egui::Slider::new(&mut s.opacity, 0.05..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Estabilização").size(12.0).color(p.muted));
+                    ui.add(egui::Slider::new(&mut s.smoothing, 0.0..=0.95).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+                    ui.add_space(6.0);
+                    ui.label(RichText::new("Dureza").size(12.0).color(p.muted));
+                    ui.add(egui::Slider::new(&mut s.hardness, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+                });
             }
-            if self.dirty {
-                ui.label(RichText::new("●").color(p.muted)).on_hover_text("Unsaved changes (saved automatically)");
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                if kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
+                    let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
+                    let png = ateliet_core::board::tile::encode_png(&px, w, h);
+                    let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    let out = self.abs.with_file_name(format!("{stem} - {}.png", self.frame + 1));
+                    match std::fs::write(&out, png) {
+                        Ok(()) => self.error = Some(format!("Exportado: {}", out.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
+                        Err(e) => self.error = Some(e.to_string()),
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(12.0).color(p.faint));
+                if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {
+                    self.fit = true;
+                }
+                let onion = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
+                if kit::icon_button(ui, icons::LAYERS_2, "Papel de cebola", onion, p).clicked() {
+                    self.doc.board["onion"]["enabled"] = json!(!onion);
+                    self.invalidate();
+                    self.dirty = true;
+                }
+                ui.add_space(6.0);
+                ui.add_enabled_ui(!self.redo.is_empty(), |ui| {
+                    if kit::icon_button(ui, icons::REDO_2, "Refazer (Ctrl+Shift+Z)", false, p).clicked() {
+                        self.redo();
+                    }
+                });
+                ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
+                    if kit::icon_button(ui, icons::UNDO_2, "Desfazer (Ctrl+Z)", false, p).clicked() {
+                        self.undo();
+                    }
+                });
+            });
         });
     }
 
     fn frames_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let n = self.doc.frame_count();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} {}", n, if self.doc.kind() == "animatic" { "frames" } else { "pages" })).strong());
+            ui.label(RichText::new(if self.doc.kind() == "animatic" { "Quadros" } else { "Páginas" }).font(kit::medium(13.0)).color(p.text));
+            ui.label(RichText::new(n.to_string()).size(12.0).color(p.faint));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("🗑").on_hover_text("Delete frame").clicked() && n > 1 {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                if kit::icon_button_sized(ui, icons::TRASH_2, "Excluir quadro", false, p, 24.0, 13.0).clicked() && n > 1 {
                     let f = self.frame;
                     self.structure(|d| d.delete_frame(f));
                 }
-                if ui.small_button("⧉").on_hover_text("Duplicate frame").clicked() {
+                if kit::icon_button_sized(ui, icons::COPY, "Duplicar quadro", false, p, 24.0, 13.0).clicked() {
                     let f = self.frame;
                     let mut new = 0;
                     self.structure(|d| new = d.duplicate_frame(f));
                     self.frame = new;
                     self.invalidate();
                 }
-                if ui.small_button("+").on_hover_text("New frame after this one").clicked() {
+                if kit::icon_button_sized(ui, icons::PLUS, "Novo quadro depois deste", false, p, 24.0, 14.0).clicked() {
                     let f = self.frame;
                     let mut new = 0;
                     self.structure(|d| new = d.add_frame(f + 1));
@@ -557,15 +609,16 @@ impl BoardEditor {
                 }
             });
         });
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             let playing = self.playing.is_some();
-            if ui.button(if playing { "⏹ Stop" } else { "▶ Play" }).clicked() {
+            if kit::button(ui, Some(if playing { icons::SQUARE } else { icons::PLAY }), if playing { "Parar" } else { "Reproduzir" }, p).clicked() {
                 self.playing = if playing { None } else { Some((Instant::now(), self.frame)) };
                 self.invalidate();
             }
-            ui.label(RichText::new(format!("{} fps", self.doc.fps())).small().color(p.muted));
+            ui.label(RichText::new(format!("{} qps", self.doc.fps())).size(12.0).color(p.faint));
         });
-        ui.separator();
+        ui.add_space(10.0);
         let mut go: Option<usize> = None;
         let mut swap: Option<(usize, usize)> = None;
         let mut made_thumb = false;
@@ -591,27 +644,30 @@ impl BoardEditor {
                 let w = ui.available_width() - 8.0;
                 let aspect = self.doc.height() as f32 / self.doc.width().max(1) as f32;
                 let h = (w * aspect).min(180.0);
-                let (rect, r) = ui.allocate_exact_size(egui::vec2(w, h + 18.0), Sense::click());
-                let img_rect = egui::Rect::from_min_size(rect.min, egui::vec2(w, h));
-                ui.painter().rect_filled(img_rect, 3.0, p.bg_hover);
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(w, h + 20.0), Sense::click());
+                let img_rect = egui::Rect::from_min_size(rect.min + egui::vec2(3.0, 3.0), egui::vec2(w - 6.0, h - 6.0));
+                ui.painter().rect_filled(img_rect, 6.0, p.bg_hover);
                 if let Some((_, tex)) = self.thumbs.get(&id) {
-                    ui.painter().image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().add(egui::epaint::RectShape::filled(img_rect, 6.0, Color32::WHITE).with_texture(tex.id(), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))));
                 }
+                ui.painter().rect_stroke(img_rect, 6.0, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
                 if sel {
-                    ui.painter().rect_stroke(img_rect, 3.0, egui::Stroke::new(2.5_f32, p.accent), egui::StrokeKind::Outside);
+                    ui.painter().rect_stroke(img_rect.expand(2.5), 8.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                } else if r.hovered() {
+                    ui.painter().rect_stroke(img_rect.expand(2.5), 8.0, egui::Stroke::new(1.0_f32, p.border_strong), egui::StrokeKind::Inside);
                 }
                 let f = self.doc.frame(i);
                 let name = f["name"].as_str().filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{}", i + 1));
-                ui.painter().text(egui::pos2(rect.min.x, img_rect.max.y + 2.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(11.0), p.muted);
+                ui.painter().text(egui::pos2(img_rect.min.x + 1.0, img_rect.max.y + 6.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(11.5), if sel { p.text } else { p.faint });
                 if r.clicked() {
                     go = Some(i);
                 }
                 r.context_menu(|ui| {
-                    if ui.button("Move up").clicked() && i > 0 {
+                    if ui.button("Mover para cima").clicked() && i > 0 {
                         swap = Some((i, i - 1));
                         ui.close_menu();
                     }
-                    if ui.button("Move down").clicked() && i + 1 < n {
+                    if ui.button("Mover para baixo").clicked() && i + 1 < n {
                         swap = Some((i, i + 1));
                         ui.close_menu();
                     }
@@ -634,60 +690,74 @@ impl BoardEditor {
     fn layers_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let f = self.frame;
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Layers").strong());
+            ui.label(RichText::new("Camadas").font(kit::medium(13.0)).color(p.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("+").on_hover_text("New layer").clicked() {
+                if kit::icon_button_sized(ui, icons::PLUS, "Nova camada", false, p, 24.0, 14.0).clicked() {
                     let n = self.doc.frame_layers(f).len() + 1;
                     self.structure(|d| {
-                        d.add_layer(f, &format!("Layer {n}"));
+                        d.add_layer(f, &format!("Camada {n}"));
                     });
                 }
             });
         });
-        ui.separator();
+        ui.add_space(6.0);
         let ids = self.doc.frame_layers(f);
         let active = self.doc.active_layer(f);
         let mut changed_props = false;
         let mut set_active = None;
         let mut op: Option<(String, &str)> = None;
+        ui.spacing_mut().item_spacing.y = 2.0;
         for id in ids.iter().rev() {
             let sel = *id == active;
             let l = self.doc.layer(id).clone();
-            egui::Frame::new().fill(if sel { p.accent.gamma_multiply(0.15) } else { Color32::TRANSPARENT }).corner_radius(4).inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let mut vis = l["visible"].as_bool().unwrap_or(true);
-                    if ui.add(egui::Button::new(if vis { "👁" } else { "○" }).frame(false)).on_hover_text("Show / hide").clicked() {
-                        vis = !vis;
-                        self.doc.layer_mut(id)["visible"] = json!(vis);
-                        changed_props = true;
-                    }
-                    let kind = l["kind"].as_str().unwrap_or("raster");
-                    let icon = match kind {
-                        "image" => "🖼 ",
-                        "trace" => "◩ ",
-                        _ => "",
-                    };
-                    let name = format!("{icon}{}", l["name"].as_str().unwrap_or("Layer"));
-                    if ui.add(egui::Label::new(RichText::new(name).color(p.text)).sense(Sense::click()).truncate()).clicked() {
-                        set_active = Some(id.clone());
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if l["locked"].as_bool() == Some(true) {
-                            ui.label("🔒");
-                        }
-                        if l["clip"].as_bool() == Some(true) {
-                            ui.label("↴");
+            let w = ui.available_width();
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(w, 32.0), Sense::click());
+            ui.painter().rect_filled(rect, 7.0, if sel { p.bg_active } else if r.hovered() { p.bg_hover } else { Color32::TRANSPARENT });
+            let vis = l["visible"].as_bool().unwrap_or(true);
+            let eye = egui::Rect::from_center_size(egui::pos2(rect.left() + 16.0, rect.center().y), egui::vec2(24.0, 24.0));
+            let er = ui.interact(eye, ui.id().with(("eye", id)), Sense::click());
+            ui.painter().text(eye.center(), egui::Align2::CENTER_CENTER, if vis { icons::EYE } else { icons::EYE_OFF }, kit::icon_font(13.0), if er.hovered() { p.text } else if vis { p.muted } else { p.faint });
+            if er.on_hover_text("Mostrar / esconder").clicked() {
+                self.doc.layer_mut(id)["visible"] = json!(!vis);
+                changed_props = true;
+            }
+            let kind = l["kind"].as_str().unwrap_or("raster");
+            let name = l["name"].as_str().unwrap_or("Camada").to_string();
+            let glyph = match kind {
+                "image" => Some(icons::IMAGE),
+                "trace" => Some(icons::SCAN_SEARCH),
+                _ => None,
+            };
+            let mut x = rect.left() + 34.0;
+            if let Some(g) = glyph {
+                ui.painter().text(egui::pos2(x + 6.0, rect.center().y), egui::Align2::CENTER_CENTER, g, kit::icon_font(12.0), p.faint);
+                x += 18.0;
+            }
+            ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, &name, if sel { kit::medium(13.0) } else { egui::FontId::proportional(13.0) }, if vis { p.text } else { p.faint });
+            let mut rx = rect.right() - 12.0;
+            for (on, g) in [(l["locked"].as_bool() == Some(true), icons::LOCK), (l["clip"].as_bool() == Some(true), icons::CORNER_DOWN_RIGHT)] {
+                if on {
+                    ui.painter().text(egui::pos2(rx, rect.center().y), egui::Align2::RIGHT_CENTER, g, kit::icon_font(12.0), p.faint);
+                    rx -= 18.0;
+                }
+            }
+            if r.clicked() {
+                set_active = Some(id.clone());
+            }
+            if sel {
+                egui::Frame::new().inner_margin(egui::Margin { left: 10, right: 6, top: 6, bottom: 10 }).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    let mut op_v = l["opacity"].as_f64().unwrap_or(1.0) as f32;
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Opacidade").size(12.0).color(p.muted));
+                        ui.spacing_mut().slider_width = (ui.available_width() - 64.0).max(50.0);
+                        if ui.add(egui::Slider::new(&mut op_v, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).changed() {
+                            self.doc.layer_mut(id)["opacity"] = json!(op_v);
+                            changed_props = true;
                         }
                     });
-                });
-                if sel {
-                    let mut op_v = l["opacity"].as_f64().unwrap_or(1.0) as f32;
-                    if ui.add(egui::Slider::new(&mut op_v, 0.0..=1.0).text("opacity").max_decimals(2)).changed() {
-                        self.doc.layer_mut(id)["opacity"] = json!(op_v);
-                        changed_props = true;
-                    }
                     let blend = l["blend"].as_str().unwrap_or("source-over").to_string();
-                    egui::ComboBox::from_id_salt(("blend", id)).selected_text(blend_name(&blend)).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("blend", id)).selected_text(blend_name(&blend)).width(ui.available_width()).show_ui(ui, |ui| {
                         for (b, name) in BLENDS {
                             if ui.selectable_label(blend == *b, *name).clicked() {
                                 self.doc.layer_mut(id)["blend"] = json!(b);
@@ -696,40 +766,34 @@ impl BoardEditor {
                         }
                     });
                     ui.horizontal(|ui| {
-                        let mut clip = l["clip"].as_bool().unwrap_or(false);
-                        if ui.checkbox(&mut clip, "clip").on_hover_text("Draw only where the layer below has pixels").changed() {
-                            self.doc.layer_mut(id)["clip"] = json!(clip);
-                            changed_props = true;
-                        }
-                        let mut lock = l["locked"].as_bool().unwrap_or(false);
-                        if ui.checkbox(&mut lock, "lock").changed() {
-                            self.doc.layer_mut(id)["locked"] = json!(lock);
-                            changed_props = true;
-                        }
-                        let mut al = l["alphaLock"].as_bool().unwrap_or(false);
-                        if ui.checkbox(&mut al, "α").on_hover_text("Keep transparent parts transparent").changed() {
-                            self.doc.layer_mut(id)["alphaLock"] = json!(al);
-                            changed_props = true;
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (key, label, tip) in [("clip", "Recorte", "Desenha só onde a camada de baixo tem pixels"), ("locked", "Travar", "Impede desenhar nesta camada"), ("alphaLock", "Alfa", "Mantém transparente o que é transparente")] {
+                            let on = l[key].as_bool().unwrap_or(false);
+                            if ui.add(egui::Button::new(RichText::new(label).size(12.0).color(if on { p.on_accent } else { p.muted })).fill(if on { p.accent_strong } else { Color32::TRANSPARENT }).corner_radius(12.0)).on_hover_text(tip).clicked() {
+                                self.doc.layer_mut(id)[key] = json!(!on);
+                                changed_props = true;
+                            }
                         }
                     });
                     ui.horizontal(|ui| {
-                        if ui.small_button("▲").on_hover_text("Move up").clicked() {
-                            op = Some((id.clone(), "up"));
-                        }
-                        if ui.small_button("▼").on_hover_text("Move down").clicked() {
-                            op = Some((id.clone(), "down"));
-                        }
-                        if ui.small_button("🗑").on_hover_text("Delete layer").clicked() {
-                            op = Some((id.clone(), "delete"));
-                        }
                         let mut name = l["name"].as_str().unwrap_or_default().to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(110.0)).changed() {
+                        if ui.add(egui::TextEdit::singleline(&mut name).desired_width((ui.available_width() - 90.0).max(60.0)).margin(egui::Margin::symmetric(8, 4))).changed() {
                             self.doc.layer_mut(id)["name"] = json!(name);
                             self.dirty = true;
                         }
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if kit::icon_button_sized(ui, icons::TRASH_2, "Excluir camada", false, p, 26.0, 13.0).clicked() {
+                            op = Some((id.clone(), "delete"));
+                        }
+                        if kit::icon_button_sized(ui, icons::ARROW_DOWN, "Descer", false, p, 26.0, 13.0).clicked() {
+                            op = Some((id.clone(), "down"));
+                        }
+                        if kit::icon_button_sized(ui, icons::ARROW_UP, "Subir", false, p, 26.0, 13.0).clicked() {
+                            op = Some((id.clone(), "up"));
+                        }
                     });
-                }
-            });
+                });
+            }
         }
         if let Some(id) = set_active {
             self.doc.board["frames"][f]["active"] = json!(id);
@@ -822,22 +886,27 @@ impl BoardEditor {
         let full = ui.available_rect_before_wrap();
         let bar = ui.allocate_new_ui(egui::UiBuilder::new().max_rect(full), |ui| {
             ui.set_max_width(full.width());
-            egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 6)).show(ui, |ui| {
-                ui.set_max_width(full.width() - 16.0);
+            egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
+                ui.set_width(full.width() - 24.0);
                 self.toolbar(ui, p)
             });
         });
         let mut toast = None;
         let avail = egui::Rect::from_min_max(egui::pos2(full.min.x, bar.response.rect.max.y), full.max);
-        let left_w = if self.doc.kind() == "canvas" { 0.0 } else { 170.0 };
-        let right_w = 230.0;
+        ui.painter().hline(avail.x_range(), avail.top() - 0.5, egui::Stroke::new(1.0_f32, p.border));
+        let left_w = if self.doc.kind() == "canvas" { 0.0 } else { 176.0 };
+        let right_w = 240.0;
         let left = egui::Rect::from_min_max(avail.min, egui::pos2(avail.min.x + left_w, avail.max.y));
         let right = egui::Rect::from_min_max(egui::pos2(avail.max.x - right_w, avail.min.y), avail.max);
         let center = egui::Rect::from_min_max(egui::pos2(left.max.x, avail.min.y), egui::pos2(right.min.x, avail.max.y));
         if left_w > 0.0 {
-            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(left.shrink(6.0)), |ui| self.frames_ui(ui, p));
+            ui.painter().rect_filled(left, 0.0, p.bg_secondary);
+            ui.painter().vline(left.right() - 0.5, left.y_range(), egui::Stroke::new(1.0_f32, p.border));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(left.shrink2(egui::vec2(12.0, 12.0))), |ui| self.frames_ui(ui, p));
         }
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right.shrink(6.0)), |ui| {
+        ui.painter().rect_filled(right, 0.0, p.bg_secondary);
+        ui.painter().vline(right.left() + 0.5, right.y_range(), egui::Stroke::new(1.0_f32, p.border));
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right.shrink2(egui::vec2(12.0, 12.0))), |ui| {
             egui::ScrollArea::vertical().id_salt("layers").show(ui, |ui| self.layers_ui(ui, p));
         });
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(center), |ui| {

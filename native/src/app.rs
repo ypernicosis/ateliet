@@ -760,28 +760,36 @@ impl App {
             let root = v.root.clone();
             self.images.open(&root, ctx);
         }
-        egui::SidePanel::left("collections").resizable(true).default_width(240.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(8, 8))).show(ctx, |ui| {
+        egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show(ctx, |ui| {
+            let clip = ui.clip_rect();
+            ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             self.images.collections_ui(ui, p);
         });
-        egui::SidePanel::right("image-notes").resizable(true).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO).stroke(egui::Stroke::new(1.0_f32, p.border))).show(ctx, |ui| {
+        egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
+            let clip = ui.clip_rect();
+            ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
             } else {
                 let mut actions = Vec::new();
-                ui.horizontal(|ui| {
-                    ui.add_space(8.0);
-                    let name = self.tabs.get(self.active).map(|t| vault::basename(&t.path).to_string()).unwrap_or_default();
-                    ui.label(egui::RichText::new(name).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Writing mode").on_hover_text("Take the note to writing mode (Ctrl+Shift+I)").clicked() {
-                            self.images_mode = false;
-                        }
-                        if ui.small_button("Switch note").clicked() {
-                            self.palette_ui = Some(commands::Palette::files());
-                        }
+                egui::Frame::new().inner_margin(egui::Margin { left: 16, right: 10, top: 8, bottom: 8 }).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let name = self.tabs.get(self.active).map(|t| t.title()).unwrap_or_default();
+                        ui.label(crate::kit::icon(crate::icons::FILE_TEXT, 13.0).color(p.faint));
+                        ui.label(egui::RichText::new(name).font(crate::kit::medium(13.5)).color(p.text));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            if crate::kit::icon_button(ui, crate::icons::PEN_LINE, "Voltar à escrita (Ctrl+Shift+I)", false, p).clicked() {
+                                self.images_mode = false;
+                            }
+                            if crate::kit::icon_button(ui, crate::icons::SEARCH, "Trocar de nota", false, p).clicked() {
+                                self.palette_ui = Some(commands::Palette::files());
+                            }
+                        });
                     });
                 });
-                ui.separator();
+                let clip = ui.clip_rect();
+                ui.painter().hline(clip.x_range(), ui.cursor().top() - 0.5, egui::Stroke::new(1.0_f32, p.border));
                 self.note_ui(ui, &mut actions, false);
                 for a in actions {
                     self.apply(a);
@@ -789,7 +797,7 @@ impl App {
             }
         });
         let mut act = None;
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::same(10))).show(ctx, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 10 })).show(ctx, |ui| {
             if let Some(v) = &self.vault {
                 act = self.images.center_ui(ui, p, v);
             }
