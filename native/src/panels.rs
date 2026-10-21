@@ -73,6 +73,9 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             if icon_button(ui, "🔖", "Bookmarks", app.left_open && app.left_tab == LeftTab::Bookmarks).clicked() {
                 toggle_left(app, LeftTab::Bookmarks);
             }
+            if icon_button(ui, "🖼", "Image mode (Ctrl+Shift+I)", app.images_mode).clicked() {
+                app.images_mode = !app.images_mode;
+            }
             ui.add_space(8.0);
             if icon_button(ui, "📅", "Open today's daily note", false).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());

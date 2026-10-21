@@ -27,6 +27,7 @@ pub enum Cmd {
     Backlinks,
     Calendar,
     ChangeVault,
+    ImageMode,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -48,6 +49,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Backlinks, "backlink:open", "Backlinks: Show backlinks"),
     (Cmd::Calendar, "calendar:show-calendar-view", "Calendar: Open view"),
     (Cmd::ChangeVault, "app:open-vault", "Open another vault"),
+    (Cmd::ImageMode, "images:toggle-mode", "Images: Toggle image mode"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -62,6 +64,7 @@ fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
         Cmd::InsertTemplate => KeyboardShortcut::new(Modifiers::ALT, Key::E),
         Cmd::NewFromTemplate => KeyboardShortcut::new(Modifiers::ALT, Key::N),
         Cmd::Settings => KeyboardShortcut::new(cmd, Key::Comma),
+        Cmd::ImageMode => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::I),
         _ => return None,
     })
 }
@@ -171,6 +174,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.right_open = true;
             app.right_tab = crate::app::RightTab::Calendar;
         }
+        Cmd::ImageMode => app.images_mode = !app.images_mode,
         Cmd::ChangeVault => {
             app.save_all();
             app.vault = None;

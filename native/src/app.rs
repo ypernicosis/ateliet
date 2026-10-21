@@ -125,6 +125,9 @@ pub struct App {
     pub locale: String,
     pub hotkeys: Vec<(String, KeyboardShortcut)>,
     pub recent: Vec<String>,
+    /// Image mode: the picture library in the centre, the note on the right.
+    pub images_mode: bool,
+    pub images: crate::images_ui::ImagesState,
     themed: bool,
     last_generation: u64,
 }
@@ -164,6 +167,8 @@ impl App {
             locale: system_locale(),
             hotkeys: Vec::new(),
             recent: Vec::new(),
+            images_mode: false,
+            images: Default::default(),
             themed: false,
             last_generation: 0,
         };
@@ -200,6 +205,8 @@ impl App {
         let session = cfg.read("ateliet/native-session.json");
         self.tabs.clear();
         self.caches = Caches::default();
+        self.images = Default::default();
+        self.images_mode = false;
         self.vault = Some(Vault::open(&root, ctx.clone()));
         self.cfg = Some(cfg);
         self.themed = false;
@@ -615,6 +622,7 @@ impl eframe::App for App {
                 }
             }
             self.caches.docs.retain(|p, _| !changed.contains(p));
+            self.images.changed(&changed);
             for p in &changed {
                 self.caches.images.remove(p);
             }
@@ -639,15 +647,19 @@ impl eframe::App for App {
         commands::shortcuts(self, ctx);
 
         panels::ribbon(self, ctx);
-        if self.left_open {
-            panels::left(self, ctx);
+        if self.images_mode {
+            self.image_mode(ctx);
+        } else {
+            if self.left_open {
+                panels::left(self, ctx);
+            }
+            if self.right_open {
+                panels::right(self, ctx);
+            }
+            panels::status_bar(self, ctx);
+            panels::tab_bar(self, ctx);
+            self.central(ctx);
         }
-        if self.right_open {
-            panels::right(self, ctx);
-        }
-        panels::status_bar(self, ctx);
-        panels::tab_bar(self, ctx);
-        self.central(ctx);
 
         commands::show_palette(self, ctx);
         panels::ask_dialog(self, ctx);
@@ -663,6 +675,77 @@ impl eframe::App for App {
 }
 
 impl App {
+    fn image_mode(&mut self, ctx: &egui::Context) {
+        let p = self.palette;
+        if let Some(v) = &self.vault {
+            let root = v.root.clone();
+            self.images.open(&root, ctx);
+        }
+        egui::SidePanel::left("collections").resizable(true).default_width(240.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(8, 8))).show(ctx, |ui| {
+            self.images.collections_ui(ui, p);
+        });
+        egui::SidePanel::right("image-notes").resizable(true).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO).stroke(egui::Stroke::new(1.0_f32, p.border))).show(ctx, |ui| {
+            if self.tabs.is_empty() {
+                panels::empty_state(self, ui);
+            } else {
+                let mut actions = Vec::new();
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    let name = self.tabs.get(self.active).map(|t| vault::basename(&t.path).to_string()).unwrap_or_default();
+                    ui.label(egui::RichText::new(name).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Writing mode").on_hover_text("Take the note to writing mode (Ctrl+Shift+I)").clicked() {
+                            self.images_mode = false;
+                        }
+                        if ui.small_button("Switch note").clicked() {
+                            self.palette_ui = Some(commands::Palette::files());
+                        }
+                    });
+                });
+                ui.separator();
+                self.note_ui(ui, &mut actions, false);
+                for a in actions {
+                    self.apply(a);
+                }
+            }
+        });
+        let mut act = None;
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::same(10))).show(ctx, |ui| {
+            if let Some(v) = &self.vault {
+                act = self.images.center_ui(ui, p, v);
+            }
+        });
+        match act {
+            Some(crate::images_ui::ImageAction::Insert(keys)) => self.insert_pictures(&keys),
+            Some(crate::images_ui::ImageAction::NewNote(keys)) => {
+                let folder = self.images.folder.clone().unwrap_or_default();
+                self.new_note(&folder);
+                self.ask = None;
+                self.insert_pictures(&keys);
+            }
+            Some(crate::images_ui::ImageAction::OpenNote(n)) => self.open(&n, false),
+            None => {}
+        }
+    }
+
+    /// `![[picture]]` lines at the cursor of the open note (a new note when none is open).
+    pub fn insert_pictures(&mut self, keys: &[String]) {
+        if self.tabs.is_empty() {
+            self.new_note("");
+            self.ask = None;
+        }
+        let Some(t) = self.tabs.get_mut(self.active) else { return };
+        let embeds: String = keys.iter().map(|k| format!("![[{}]]\n", k.rsplit('/').next().unwrap_or(k))).collect();
+        let b = editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));
+        let prefix = if b > 0 && !t.text[..b].ends_with('\n') { "\n" } else { "" };
+        t.text.insert_str(b, &format!("{prefix}{embeds}"));
+        t.cursor += prefix.chars().count() + embeds.chars().count();
+        t.last_edit = Some(Instant::now());
+        t.live.close();
+        let msg = format!("{} picture(s) added to {}", keys.len(), vault::basename(&t.path));
+        self.toast(msg);
+    }
+
     fn central(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         let frame = egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO);
@@ -672,24 +755,38 @@ impl App {
                 panels::empty_state(self, ui);
                 return;
             }
+            self.note_ui(ui, &mut actions, true);
+        });
+        for a in actions {
+            self.apply(a);
+        }
+    }
+
+    /// The open note: title and editor / Live Preview / reading view.
+    fn note_ui(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, centered: bool) {
+        let p = self.palette;
+        {
             let size = self.appearance.font_size;
             let readable = self.readable;
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
-            let max_w = if readable { 46.0 * size } else { f32::INFINITY };
-            egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read)).auto_shrink([false, false]).show(ui, |ui| {
+            let max_w = if readable && centered { 46.0 * size } else { f32::INFINITY };
+            let pad = if centered { 32.0 } else { 14.0 };
+            egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
-                let w = avail.min(max_w + 2.0 * 32.0);
+                let w = avail.min(max_w + 2.0 * pad);
                 let side = ((avail - w) / 2.0).max(0.0);
                 ui.horizontal_top(|ui| {
-                    ui.add_space(side + 32.0);
+                    ui.add_space(side + pad);
                     ui.vertical(|ui| {
-                        ui.set_width((w - 64.0).max(200.0));
-                        ui.add_space(28.0);
-                        // inline title
-                        ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
-                        ui.add_space(10.0);
+                        ui.set_width((w - 2.0 * pad).max(200.0));
+                        if centered {
+                            ui.add_space(28.0);
+                            // inline title
+                            ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
+                            ui.add_space(10.0);
+                        }
                         match tab.mode {
                             Mode::Edit if self.live_preview => {
                                 let st = editor::Styles { size, p };
@@ -753,9 +850,6 @@ impl App {
                     });
                 });
             });
-        });
-        for a in actions {
-            self.apply(a);
         }
     }
 }

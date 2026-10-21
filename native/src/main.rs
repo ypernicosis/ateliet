@@ -9,6 +9,7 @@ mod dv;
 mod editor;
 mod fonts;
 mod host;
+mod images_ui;
 mod live;
 mod markdown;
 mod panels;
