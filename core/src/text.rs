@@ -87,3 +87,39 @@ pub fn blank_range(buf: &mut [u8], start: usize, end: usize) {
         }
     }
 }
+
+/// Compare like `localeCompare(…, { numeric: true })`: case and accents
+/// matter only to break ties, runs of digits compare as numbers.
+pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    use unicode_normalization::UnicodeNormalization;
+    let fold = |s: &str| -> Vec<char> { s.nfd().filter(|c| !('\u{300}'..='\u{36f}').contains(c)).flat_map(char::to_lowercase).collect() };
+    let (x, y) = (fold(a), fold(b));
+    let (mut i, mut j) = (0, 0);
+    while i < x.len() && j < y.len() {
+        if x[i].is_ascii_digit() && y[j].is_ascii_digit() {
+            let si = i;
+            while i < x.len() && x[i].is_ascii_digit() {
+                i += 1;
+            }
+            let sj = j;
+            while j < y.len() && y[j].is_ascii_digit() {
+                j += 1;
+            }
+            let n1: String = x[si..i].iter().collect::<String>().trim_start_matches('0').to_string();
+            let n2: String = y[sj..j].iter().collect::<String>().trim_start_matches('0').to_string();
+            let o = n1.len().cmp(&n2.len()).then_with(|| n1.cmp(&n2));
+            if o != Ordering::Equal {
+                return o;
+            }
+            continue;
+        }
+        let o = x[i].cmp(&y[j]);
+        if o != Ordering::Equal {
+            return o;
+        }
+        i += 1;
+        j += 1;
+    }
+    (x.len() - i).cmp(&(y.len() - j)).then_with(|| a.cmp(b))
+}

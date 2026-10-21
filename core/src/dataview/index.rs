@@ -47,6 +47,8 @@ pub struct Page {
     pub mtime: i64,
     pub size: u64,
     pub frontmatter: Obj,
+    /// The frontmatter as parsed from YAML (`Null` when there is none).
+    pub yaml: Json,
     /// Frontmatter and inline fields, under their own names and canonical names.
     pub fields: Obj,
     pub tags: Vec<String>,
@@ -243,6 +245,7 @@ pub fn parse_page(path: &str, text: &str, ctime: i64, mtime: i64, size: u64) -> 
     let mut frontmatter = Obj::default();
     let mut tags = Vec::new();
     let mut aliases = Vec::new();
+    let yaml = meta.get("frontmatter").cloned().unwrap_or(Json::Null);
     if let Some(Json::Object(fm)) = meta.get("frontmatter") {
         for (k, v) in fm {
             let val = Value::from_frontmatter(v);
@@ -404,7 +407,7 @@ pub fn parse_page(path: &str, text: &str, ctime: i64, mtime: i64, size: u64) -> 
             _ => None,
         });
 
-    Page { path: path.to_string(), ctime, mtime, size, frontmatter, fields, tags, aliases, links, lists, day, outlinks: Vec::new() }
+    Page { path: path.to_string(), ctime, mtime, size, frontmatter, yaml, fields, tags, aliases, links, lists, day, outlinks: Vec::new() }
 }
 
 fn lower_name(path: &str) -> String {

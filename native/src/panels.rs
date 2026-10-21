@@ -76,6 +76,9 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             if icon_button(ui, "🖼", "Image mode (Ctrl+Shift+I)", app.images_mode).clicked() {
                 app.images_mode = !app.images_mode;
             }
+            if icon_button(ui, "📚", "Scriptorium: Biblioteca", app.active_tab().is_some_and(|t| t.path == "scriptorium:library")).clicked() {
+                app.open_view("library", None);
+            }
             ui.add_space(8.0);
             if icon_button(ui, "📅", "Open today's daily note", false).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());
@@ -319,13 +322,24 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
     egui::SidePanel::right("right").resizable(true).default_width(290.0).width_range(200.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(8, 6))).show(ctx, |ui| {
         let mut tab = app.right_tab;
-        header_tabs(ui, &mut tab, &[(RightTab::Calendar, "📅", "Calendar"), (RightTab::Backlinks, "↙", "Backlinks"), (RightTab::Outline, "☰", "Outline"), (RightTab::Tags, "#", "Tags")]);
+        header_tabs(ui, &mut tab, &[(RightTab::Calendar, "📅", "Calendar"), (RightTab::Backlinks, "↙", "Backlinks"), (RightTab::Outline, "☰", "Outline"), (RightTab::Tags, "#", "Tags"), (RightTab::Manuscript, "📖", "Manuscrito (Scriptorium)")]);
         app.right_tab = tab;
         match app.right_tab {
             RightTab::Backlinks => backlinks(app, ui),
             RightTab::Outline => outline(app, ui),
             RightTab::Tags => tags(app, ui),
             RightTab::Calendar => calendar_panel(app, ui),
+            RightTab::Manuscript => {
+                let active = app.active_path();
+                let acts = {
+                    let (Some(v), Some(sc)) = (app.vault.as_ref(), app.sc.as_mut()) else { return };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut app.caches, palette: app.palette };
+                    app.binder.ui(ui, &mut cx, active.as_deref())
+                };
+                for a in acts {
+                    app.sc_apply(a);
+                }
+            }
         }
     });
 }
@@ -500,7 +514,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                     let active = i == app.active;
                     let fill = if active { p.bg } else { Color32::TRANSPARENT };
                     egui::Frame::new().fill(fill).corner_radius(egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
-                        let name = format!("{}{}", vault::basename(&t.path), if t.dirty() { " •" } else { "" });
+                        let name = format!("{}{}", t.title(), if t.dirty() { " •" } else { "" });
                         let r = ui.add(egui::Label::new(RichText::new(name).color(if active { p.text } else { p.muted })).sense(Sense::click()).truncate());
                         if r.clicked() {
                             select = Some(i);

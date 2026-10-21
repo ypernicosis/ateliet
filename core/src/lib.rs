@@ -28,4 +28,5 @@ pub mod datefmt;
 pub mod dataview;
 pub mod script;
 pub mod calendar;
+pub mod scriptorium;
 pub mod board;

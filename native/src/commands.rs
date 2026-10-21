@@ -30,6 +30,12 @@ pub enum Cmd {
     ImageMode,
     NewStoryboard,
     NewCanvas,
+    Library,
+    Manuscript,
+    NewBook,
+    NewChapter,
+    NewCharacter,
+    ContinueBook,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -54,6 +60,12 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::ImageMode, "images:toggle-mode", "Images: Toggle image mode"),
     (Cmd::NewStoryboard, "storyboard:new", "Storyboard: New storyboard"),
     (Cmd::NewCanvas, "storyboard:new-canvas", "Storyboard: New infinite canvas"),
+    (Cmd::Library, "scriptorium-omena:abrir-biblioteca", "Scriptorium: Abrir biblioteca"),
+    (Cmd::Manuscript, "scriptorium-omena:abrir-manuscrito", "Scriptorium: Painel do manuscrito (capítulos)"),
+    (Cmd::NewBook, "scriptorium-omena:novo-livro", "Scriptorium: Novo livro"),
+    (Cmd::NewChapter, "scriptorium-omena:novo-capitulo", "Scriptorium: Novo capítulo"),
+    (Cmd::NewCharacter, "scriptorium-omena:novo-personagem", "Scriptorium: Novo personagem"),
+    (Cmd::ContinueBook, "scriptorium-omena:continuar", "Scriptorium: Continuar escrevendo"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -132,6 +144,20 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.new_note(&folder);
         }
         Cmd::NewStoryboard => app.new_board("animatic"),
+        Cmd::Library => app.open_view("library", None),
+        Cmd::Manuscript => {
+            let b = app.current_book().map(|b| b.path);
+            app.open_view("binder", b);
+        }
+        Cmd::NewBook => app.new_book_form(),
+        Cmd::NewChapter | Cmd::NewCharacter | Cmd::ContinueBook => match app.current_book() {
+            Some(b) => app.sc_apply(match c {
+                Cmd::NewChapter => crate::sc::Action::NewChapter(b.path),
+                Cmd::NewCharacter => crate::sc::Action::NewCharacter(b.path),
+                _ => crate::sc::Action::Continue(b.path),
+            }),
+            None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),
+        },
         Cmd::NewCanvas => app.new_board("canvas"),
         Cmd::OpenDaily => app.open_daily(ateliet_core::datefmt::today().date()),
         Cmd::ToggleMode => {

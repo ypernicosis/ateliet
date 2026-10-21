@@ -38,11 +38,20 @@ pub struct Tab {
     pub live: crate::live::LiveState,
     /// A `.storyboard` file open in the drawing editor.
     pub board: Option<Box<crate::board_ui::BoardEditor>>,
+    /// A Scriptorium screen (the library…) instead of a note.
+    pub view: Option<crate::sc::View>,
 }
 
 impl Tab {
     pub fn dirty(&self) -> bool {
         self.text != self.saved
+    }
+
+    pub fn title(&self) -> String {
+        match &self.view {
+            Some(v) => v.title(),
+            None => vault::basename(&self.path).to_string(),
+        }
     }
 
     pub fn doc(&mut self) -> Arc<Doc> {
@@ -77,6 +86,7 @@ pub enum RightTab {
     Outline,
     Tags,
     Calendar,
+    Manuscript,
 }
 
 pub struct Toast {
@@ -130,6 +140,9 @@ pub struct App {
     /// Image mode: the picture library in the centre, the note on the right.
     pub images_mode: bool,
     pub images: crate::images_ui::ImagesState,
+    pub sc: Option<crate::sc::Sc>,
+    pub binder: crate::sc::binder::Binder,
+    pub form: Option<crate::form::Form>,
     themed: bool,
     last_generation: u64,
 }
@@ -171,6 +184,9 @@ impl App {
             recent: Vec::new(),
             images_mode: false,
             images: Default::default(),
+            sc: None,
+            binder: Default::default(),
+            form: None,
             themed: false,
             last_generation: 0,
         };
@@ -210,13 +226,14 @@ impl App {
         self.images = Default::default();
         self.images_mode = false;
         self.vault = Some(Vault::open(&root, ctx.clone()));
+        self.sc = Some(crate::sc::Sc::load(&cfg.dir));
         self.cfg = Some(cfg);
         self.themed = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — Ateliet", self.vault.as_ref().unwrap().name)));
         // reopen the tabs of the last session
         if let Some(tabs) = session["tabs"].as_array() {
             for t in tabs.iter().filter_map(|t| t.as_str()) {
-                if self.vault.as_ref().unwrap().abs(t).is_file() {
+                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() {
                     self.open(t, true);
                 }
             }
@@ -265,6 +282,22 @@ impl App {
     /// Open a note (or focus its tab). Non-markdown files open in the system app.
     pub fn open(&mut self, path: &str, new_tab: bool) {
         let Some(v) = &self.vault else { return };
+        if let Some(view) = crate::sc::View::from_path(path) {
+            if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
+                self.active = i;
+                return;
+            }
+            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view) };
+            if new_tab || self.tabs.is_empty() {
+                self.tabs.push(tab);
+                self.active = self.tabs.len() - 1;
+            } else {
+                self.save_tab(self.active);
+                self.tabs[self.active] = tab;
+            }
+            self.save_session();
+            return;
+        }
         let lower = path.to_lowercase();
         let is_board = lower.ends_with(".storyboard");
         if !lower.ends_with(".md") && !is_board {
@@ -287,7 +320,7 @@ impl App {
             None
         };
         let text = if is_board { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: None };
         tab.board = board;
         if new_tab || self.tabs.is_empty() {
             self.tabs.push(tab);
@@ -668,6 +701,10 @@ impl eframe::App for App {
         let generation = self.vault.as_ref().unwrap().index.read().map(|ix| ix.generation).unwrap_or(0);
         if generation != self.last_generation {
             self.last_generation = generation;
+            let active = self.active_path();
+            if let (Some(sc), Some(v)) = (self.sc.as_mut(), self.vault.as_ref()) {
+                sc.tick(v, active.as_deref());
+            }
             ctx.request_repaint();
         }
         // autosave a second after the last keystroke
@@ -701,12 +738,16 @@ impl eframe::App for App {
 
         commands::show_palette(self, ctx);
         panels::ask_dialog(self, ctx);
+        self.form_ui(ctx);
         panels::settings_window(self, ctx);
         self.templater.show_prompt(ctx);
         panels::toasts(self, ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let Some(sc) = self.sc.as_mut() {
+            sc.settings.save();
+        }
         self.save_all();
         self.save_session();
     }
@@ -788,12 +829,24 @@ impl App {
         let p = self.palette;
         let frame = egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO);
         let mut actions: Vec<Action> = Vec::new();
+        let mut sc_actions = Vec::new();
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
                 return;
             }
             let p = self.palette;
+            if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
+                let acts = {
+                    let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p };
+                    match self.tabs[self.active].view.as_mut().unwrap() {
+                        crate::sc::View::Library(l) => l.ui(ui, &mut cx),
+                    }
+                };
+                sc_actions = acts;
+                return;
+            }
             if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
                 if let Some(msg) = b.ui(ui, p) {
                     self.toast(msg);
@@ -804,6 +857,9 @@ impl App {
         });
         for a in actions {
             self.apply(a);
+        }
+        for a in sc_actions {
+            self.sc_apply(a);
         }
     }
 

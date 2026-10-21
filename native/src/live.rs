@@ -263,7 +263,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         }
     }
     // the space below the note: continue writing at the end
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 160.0), egui::Sense::click());
+    let below = ui.clip_rect().bottom() - ui.cursor().top();
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), below.clamp(160.0, 4000.0)), egui::Sense::click());
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
     }

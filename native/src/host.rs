@@ -63,6 +63,25 @@ impl RenderHost<'_> {
     }
 }
 
+/// A picture of the vault as a texture (cached; large ones scaled down).
+pub fn image(ctx: &egui::Context, vault: &Vault, caches: &mut Caches, target: &str, source: &str) -> Option<(egui::TextureId, egui::Vec2)> {
+    let path = vault.resolve(target, source)?;
+    if let Some(cached) = caches.images.get(&path) {
+        return cached.as_ref().map(|(t, s)| (t.id(), *s));
+    }
+    let loaded = image::open(vault.abs(&path)).ok().map(|img| {
+        let img = if img.width() > 1600 || img.height() > 1600 { img.thumbnail(1600, 1600) } else { img };
+        let rgba = img.to_rgba8();
+        let size = [rgba.width() as usize, rgba.height() as usize];
+        let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+        let tex = ctx.load_texture(path.clone(), color, egui::TextureOptions::LINEAR);
+        (tex, egui::vec2(size[0] as f32, size[1] as f32))
+    });
+    let out = loaded.as_ref().map(|(t, s)| (t.id(), *s));
+    caches.images.insert(path, loaded);
+    out
+}
+
 impl Host for RenderHost<'_> {
     fn palette(&self) -> Palette {
         self.palette
@@ -82,22 +101,7 @@ impl Host for RenderHost<'_> {
     }
 
     fn image(&mut self, ctx: &egui::Context, target: &str) -> Option<(egui::TextureId, egui::Vec2)> {
-        let path = self.vault.resolve(target, self.source)?;
-        if let Some(cached) = self.caches.images.get(&path) {
-            return cached.as_ref().map(|(t, s)| (t.id(), *s));
-        }
-        let loaded = image::open(self.vault.abs(&path)).ok().map(|img| {
-            // large pictures are scaled down to keep textures small
-            let img = if img.width() > 1600 || img.height() > 1600 { img.thumbnail(1600, 1600) } else { img };
-            let rgba = img.to_rgba8();
-            let size = [rgba.width() as usize, rgba.height() as usize];
-            let color = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-            let tex = ctx.load_texture(path.clone(), color, egui::TextureOptions::LINEAR);
-            (tex, egui::vec2(size[0] as f32, size[1] as f32))
-        });
-        let out = loaded.as_ref().map(|(t, s)| (t.id(), *s));
-        self.caches.images.insert(path, loaded);
-        out
+        image(ctx, self.vault, self.caches, target, self.source)
     }
 
     fn query(&mut self, lang: &str, source: &str) -> Value {
