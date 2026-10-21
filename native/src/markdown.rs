@@ -657,7 +657,7 @@ impl<'h> Renderer<'h> {
             f.italics = true;
         }
         if style.strike {
-            f.strikethrough = Stroke::new(1.0, p.text);
+            f.strikethrough = Stroke::new(1.0_f32, p.text);
         }
         if style.mark {
             f.background = p.highlight;
@@ -717,7 +717,7 @@ impl<'h> Renderer<'h> {
                         if matches!(target, Target::Tag(_)) {
                             section.format.background = p.accent.gamma_multiply(0.12);
                         } else {
-                            section.format.underline = Stroke::new(1.0, section.format.color.gamma_multiply(if ok { 0.5 } else { 0.3 }));
+                            section.format.underline = Stroke::new(1.0_f32, section.format.color.gamma_multiply(if ok { 0.5 } else { 0.3 }));
                         }
                         runs.link(text, section.format, action.clone());
                     }
@@ -846,7 +846,7 @@ impl<'h> Renderer<'h> {
             Block::Quote(body) => {
                 let resp = egui::Frame::new().inner_margin(egui::Margin { left: 14, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
                 let r = resp.response.rect;
-                ui.painter().line_segment([r.left_top(), r.left_bottom()], Stroke::new(2.5, p.accent.gamma_multiply(0.7)));
+                ui.painter().line_segment([r.left_top(), r.left_bottom()], Stroke::new(2.5_f32, p.accent.gamma_multiply(0.7)));
             }
             Block::Callout { kind, title, body, folded, line } => {
                 let color = callout_color(kind, &p);
@@ -934,7 +934,7 @@ impl<'h> Renderer<'h> {
                 }
                 match self.host.embed(target) {
                     Some((path, doc)) => {
-                        egui::Frame::new().stroke(Stroke::new(1.0, p.border)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
+                        egui::Frame::new().stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             let mut runs = Runs::new();
                             let f = TextFormat { font_id: FontId::new(size * 0.8, FontFamily::Proportional), color: p.muted, ..Default::default() };

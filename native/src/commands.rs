@@ -321,7 +321,7 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
         }
     }
     if !pal.query.is_empty() {
-        items.sort_by(|a, b| b.0.cmp(&a.0));
+        items.sort_by_key(|x| std::cmp::Reverse(x.0));
     }
     items.truncate(60);
     let n = items.len();

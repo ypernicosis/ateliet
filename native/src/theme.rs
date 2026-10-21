@@ -71,11 +71,11 @@ pub fn apply(ctx: &egui::Context, a: &Appearance) -> Palette {
     v.code_bg_color = p.code_bg;
     v.hyperlink_color = p.link();
     v.selection.bg_fill = p.accent.gamma_multiply(0.35);
-    v.selection.stroke = Stroke::new(1.0, p.accent);
+    v.selection.stroke = Stroke::new(1.0_f32, p.accent);
     v.override_text_color = Some(p.text);
     v.window_corner_radius = CornerRadius::same(8);
     v.menu_corner_radius = CornerRadius::same(6);
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, p.border);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, p.border);
     v.widgets.noninteractive.bg_fill = p.bg_secondary;
     v.widgets.inactive.bg_fill = p.bg_hover;
     v.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;

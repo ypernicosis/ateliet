@@ -20,7 +20,6 @@ pub struct SearchState {
     last: String,
     results: Vec<search::FileResult>,
     pending: Option<Receiver<Vec<search::FileResult>>>,
-    pub took_ms: u128,
 }
 
 // ── calendar ──────────────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str, active: bool) -> egui::
 
 pub fn ribbon(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::SidePanel::left("ribbon").exact_width(44.0).resizable(false).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(6, 8)).stroke(egui::Stroke::new(1.0, p.border))).show(ctx, |ui| {
+    egui::SidePanel::left("ribbon").exact_width(44.0).resizable(false).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin::symmetric(6, 8)).stroke(egui::Stroke::new(1.0_f32, p.border))).show(ctx, |ui| {
         ui.vertical_centered(|ui| {
             if icon_button(ui, "🗀", "Files", app.left_open && app.left_tab == LeftTab::Files).clicked() {
                 toggle_left(app, LeftTab::Files);
@@ -242,10 +241,7 @@ fn search_panel(app: &mut App, ui: &mut egui::Ui) {
         let (tx, rx) = mpsc::channel();
         let (root, q, c) = (v.root.clone(), s.query.clone(), ui.ctx().clone());
         std::thread::spawn(move || {
-            let t = std::time::Instant::now();
-            let res = search::search(&root, &q, false, 200);
-            let _ = tx.send(res);
-            let _ = t;
+            let _ = tx.send(search::search(&root, &q, false, 200));
             c.request_repaint();
         });
         s.pending = Some(rx);
@@ -470,7 +466,7 @@ fn calendar_panel(app: &mut App, ui: &mut egui::Ui) {
                     if i < dots {
                         ui.painter().circle_filled(c, 2.0, dot_color);
                     } else {
-                        ui.painter().circle_stroke(c, 2.0, egui::Stroke::new(1.0, dot_color));
+                        ui.painter().circle_stroke(c, 2.0, egui::Stroke::new(1.0_f32, dot_color));
                     }
                 }
                 if resp.clicked() {
@@ -616,14 +612,6 @@ pub fn ask_dialog(app: &mut App, ctx: &egui::Context) {
         let value = ask.value.trim().to_string();
         match ask.kind {
             AskKind::Rename(from) if !value.is_empty() => app.rename(&from, &value),
-            AskKind::NewNote(folder) if !value.is_empty() => {
-                if let Some(v) = &app.vault {
-                    let path = if folder.is_empty() { format!("{value}.md") } else { format!("{folder}/{value}.md") };
-                    let _ = v.write(&path, "");
-                    app.vault.as_mut().unwrap().rescan();
-                    app.open(&path, true);
-                }
-            }
             AskKind::NewFolder(parent) if !value.is_empty() => {
                 if let Some(v) = &app.vault {
                     let path = if parent.is_empty() { value } else { format!("{parent}/{value}") };

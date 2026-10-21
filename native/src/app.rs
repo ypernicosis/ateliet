@@ -35,6 +35,7 @@ pub struct Tab {
     pub highlight: editor::HighlightCache,
     /// A heading line to scroll to on the next frame.
     pub scroll_to: Option<usize>,
+    pub live: crate::live::LiveState,
 }
 
 impl Tab {
@@ -91,7 +92,6 @@ pub struct Ask {
 #[derive(Clone, Debug)]
 pub enum AskKind {
     Rename(String),
-    NewNote(String),
     NewFolder(String),
     ConfirmDelete(String),
 }
@@ -120,6 +120,8 @@ pub struct App {
     pub settings_open: bool,
     pub readable: bool,
     pub default_mode: Mode,
+    /// Editing shows the note rendered except the block being edited (Obsidian's Live Preview).
+    pub live_preview: bool,
     pub locale: String,
     pub hotkeys: Vec<(String, KeyboardShortcut)>,
     pub recent: Vec<String>,
@@ -158,6 +160,7 @@ impl App {
             settings_open: false,
             readable: true,
             default_mode: Mode::Edit,
+            live_preview: true,
             locale: system_locale(),
             hotkeys: Vec::new(),
             recent: Vec::new(),
@@ -191,6 +194,7 @@ impl App {
         let appj = cfg.read("app.json");
         self.readable = appj["readableLineLength"].as_bool().unwrap_or(true);
         self.default_mode = if appj["defaultViewMode"].as_str() == Some("preview") { Mode::Read } else { Mode::Edit };
+        self.live_preview = appj["livePreview"].as_bool().unwrap_or(true);
         self.calendar.load(&cfg);
         self.hotkeys = commands::load_hotkeys(&cfg);
         let session = cfg.read("ateliet/native-session.json");
@@ -261,7 +265,7 @@ impl App {
             return;
         }
         let text = std::fs::read_to_string(v.abs(path)).unwrap_or_default();
-        let tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None };
+        let tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default() };
         if new_tab || self.tabs.is_empty() {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
@@ -368,7 +372,7 @@ impl App {
         let Some(v) = &self.vault else { return };
         let dir = vault::parent(from);
         let ext = if from.to_lowercase().ends_with(".md") && !new_name.to_lowercase().ends_with(".md") { ".md" } else { "" };
-        let to = if new_name.contains('/') { format!("{new_name}{ext}") } else if dir.is_empty() { format!("{new_name}{ext}") } else { format!("{dir}/{new_name}{ext}") };
+        let to = if new_name.contains('/') || dir.is_empty() { format!("{new_name}{ext}") } else { format!("{dir}/{new_name}{ext}") };
         if to == from {
             return;
         }
@@ -687,6 +691,13 @@ impl App {
                         ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
                         ui.add_space(10.0);
                         match tab.mode {
+                            Mode::Edit if self.live_preview => {
+                                let st = editor::Styles { size, p };
+                                let path = tab.path.clone();
+                                let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
+                                let mut acts = crate::live::show(ui, tab, &mut host, &st);
+                                actions.append(&mut acts);
+                            }
                             Mode::Edit => {
                                 let st = editor::Styles { size, p };
                                 let id = tab.editor_id();
@@ -714,7 +725,7 @@ impl App {
                                     tab.text.hash(&mut h);
                                     h.finish()
                                 };
-                                let resp = ui.add(editor::editor_widget(&mut tab.text, id, &mut tab.highlight, &st));
+                                let resp = ui.add(editor::editor_widget(&mut tab.text, id, &mut tab.highlight, &st, 30));
                                 if let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) {
                                     if let Some(r) = state.cursor.char_range() {
                                         tab.cursor = r.primary.index;

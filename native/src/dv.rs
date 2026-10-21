@@ -41,7 +41,7 @@ fn markdown_runs(r: &mut Renderer, runs: &mut Runs, s: &str, size: f32) {
 }
 
 /// One value appended to a run list (lists as comma-separated text).
-pub fn value_runs(r: &mut Renderer, runs: &mut Runs, v: &Value, size: f32, inline: bool) {
+pub fn value_runs(r: &mut Renderer, runs: &mut Runs, v: &Value, size: f32, _inline: bool) {
     let p = r.host.palette();
     match v {
         Value::Null => {
@@ -64,7 +64,7 @@ pub fn value_runs(r: &mut Renderer, runs: &mut Runs, v: &Value, size: f32, inlin
                 if i > 0 {
                     runs.push(", ", text_fmt(r, size));
                 }
-                value_runs(r, runs, x, size, inline);
+                value_runs(r, runs, x, size, true);
             }
         }
         Value::Object(o) => match o.get("t").and_then(Value::as_str) {
@@ -79,7 +79,7 @@ pub fn value_runs(r: &mut Renderer, runs: &mut Runs, v: &Value, size: f32, inlin
                 let ok = r.host.resolved(&path);
                 let mut f = text_fmt(r, size);
                 f.color = if ok { p.link() } else { p.link().gamma_multiply(0.6) };
-                f.underline = Stroke::new(1.0, f.color.gamma_multiply(0.5));
+                f.underline = Stroke::new(1.0_f32, f.color.gamma_multiply(0.5));
                 runs.link(&label, f, Action::Open(target, false));
             }
             Some("date") | Some("dur") => runs.push(o.get("text").and_then(Value::as_str).unwrap_or_default(), text_fmt(r, size)),
@@ -154,7 +154,7 @@ fn value_cell(r: &mut Renderer, ui: &mut egui::Ui, v: &Value, size: f32) {
 
 fn empty(r: &Renderer, ui: &mut egui::Ui, kind: &str) {
     let p = r.host.palette();
-    egui::Frame::new().stroke(Stroke::new(1.5, p.border)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(18)).show(ui, |ui| {
+    egui::Frame::new().stroke(Stroke::new(1.5_f32, p.border)).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::same(18)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.vertical_centered(|ui| ui.label(RichText::new(format!("Dataview: No results to show for {kind} query.")).color(p.muted)));
     });

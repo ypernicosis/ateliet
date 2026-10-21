@@ -41,7 +41,7 @@ pub fn known_vaults() -> Vec<PathBuf> {
         .as_object()
         .map(|o| o.values().filter_map(|x| Some((x["ts"].as_u64().unwrap_or(0), PathBuf::from(x["path"].as_str()?)))).collect())
         .unwrap_or_default();
-    v.sort_by(|a, b| b.0.cmp(&a.0));
+    v.sort_by_key(|x| std::cmp::Reverse(x.0));
     v.into_iter().map(|x| x.1).filter(|p| p.is_dir()).collect()
 }
 

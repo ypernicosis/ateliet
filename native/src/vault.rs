@@ -131,10 +131,6 @@ impl Vault {
         self.root.join(rel)
     }
 
-    pub fn exists(&self, rel: &str) -> bool {
-        self.files.iter().any(|e| e.path == rel)
-    }
-
     pub fn markdown_files(&self) -> impl Iterator<Item = &corevault::Entry> {
         self.files.iter().filter(|e| !e.folder && e.path.to_lowercase().ends_with(".md"))
     }

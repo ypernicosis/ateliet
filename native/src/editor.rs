@@ -103,7 +103,7 @@ pub fn highlight(text: &str, st: &Styles) -> LayoutJob {
                 job.append(&line[marker_end..end], 0.0, st.mono(p.accent));
                 if done {
                     fmt.color = p.faint;
-                    fmt.strikethrough = Stroke::new(1.0, p.faint);
+                    fmt.strikethrough = Stroke::new(1.0_f32, p.faint);
                 }
             }
             rest = &line[end..];
@@ -135,13 +135,13 @@ fn inline(job: &mut LayoutJob, text: &str, base: TextFormat, st: &Styles) {
             f.background = p.code_bg;
         } else if c.name("wiki").is_some() || c.name("mdlink").is_some() || c.name("url").is_some() {
             f.color = p.link();
-            f.underline = Stroke::new(1.0, p.link().gamma_multiply(0.4));
+            f.underline = Stroke::new(1.0_f32, p.link().gamma_multiply(0.4));
         } else if c.name("bold").is_some() {
             f.font_id = FontId::new(f.font_id.size, FontFamily::Name("bold".into()));
         } else if c.name("italic").is_some() {
             f.italics = true;
         } else if c.name("strike").is_some() {
-            f.strikethrough = Stroke::new(1.0, f.color);
+            f.strikethrough = Stroke::new(1.0_f32, f.color);
         } else if c.name("mark").is_some() {
             f.background = p.highlight;
         } else if c.name("field").is_some() {
@@ -204,7 +204,9 @@ pub fn utf16_to_byte(s: &str, u: usize) -> usize {
     s.len()
 }
 
-pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut HighlightCache, st: &'a Styles) -> impl egui::Widget + 'a {
+/// The note editor; `min_rows` keeps an empty note clickable.
+pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut HighlightCache, st: &'a Styles, min_rows: usize) -> impl egui::Widget + 'a {
+    let rows = text.split('\n').count().max(min_rows);
     move |ui: &mut egui::Ui| {
         let mut layouter = |ui: &egui::Ui, s: &str, wrap: f32| {
             let mut job = cache.get(s, st);
@@ -215,7 +217,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
             .id(id)
             .frame(false)
             .desired_width(f32::INFINITY)
-            .desired_rows(30)
+            .desired_rows(rows)
             .lock_focus(true)
             .layouter(&mut layouter)
             .show(ui)
