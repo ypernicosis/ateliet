@@ -42,6 +42,14 @@ pub enum Sel {
     Evento(String),
 }
 
+pub enum CardCmd {
+    Open(String),
+    Duplicate,
+    ToIdeas,
+    Status(String),
+    Delete,
+}
+
 /// The scene being dragged (and the plot line row it left).
 #[derive(Clone)]
 struct Drag {
@@ -422,6 +430,60 @@ impl EnredoView {
         }
     }
 
+    /// Right-click on a scene card.
+    pub(super) fn card_menu(r: &egui::Response, sid: &str, cap: Option<&str>, status: &str, p: Palette, out: &mut Option<(String, CardCmd)>) {
+        r.context_menu(|ui| {
+            if let Some(c) = cap.filter(|c| !c.starts_with("plan:")) {
+                if kit::menu_item(ui, icons::BOOK_OPEN, "Abrir capítulo", p) {
+                    *out = Some((sid.into(), CardCmd::Open(c.into())));
+                }
+            }
+            if kit::menu_item(ui, icons::COPY, "Duplicar", p) {
+                *out = Some((sid.into(), CardCmd::Duplicate));
+            }
+            if cap.is_some() && kit::menu_item(ui, icons::INBOX, "Mover para Ideias", p) {
+                *out = Some((sid.into(), CardCmd::ToIdeas));
+            }
+            kit::menu_sep(ui, p);
+            for (k, label, _) in STATUS {
+                if kit::menu_check(ui, status == k || (status.is_empty() && k == "ideia"), label, p) {
+                    *out = Some((sid.into(), CardCmd::Status(k.into())));
+                }
+            }
+            kit::menu_sep(ui, p);
+            if kit::menu_danger(ui, icons::TRASH_2, "Excluir…", p) {
+                *out = Some((sid.into(), CardCmd::Delete));
+            }
+        });
+    }
+
+    pub(super) fn card_cmd(&mut self, cmd: Option<(String, CardCmd)>, acts: &mut Vec<Action>) {
+        let Some((sid, c)) = cmd else { return };
+        match c {
+            CardCmd::Open(path) => acts.push(Action::Open(path, true)),
+            CardCmd::Duplicate => {
+                if let Some(n) = en::duplicate_scene(&mut self.data, &sid) {
+                    self.sel = Some(Sel::Cena(n));
+                    self.changed();
+                }
+            }
+            CardCmd::ToIdeas => {
+                en::move_scene(&mut self.data, &sid, None, None, None);
+                self.changed();
+            }
+            CardCmd::Status(k) => {
+                if let Some(i) = en::scene_index(&self.data, &sid) {
+                    self.data["cenas"][i]["status"] = json!(k);
+                    self.changed();
+                }
+            }
+            CardCmd::Delete => {
+                self.sel = Some(Sel::Cena(sid.clone()));
+                self.confirm = Some(sid);
+            }
+        }
+    }
+
     /// Drag a card: set the payload when the drag starts.
     pub(super) fn drag_source(ui: &egui::Ui, r: &egui::Response, id: &str, from: Option<&str>) {
         if r.drag_started() {
@@ -561,6 +623,7 @@ impl EnredoView {
         let mut open_ch: Option<String> = None;
         let mut toggle_arc: Option<String> = None;
         let mut add_trama = false;
+        let mut card_cmd = None;
         let dragging = Self::dragging(ui);
         egui::ScrollArea::both().id_salt("en-grade").auto_shrink([false, false]).show(ui, |ui| {
             let avail = ui.available_size();
@@ -613,6 +676,7 @@ impl EnredoView {
                                 select = Some(Sel::Cena(sid.clone()));
                             }
                             Self::drag_source(ui, &r, &sid, Some(tid));
+                            Self::card_menu(&r, &sid, en::cap_of(&cenas[si]), en::str_of(&cenas[si], "status"), p, &mut card_cmd);
                             if hovered && dragging.is_none() {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
@@ -768,6 +832,7 @@ impl EnredoView {
         if add_trama {
             self.new_trama = Some((String::new(), None));
         }
+        self.card_cmd(card_cmd, acts);
     }
 
     fn trama_dialog(&mut self, ctx: &egui::Context, p: Palette) {
@@ -827,6 +892,7 @@ impl EnredoView {
         let mut open_ch = None;
         let mut to_chapter: Option<String> = None;
         let mut toggle_arc = None;
+        let mut card_cmd = None;
         egui::ScrollArea::vertical().id_salt("en-esc").auto_shrink([false, false]).show(ui, |ui| {
             let avail = ui.available_width();
             let w = (avail - 80.0).clamp(320.0, 820.0);
@@ -972,6 +1038,7 @@ impl EnredoView {
                                     select = Some(Sel::Cena(sid.clone()));
                                 }
                                 Self::drag_source(ui, &resp, &sid, None);
+                                Self::card_menu(&resp, &sid, cap.as_deref(), en::str_of(s, "status"), p, &mut card_cmd);
                                 cards.push((rr, sid));
                             }
                         });
@@ -995,6 +1062,7 @@ impl EnredoView {
         if let Some(a) = toggle_arc {
             self.arco = if self.arco.as_ref() == Some(&a) { None } else { Some(a) };
         }
+        self.card_cmd(card_cmd, acts);
         if let Some(sid) = to_chapter {
             if let Some(i) = en::scene_index(&self.data, &sid) {
                 let t = en::str_of(&self.data["cenas"][i], "titulo");
