@@ -23,8 +23,12 @@ fn main() -> eframe::Result<()> {
     // `ateliet-native <vault>` opens that vault; otherwise the last one
     let arg = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.is_dir()).map(|p| std::fs::canonicalize(&p).unwrap_or(p));
     let vault = arg.or_else(config::last_vault);
+    let mut viewport = eframe::egui::ViewportBuilder::default().with_title("Ateliet").with_inner_size([1280.0, 820.0]).with_min_inner_size([640.0, 400.0]).with_app_id("ateliet");
+    if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../../icons/icon.png")) {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default().with_title("Ateliet").with_inner_size([1280.0, 820.0]).with_min_inner_size([640.0, 400.0]).with_app_id("ateliet"),
+        viewport,
         persist_window: true,
         ..Default::default()
     };

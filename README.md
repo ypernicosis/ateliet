@@ -29,6 +29,24 @@ cargo install tauri-cli --version "^2"
 ./build.sh && cargo tauri build
 ```
 
+## Interface nativa (sem WebKit)
+
+A interface está sendo migrada para uma versão nativa em Rust (`native/`, desenhada com egui). Ela não usa webview nem GTK e abre o mesmo vault, com as mesmas notas e configurações. O binário tem cerca de 13 MB.
+
+```sh
+cargo run -p ateliet-native --release -- ~/caminho/do/vault
+sh native/bundle-macos.sh --install    # gera e instala "Ateliet Native.app"
+```
+
+Já funciona:
+- **Notas**: editor com Live Preview por bloco (o bloco em edição vira texto e os outros aparecem renderizados), modo código-fonte e modo de leitura. Salvamento automático, abas reabertas por vault, propriedades do frontmatter.
+- **Markdown do Obsidian**: wikilinks e embeds (notas, seções e imagens), tags, callouts dobráveis, realce, campos inline, tarefas com status personalizados que se marcam clicando, tabelas e código.
+- **Ferramentas embutidas**: blocos `dataview`, `dataviewjs` e consultas inline, desenhados a partir do núcleo; Templater com as janelas de prompt e de escolha; calendário de notas diárias.
+- **Navegação**: explorador de arquivos (criar, renomear, apagar), busca, favoritos, backlinks e links de saída, sumário, tags, paleta de comandos (Ctrl/Cmd+P), troca rápida de nota (Ctrl/Cmd+O) e os atalhos do `hotkeys.json`.
+- **Modo imagens** (Ctrl/Cmd+Shift+I): mosaico de todas as imagens, coleções por pasta, busca por nome, imagens parecidas, visualizador com zoom e inserção na nota.
+
+Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), os temas CSS, o storyboard, a busca de imagens por descrição, a biblioteca compartilhada com o Pictogrep e o botão de atualizar.
+
 ## Instalando no macOS
 
 O Ateliet é compilado a partir deste repositório, e o botão de atualizar usa o mesmo clone depois. Por isso, guarde o clone num lugar fixo (o exemplo usa `~/Developer/ateliet`) e não o apague nem mova depois de instalar.
