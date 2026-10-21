@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod binder;
 pub mod export_ui;
+pub mod focus;
 pub mod library;
 
 use crate::vault::Vault;

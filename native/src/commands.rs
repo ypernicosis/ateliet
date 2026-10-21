@@ -39,6 +39,7 @@ pub enum Cmd {
     NewCharacter,
     ContinueBook,
     ExportBook,
+    Focus,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -70,6 +71,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::NewCharacter, "scriptorium-omena:novo-personagem", "Scriptorium: Novo personagem"),
     (Cmd::ContinueBook, "scriptorium-omena:continuar", "Scriptorium: Continuar escrevendo"),
     (Cmd::ExportBook, "scriptorium-omena:exportar", "Scriptorium: Exportar livro…"),
+    (Cmd::Focus, "scriptorium-omena:modo-foco", "Scriptorium: Alternar modo foco"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -149,6 +151,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         }
         Cmd::NewStoryboard => app.new_board("animatic"),
         Cmd::Library => app.open_view("library", None),
+        Cmd::Focus => app.toggle_focus(),
         Cmd::Manuscript => {
             let b = app.current_book().map(|b| b.path);
             app.open_view("binder", b);

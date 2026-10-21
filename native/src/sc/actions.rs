@@ -161,6 +161,99 @@ impl App {
         self.open_view("binder", Some(b.to_string()));
     }
 
+    /// Today's words (for sprints and the daily goal).
+    fn words_today(&self) -> i64 {
+        self.sc.as_ref().map(|s| s.settings.today_words(None)).unwrap_or(0)
+    }
+
+    pub fn toggle_focus(&mut self) {
+        if self.focus.take().is_some() {
+            (self.left_open, self.right_open) = self.focus_restore;
+            crate::sc::focus::DIM.with(|d| d.set(false));
+            crate::sc::focus::TYPEWRITER.with(|d| d.set(false));
+            crate::sc::focus::ON.with(|d| d.set(false));
+            return;
+        }
+        self.focus_restore = (self.left_open, self.right_open);
+        self.focus = Some(crate::sc::focus::Focus::new());
+        crate::sc::focus::ON.with(|d| d.set(true));
+    }
+
+    pub fn focus_hud(&mut self, ctx: &eframe::egui::Context) {
+        let p = self.palette;
+        let (dim, tw, goal) = match self.sc.as_ref() {
+            Some(sc) => (sc.settings.data["esmaecer"].as_bool().unwrap_or(false), sc.settings.data["maquinaDeEscrever"].as_bool().unwrap_or(true), sc.settings.daily_goal()),
+            None => (false, true, 0),
+        };
+        crate::sc::focus::DIM.with(|d| d.set(dim));
+        crate::sc::focus::TYPEWRITER.with(|d| d.set(tw));
+        let active = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none()).map(|t| (t.path.clone(), ateliet_core::scriptorium::count_words(&t.text) as i64));
+        let is_chapter = active.as_ref().is_some_and(|(p, _)| self.vault.as_ref().is_some_and(|v| ateliet_core::scriptorium::book::is_chapter(&v.index.read().unwrap(), p)));
+        let tabs: Vec<(String, i64)> = self.tabs.iter().map(|t| (t.path.clone(), ateliet_core::scriptorium::count_words(&t.text) as i64)).collect();
+        let root = self.vault.as_ref().map(|v| v.root.clone());
+        let today = self.words_today();
+        let words_now = today;
+        let Some(f) = self.focus.as_mut() else { return };
+        if let Some((path, w)) = &active {
+            f.see(path, *w);
+        }
+        let live = |path: &str| -> Option<i64> {
+            tabs.iter().find(|(p, _)| p == path).map(|(_, w)| *w).or_else(|| root.as_ref().and_then(|r| std::fs::read_to_string(r.join(path)).ok()).map(|t| ateliet_core::scriptorium::count_words(&t) as i64))
+        };
+        let session = f.session_words(&live);
+        let chapter = if is_chapter { active.as_ref().map(|(_, w)| *w) } else { None };
+        let act = crate::sc::focus::hud(ctx, p, session, chapter, today, goal, dim, tw, self.sprint.as_ref(), words_now, f);
+        match act {
+            Some(crate::sc::focus::HudAction::Exit) => {
+                let mins = f.started.elapsed().as_secs() / 60;
+                self.toggle_focus();
+                if session > 0 || mins >= 5 {
+                    self.toast(format!("Sessão de foco: {} palavras em {mins} min.", ateliet_core::scriptorium::fmt_n(session)));
+                }
+            }
+            Some(crate::sc::focus::HudAction::ToggleDim) => {
+                if let Some(sc) = self.sc.as_mut() {
+                    sc.settings.set("esmaecer", json!(!dim));
+                }
+            }
+            Some(crate::sc::focus::HudAction::ToggleTypewriter) => {
+                if let Some(sc) = self.sc.as_mut() {
+                    sc.settings.set("maquinaDeEscrever", json!(!tw));
+                }
+            }
+            Some(crate::sc::focus::HudAction::StartSprint(m, g)) => self.sprint = Some(crate::sc::focus::Sprint::new(m, g, words_now)),
+            Some(crate::sc::focus::HudAction::PauseSprint) => {
+                if let Some(s) = self.sprint.as_mut() {
+                    s.toggle_pause();
+                }
+            }
+            Some(crate::sc::focus::HudAction::StopSprint) => self.finish_sprint(true),
+            None => {}
+        }
+    }
+
+    pub fn finish_sprint(&mut self, early: bool) {
+        let words = self.words_today();
+        let Some(s) = self.sprint.take() else { return };
+        let rec = s.record(words, early);
+        let gained = s.gained(words);
+        if let Some(sc) = self.sc.as_mut() {
+            let mut list = sc.settings.data["sprints"].as_array().cloned().unwrap_or_default();
+            list.push(rec);
+            let n = list.len();
+            sc.settings.set("sprints", json!(list[n.saturating_sub(200)..].to_vec()));
+        }
+        let goal = if s.goal > 0 { format!(" de {}", ateliet_core::scriptorium::fmt_n(s.goal)) } else { String::new() };
+        let hit = if s.goal > 0 && gained >= s.goal { " — meta batida!" } else { "" };
+        self.toast(format!("Sprint {}: {} palavras{goal}{hit}", if early { "encerrado" } else { "concluído" }, ateliet_core::scriptorium::fmt_n(gained)));
+    }
+
+    pub fn sprint_tick(&mut self) {
+        if self.sprint.as_ref().is_some_and(|s| s.done()) {
+            self.finish_sprint(false);
+        }
+    }
+
     pub fn open_export(&mut self, b: &str) {
         let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_ref()) else { return };
         let title = book::book_by_path(&v.index.read().unwrap(), b, &sc.author()).map(|x| x.title).unwrap_or_default();

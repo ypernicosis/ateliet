@@ -144,6 +144,9 @@ pub struct App {
     pub binder: crate::sc::binder::Binder,
     pub form: Option<crate::form::Form>,
     pub export: Option<crate::sc::export_ui::ExportDialog>,
+    pub focus: Option<crate::sc::focus::Focus>,
+    pub sprint: Option<crate::sc::focus::Sprint>,
+    pub focus_restore: (bool, bool),
     themed: bool,
     last_generation: u64,
 }
@@ -189,6 +192,9 @@ impl App {
             binder: Default::default(),
             form: None,
             export: None,
+            focus: None,
+            sprint: None,
+            focus_restore: (true, true),
             themed: false,
             last_generation: 0,
         };
@@ -723,6 +729,15 @@ impl eframe::App for App {
         self.finish_templates();
         commands::shortcuts(self, ctx);
 
+        self.sprint_tick();
+        if self.focus.is_some() && !self.images_mode {
+            self.central(ctx);
+            self.focus_hud(ctx);
+            commands::show_palette(self, ctx);
+            self.form_ui(ctx);
+            panels::toasts(self, ctx);
+            return;
+        }
         panels::ribbon(self, ctx);
         if self.images_mode {
             self.image_mode(ctx);

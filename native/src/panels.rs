@@ -552,6 +552,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         ui.painter().hline(clip.x_range(), clip.bottom() - 0.5, egui::Stroke::new(1.0_f32, p.border));
         let mut close = None;
         let mut select = None;
+        let mut focus = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (g, tip) = if app.left_open { (icons::PANEL_LEFT_CLOSE, "Esconder barra lateral") } else { (icons::PANEL_LEFT_OPEN, "Mostrar barra lateral") };
@@ -559,7 +560,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 app.left_open = !app.left_open;
             }
             ui.add_space(4.0);
-            let right_w = 88.0;
+            let right_w = 118.0;
             let avail = (ui.available_width() - right_w).max(100.0);
             let n = app.tabs.len().max(1) as f32;
             let tab_w = (avail / n - 2.0).clamp(110.0, 220.0);
@@ -623,6 +624,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 }
                 if let Some(t) = app.tabs.get_mut(app.active) {
                     if t.view.is_none() && t.board.is_none() {
+                        focus = kit::icon_button(ui, icons::FOCUS, "Modo foco", false, p).clicked();
                         let (g, tip) = if t.mode == Mode::Edit { (icons::BOOK_OPEN, "Modo leitura (Ctrl+E)") } else { (icons::PENCIL, "Modo edição (Ctrl+E)") };
                         if icon_button(ui, g, tip, false, p).clicked() {
                             t.mode = if t.mode == Mode::Edit { Mode::Read } else { Mode::Edit };
@@ -636,6 +638,9 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         }
         if let Some(i) = close {
             app.close_tab(i);
+        }
+        if focus {
+            app.toggle_focus();
         }
     });
 }
@@ -654,6 +659,15 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
+                if let Some(s) = app.sprint.as_ref() {
+                    let words = app.sc.as_ref().map(|s| s.settings.today_words(None)).unwrap_or(0);
+                    if crate::sc::focus::status_pill(ui, p, s, words).clicked() {
+                        if let Some(s) = app.sprint.as_mut() {
+                            s.toggle_pause();
+                        }
+                    }
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+                }
                 if let Some(t) = app.tabs.get(app.active).filter(|t| t.view.is_none() && t.board.is_none()) {
                     let words = ateliet_core::scriptorium::count_words(&t.text);
                     let chars = t.text.chars().count();

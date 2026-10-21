@@ -242,11 +242,21 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         }
         let top = ui.cursor().min;
         let before = actions.len();
+        let dim = active.is_some() && crate::sc::focus::DIM.with(|d| d.get());
         if seg.frontmatter {
-            properties(ui, &seg.text, host);
+            if !crate::sc::focus::ON.with(|f| f.get()) {
+                properties(ui, &seg.text, host);
+            }
         } else {
             let mut r = Renderer::new(host);
-            r.blocks(ui, &seg.doc.blocks);
+            if dim {
+                ui.scope(|ui| {
+                    ui.multiply_opacity(0.28);
+                    r.blocks(ui, &seg.doc.blocks);
+                });
+            } else {
+                r.blocks(ui, &seg.doc.blocks);
+            }
             for a in r.actions.drain(..) {
                 actions.push(match a {
                     Action::ToggleTask(line, c) => Action::ToggleTask(line + seg.start, c),
@@ -328,9 +338,18 @@ fn editor_block(ui: &mut egui::Ui, tab: &mut Tab, id: egui::Id, st: &editor::Sty
     }
     let before = tab.live.buf.clone();
     let p = st.p;
-    egui::Frame::new().fill(p.bg_secondary).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+    let frame = egui::Frame::new().fill(p.bg_secondary).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
         ui.add(editor::editor_widget(&mut tab.live.buf, id, &mut tab.live.highlight, st, 1));
     });
+    if tab.live.buf != before && crate::sc::focus::TYPEWRITER.with(|t| t.get()) {
+        // keep the line being typed in the middle of the screen
+        let cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or(0);
+        let lines = tab.live.buf.split('\n').count().max(1) as f32;
+        let at = tab.live.buf.chars().take(cursor).filter(|c| *c == '\n').count() as f32;
+        let r = frame.response.rect;
+        let y = r.top() + r.height() * ((at + 0.5) / lines);
+        ui.scroll_to_rect(egui::Rect::from_center_size(egui::pos2(r.center().x, y), egui::vec2(10.0, st.size)), Some(egui::Align::Center));
+    }
     if tab.live.buf != before {
         tab.text = tab.live.splice(&tab.text);
         tab.last_edit = Some(std::time::Instant::now());
