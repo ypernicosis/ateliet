@@ -740,7 +740,7 @@ impl eframe::App for App {
         panels::ask_dialog(self, ctx);
         self.form_ui(ctx);
         panels::settings_window(self, ctx);
-        self.templater.show_prompt(ctx);
+        self.templater.show_prompt(ctx, self.palette);
         panels::toasts(self, ctx);
     }
 

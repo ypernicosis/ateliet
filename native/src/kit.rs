@@ -184,9 +184,12 @@ impl<'a> Row<'a> {
         }
         let mut right = rect.right() - 8.0;
         if let Some(t) = &self.trailing {
-            let g = painter.layout_no_wrap(t.clone(), FontId::proportional(UI_SMALL), p.faint);
-            painter.galley(egui::pos2(right - g.size().x, cy - g.size().y / 2.0), g, p.faint);
-            right -= 40.0_f32.max(painter.layout_no_wrap(t.clone(), FontId::proportional(UI_SMALL), p.faint).size().x) + 8.0;
+            let mut job = egui::text::LayoutJob::single_section(t.clone(), egui::TextFormat { font_id: FontId::proportional(UI_SMALL), color: p.faint, ..Default::default() });
+            job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() * 0.5);
+            let g = ui.fonts(|f| f.layout_job(job));
+            let gw = g.size().x;
+            painter.galley(egui::pos2(right - gw, cy - g.size().y / 2.0), g, p.faint);
+            right -= gw.max(24.0) + 10.0;
         }
         let color = if self.dim { p.faint } else if self.selected { p.text } else { p.text.gamma_multiply(0.92) };
         let font = if self.selected { medium(UI) } else { FontId::proportional(UI) };
@@ -214,4 +217,48 @@ pub fn search_field(ui: &mut Ui, text: &mut String, hint: &str, p: Palette) -> R
         .inner
     });
     r.inner
+}
+
+/// An on/off switch.
+pub fn toggle(ui: &mut Ui, on: &mut bool, p: Palette) -> Response {
+    let (rect, mut r) = ui.allocate_exact_size(egui::vec2(34.0, 20.0), Sense::click());
+    if r.clicked() {
+        *on = !*on;
+        r.mark_changed();
+    }
+    let t = ui.ctx().animate_bool_with_time(r.id, *on, 0.12);
+    let track = if *on { p.accent_strong } else { p.border_strong };
+    ui.painter().rect_filled(rect, 10.0, track);
+    let x = egui::lerp((rect.left() + 10.0)..=(rect.right() - 10.0), t);
+    ui.painter().circle_filled(egui::pos2(x, rect.center().y), 8.0, Color32::WHITE);
+    r
+}
+
+/// A settings row: label and description on the left, the control on the right.
+pub fn setting<R>(ui: &mut Ui, label: &str, desc: &str, p: Palette, control: impl FnOnce(&mut Ui) -> R) -> R {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        let w = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(w * 0.55, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.label(RichText::new(label).font(medium(UI)).color(p.text));
+            if !desc.is_empty() {
+                ui.label(RichText::new(desc).size(UI_SMALL + 0.5).color(p.faint));
+            }
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            out = Some(control(ui));
+        });
+    });
+    ui.add_space(12.0);
+    hairline(ui, p);
+    ui.add_space(12.0);
+    out.unwrap()
+}
+
+/// A veil over the app behind a modal (drawn, not clickable).
+pub fn scrim(ctx: &egui::Context, p: Palette) {
+    let screen = ctx.screen_rect();
+    egui::Area::new(egui::Id::new("modal-scrim")).order(egui::Order::Middle).interactable(false).fixed_pos(screen.min).show(ctx, |ui| {
+        ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(if p.dark { 110 } else { 46 }));
+    });
 }

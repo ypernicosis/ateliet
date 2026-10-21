@@ -140,7 +140,7 @@ impl Templater {
     }
 
     /// The dialog of a waiting prompt.
-    pub fn show_prompt(&mut self, ctx: &egui::Context) {
+    pub fn show_prompt(&mut self, ctx: &egui::Context, pal: crate::theme::Palette) {
         let Some(p) = &mut self.current else { return };
         let kind = p.request["kind"].as_str().unwrap_or_default().to_string();
         if kind == "clipboard" {
@@ -151,64 +151,102 @@ impl Templater {
         }
         let mut answer: Option<Option<Value>> = None;
         let title = p.request["text"].as_str().or(p.request["placeholder"].as_str()).filter(|s| !s.is_empty()).unwrap_or("Templater").to_string();
-        egui::Window::new(title).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 120.0]).default_width(420.0).show(ctx, |ui| match kind.as_str() {
-            "prompt" => {
-                let multiline = p.request["multiline"].as_bool().unwrap_or(false);
-                let r = if multiline { ui.add(egui::TextEdit::multiline(&mut p.input).desired_width(400.0)) } else { ui.add(egui::TextEdit::singleline(&mut p.input).desired_width(400.0)) };
-                r.request_focus();
-                let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && (!multiline || i.modifiers.command));
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() || enter {
-                        answer = Some(Some(json!(p.input.clone())));
+        crate::kit::scrim(ctx, pal);
+        let sel_id = egui::Id::new("tp-suggest-sel");
+        egui::Window::new("templater-prompt").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 110.0]).show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.label(egui::RichText::new(&title).font(crate::kit::medium(15.0)).color(pal.text));
+            ui.add_space(12.0);
+            match kind.as_str() {
+                "prompt" => {
+                    let multiline = p.request["multiline"].as_bool().unwrap_or(false);
+                    let r = if multiline {
+                        ui.add(egui::TextEdit::multiline(&mut p.input).desired_width(f32::INFINITY).desired_rows(4).margin(egui::Margin::symmetric(10, 7)))
+                    } else {
+                        ui.add(egui::TextEdit::singleline(&mut p.input).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(10, 7)))
+                    };
+                    r.request_focus();
+                    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) && (!multiline || i.modifiers.command));
+                    ui.add_space(14.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::kit::primary(ui, "Confirmar", pal).clicked() || enter {
+                            answer = Some(Some(json!(p.input.clone())));
+                        }
+                        if crate::kit::button(ui, None, "Cancelar", pal).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            answer = Some(None);
+                        }
+                    });
+                }
+                "suggester" => {
+                    let labels: Vec<String> = p.request["labels"].as_array().map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default();
+                    let r = crate::kit::search_field(ui, &mut p.input, "Filtrar", pal);
+                    r.request_focus();
+                    let needle = p.input.to_lowercase();
+                    let shown: Vec<usize> = (0..labels.len()).filter(|&i| labels[i].to_lowercase().contains(&needle)).collect();
+                    let mut sel: usize = ui.data(|d| d.get_temp(sel_id)).unwrap_or(0);
+                    if r.changed() {
+                        sel = 0;
                     }
-                    if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                        answer = Some(None);
+                    if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) && !shown.is_empty() {
+                        sel = (sel + 1) % shown.len();
                     }
-                });
-            }
-            "suggester" => {
-                let labels: Vec<String> = p.request["labels"].as_array().map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default();
-                let r = ui.add(egui::TextEdit::singleline(&mut p.input).hint_text("Filter…").desired_width(400.0));
-                r.request_focus();
-                let needle = p.input.to_lowercase();
-                let shown: Vec<usize> = (0..labels.len()).filter(|&i| labels[i].to_lowercase().contains(&needle)).collect();
-                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                    for &i in &shown {
-                        if ui.selectable_label(false, &labels[i]).clicked() {
+                    if ui.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !shown.is_empty() {
+                        sel = (sel + shown.len() - 1) % shown.len();
+                    }
+                    sel = sel.min(shown.len().saturating_sub(1));
+                    ui.add_space(8.0);
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 2.0;
+                        for (k, &i) in shown.iter().enumerate() {
+                            let row = crate::kit::Row::new(&labels[i]).selected(k == sel).show(ui, pal);
+                            if k == sel {
+                                row.scroll_to_me(None);
+                            }
+                            if row.clicked() {
+                                answer = Some(Some(json!(i)));
+                            }
+                        }
+                        if shown.is_empty() {
+                            ui.label(egui::RichText::new("Nada encontrado").color(pal.faint));
+                        }
+                    });
+                    ui.data_mut(|d| d.insert_temp(sel_id, sel));
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if let Some(&i) = shown.get(sel) {
                             answer = Some(Some(json!(i)));
                         }
                     }
-                });
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if let Some(&i) = shown.first() {
-                        answer = Some(Some(json!(i)));
-                    }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    answer = Some(None);
-                }
-            }
-            "multi_suggester" => {
-                let labels: Vec<String> = p.request["labels"].as_array().map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default();
-                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-                    for (i, l) in labels.iter().enumerate() {
-                        if let Some(b) = p.picked.get_mut(i) {
-                            ui.checkbox(b, l);
-                        }
-                    }
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("OK").clicked() {
-                        let picked: Vec<usize> = p.picked.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect();
-                        answer = Some(Some(json!(picked)));
-                    }
-                    if ui.button("Cancel").clicked() {
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         answer = Some(None);
                     }
-                });
+                }
+                "multi_suggester" => {
+                    let labels: Vec<String> = p.request["labels"].as_array().map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect()).unwrap_or_default();
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for (i, l) in labels.iter().enumerate() {
+                            if let Some(b) = p.picked.get_mut(i) {
+                                ui.checkbox(b, l);
+                            }
+                        }
+                    });
+                    ui.add_space(14.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::kit::primary(ui, "Confirmar", pal).clicked() {
+                            let picked: Vec<usize> = p.picked.iter().enumerate().filter(|(_, b)| **b).map(|(i, _)| i).collect();
+                            answer = Some(Some(json!(picked)));
+                        }
+                        if crate::kit::button(ui, None, "Cancelar", pal).clicked() {
+                            answer = Some(None);
+                        }
+                    });
+                }
+                _ => answer = Some(None),
             }
-            _ => answer = Some(None),
         });
+        if answer.is_some() {
+            ctx.data_mut(|d| d.remove::<usize>(sel_id));
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        }
         if let Some(a) = answer {
             let _ = p.reply.send(a);
             self.current = None;

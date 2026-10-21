@@ -78,6 +78,7 @@ impl Form {
         let mut out = None;
         let mut close = false;
         let p = self.palette;
+        kit::scrim(ctx, p);
         egui::Window::new(self.title.clone()).title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 100.0]).show(ctx, |ui| {
             ui.set_width(460.0);
             ui.label(RichText::new(&self.title).font(kit::medium(16.0)).color(p.text));

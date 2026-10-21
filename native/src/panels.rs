@@ -559,7 +559,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 app.left_open = !app.left_open;
             }
             ui.add_space(4.0);
-            let right_w = 70.0;
+            let right_w = 88.0;
             let avail = (ui.available_width() - right_w).max(100.0);
             let n = app.tabs.len().max(1) as f32;
             let tab_w = (avail / n - 2.0).clamp(110.0, 220.0);
@@ -717,6 +717,7 @@ pub fn ask_dialog(app: &mut App, ctx: &egui::Context) {
     let Some(ask) = &mut app.ask else { return };
     let mut done: Option<bool> = None;
     let confirm = matches!(ask.kind, AskKind::ConfirmDelete(_));
+    kit::scrim(ctx, p);
     egui::Window::new(ask.title.clone()).title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 140.0]).show(ctx, |ui| {
         ui.set_width(400.0);
         ui.label(RichText::new(&ask.title).font(kit::medium(15.0)).color(p.text));
@@ -782,93 +783,146 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     if !app.settings_open {
         return;
     }
-    let mut open = true;
+    let p = app.palette;
+    let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let mut retheme = false;
-    egui::Window::new("Settings").open(&mut open).default_width(480.0).collapsible(false).show(ctx, |ui| {
+    let page_id = egui::Id::new("settings-page");
+    let mut page: usize = ctx.data(|d| d.get_temp(page_id)).unwrap_or(0);
+    kit::scrim(ctx, p);
+    let pages = [(icons::PALETTE, "Aparência"), (icons::PEN_LINE, "Editor"), (icons::CALENDAR_DAYS, "Notas diárias"), (icons::LAYOUT_TEMPLATE, "Templater"), (icons::TABLE, "Dataview"), (icons::CALENDAR, "Calendário"), (icons::INFO, "Sobre")];
+    let win = egui::Window::new("settings").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::ZERO).corner_radius(14.0)).show(ctx, |ui| {
         let Some(cfg) = app.cfg.clone() else { return };
-        egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-            ui.heading("Appearance");
-            if ui.checkbox(&mut app.appearance.dark, "Dark theme").changed() {
-                retheme = true;
-            }
-            ui.horizontal(|ui| {
-                ui.label("Accent colour");
-                let mut c = egui::Color32::from_rgb(app.appearance.accent[0], app.appearance.accent[1], app.appearance.accent[2]);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    app.appearance.accent = [c.r(), c.g(), c.b()];
-                    retheme = true;
+        ui.set_width(760.0);
+        ui.set_height(520.0);
+        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+        ui.horizontal_top(|ui| {
+            // categories
+            let (side, _) = ui.allocate_exact_size(egui::vec2(200.0, 520.0), Sense::hover());
+            ui.painter().rect_filled(side, egui::CornerRadius { nw: 14, sw: 14, ne: 0, se: 0 }, p.bg_secondary);
+            ui.painter().vline(side.right() - 0.5, side.y_range(), egui::Stroke::new(1.0_f32, p.border));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(side.shrink2(egui::vec2(10.0, 14.0))).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                ui.label(RichText::new("Configurações").font(kit::medium(14.0)).color(p.text));
+                ui.add_space(12.0);
+                for (i, (g, label)) in pages.iter().enumerate() {
+                    if kit::Row::new(label).icon(g).selected(page == i).show(ui, p).clicked() {
+                        page = i;
+                    }
                 }
             });
-            if ui.add(egui::Slider::new(&mut app.appearance.font_size, 12.0..=26.0).text("Font size")).changed() {
-                retheme = true;
-            }
-            if ui.checkbox(&mut app.readable, "Readable line length").changed() {
-                cfg.merge("app.json", serde_json::json!({ "readableLineLength": app.readable }));
-            }
-            let mut read = app.default_mode == Mode::Read;
-            if ui.checkbox(&mut read, "Open notes in reading view").changed() {
-                app.default_mode = if read { Mode::Read } else { Mode::Edit };
-                cfg.merge("app.json", serde_json::json!({ "defaultViewMode": if read { "preview" } else { "source" } }));
-            }
-            ui.separator();
-            ui.heading("Daily notes");
-            let mut changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Date format");
-                changed |= ui.text_edit_singleline(&mut app.daily.format).changed();
+            // the page
+            let (body, _) = ui.allocate_exact_size(egui::vec2(560.0, 520.0), Sense::hover());
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body.shrink2(egui::vec2(28.0, 22.0))).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(pages[page].1).font(kit::bold(18.0)).color(p.text));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if kit::icon_button(ui, icons::X, "Fechar (Esc)", false, p).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(18.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    let field = |ui: &mut egui::Ui, v: &mut String| ui.add(egui::TextEdit::singleline(v).desired_width(220.0).margin(egui::Margin::symmetric(8, 5))).changed();
+                    match page {
+                        0 => {
+                            if kit::setting(ui, "Tema escuro", "Interface e notas em fundo escuro.", p, |ui| kit::toggle(ui, &mut app.appearance.dark, p).changed()) {
+                                retheme = true;
+                            }
+                            let changed = kit::setting(ui, "Cor de destaque", "Links, seleção e botões principais.", p, |ui| {
+                                let mut c = egui::Color32::from_rgb(app.appearance.accent[0], app.appearance.accent[1], app.appearance.accent[2]);
+                                let r = ui.color_edit_button_srgba(&mut c);
+                                if r.changed() {
+                                    app.appearance.accent = [c.r(), c.g(), c.b()];
+                                }
+                                r.changed()
+                            });
+                            retheme |= changed;
+                            if kit::setting(ui, "Tamanho do texto", "O tamanho das notas; a interface não muda.", p, |ui| {
+                                ui.spacing_mut().slider_width = 140.0;
+                                ui.add(egui::Slider::new(&mut app.appearance.font_size, 12.0..=26.0).max_decimals(0)).changed()
+                            }) {
+                                retheme = true;
+                            }
+                        }
+                        1 => {
+                            if kit::setting(ui, "Largura de leitura", "Limita a largura do texto para uma leitura confortável.", p, |ui| kit::toggle(ui, &mut app.readable, p).changed()) {
+                                cfg.merge("app.json", serde_json::json!({ "readableLineLength": app.readable }));
+                            }
+                            let mut read = app.default_mode == Mode::Read;
+                            if kit::setting(ui, "Abrir em modo leitura", "Notas abrem renderizadas; Ctrl+E alterna.", p, |ui| kit::toggle(ui, &mut read, p).changed()) {
+                                app.default_mode = if read { Mode::Read } else { Mode::Edit };
+                                cfg.merge("app.json", serde_json::json!({ "defaultViewMode": if read { "preview" } else { "source" } }));
+                            }
+                            if kit::setting(ui, "Pré-visualização ao vivo", "Mostra a nota formatada, exceto o bloco em edição.", p, |ui| kit::toggle(ui, &mut app.live_preview, p).changed()) {
+                                cfg.merge("app.json", serde_json::json!({ "livePreview": app.live_preview }));
+                            }
+                        }
+                        2 => {
+                            let mut changed = false;
+                            changed |= kit::setting(ui, "Formato da data", "Como o nome da nota diária é escrito (ex.: YYYY-MM-DD).", p, |ui| field(ui, &mut app.daily.format));
+                            changed |= kit::setting(ui, "Pasta", "Onde as notas diárias são criadas.", p, |ui| field(ui, &mut app.daily.folder));
+                            changed |= kit::setting(ui, "Modelo", "Nota usada como ponto de partida.", p, |ui| field(ui, &mut app.daily.template));
+                            if changed {
+                                app.daily.save(&cfg);
+                            }
+                        }
+                        3 => {
+                            if kit::setting(ui, "Pasta de modelos", "Onde ficam os modelos do Templater.", p, |ui| field(ui, &mut app.templater_settings.folder)) {
+                                app.templater_settings.save(&cfg);
+                            }
+                        }
+                        4 => {
+                            let mut dv_changed = false;
+                            dv_changed |= kit::setting(ui, "Formato de data", "Como as datas aparecem em consultas.", p, |ui| field(ui, &mut app.dv_settings.date_format));
+                            dv_changed |= kit::setting(ui, "Formato de data e hora", "", p, |ui| field(ui, &mut app.dv_settings.datetime_format));
+                            if dv_changed {
+                                app.caches.clear_queries();
+                                let mut v = cfg.tool("dataview", "dataview");
+                                if !v.is_object() {
+                                    v = serde_json::json!({});
+                                }
+                                v["defaultDateFormat"] = serde_json::json!(app.dv_settings.date_format);
+                                v["defaultDateTimeFormat"] = serde_json::json!(app.dv_settings.datetime_format);
+                                cfg.merge("ateliet/dataview.json", v);
+                            }
+                        }
+                        5 => {
+                            let c = &mut app.calendar;
+                            let mut wpd = c.words_per_dot as f32;
+                            if kit::setting(ui, "Palavras por ponto", "Cada ponto sob um dia representa esta quantidade de palavras.", p, |ui| {
+                                ui.spacing_mut().slider_width = 140.0;
+                                ui.add(egui::Slider::new(&mut wpd, 50.0..=1000.0).max_decimals(0)).changed()
+                            }) {
+                                c.words_per_dot = wpd as u32;
+                                cfg.merge("ateliet/calendar.json", serde_json::json!({ "wordsPerDot": c.words_per_dot }));
+                            }
+                        }
+                        _ => {
+                            ui.label(RichText::new("Ateliet").font(kit::bold(16.0)).color(p.text));
+                            ui.add_space(4.0);
+                            ui.label(RichText::new("Interface nativa, sem navegador embutido.").color(p.muted));
+                            ui.add_space(16.0);
+                            kit::section(ui, "Cofre", p);
+                            ui.label(RichText::new(app.vault.as_ref().map(|v| v.root.display().to_string()).unwrap_or_default()).size(12.5).color(p.muted));
+                            ui.add_space(16.0);
+                            kit::section(ui, "Fontes", p);
+                            ui.label(RichText::new("Inter (SIL OFL 1.1) · ícones Lucide (ISC)").size(12.5).color(p.muted));
+                        }
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                ui.label("Folder");
-                changed |= ui.text_edit_singleline(&mut app.daily.folder).changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Template");
-                changed |= ui.text_edit_singleline(&mut app.daily.template).changed();
-            });
-            if changed {
-                app.daily.save(&cfg);
-            }
-            ui.separator();
-            ui.heading("Templater");
-            ui.horizontal(|ui| {
-                ui.label("Template folder");
-                if ui.text_edit_singleline(&mut app.templater_settings.folder).changed() {
-                    app.templater_settings.save(&cfg);
-                }
-            });
-            ui.separator();
-            ui.heading("Dataview");
-            let mut dv_changed = false;
-            ui.horizontal(|ui| {
-                ui.label("Date format");
-                dv_changed |= ui.text_edit_singleline(&mut app.dv_settings.date_format).changed();
-            });
-            ui.horizontal(|ui| {
-                ui.label("Date and time format");
-                dv_changed |= ui.text_edit_singleline(&mut app.dv_settings.datetime_format).changed();
-            });
-            if dv_changed {
-                app.caches.clear_queries();
-                let mut v = cfg.tool("dataview", "dataview");
-                if !v.is_object() {
-                    v = serde_json::json!({});
-                }
-                v["defaultDateFormat"] = serde_json::json!(app.dv_settings.date_format);
-                v["defaultDateTimeFormat"] = serde_json::json!(app.dv_settings.datetime_format);
-                cfg.merge("ateliet/dataview.json", v);
-            }
-            ui.separator();
-            ui.heading("Calendar");
-            let c = &mut app.calendar;
-            let mut wpd = c.words_per_dot as f32;
-            if ui.add(egui::Slider::new(&mut wpd, 50.0..=1000.0).text("Words per dot")).changed() {
-                c.words_per_dot = wpd as u32;
-                cfg.merge("ateliet/calendar.json", serde_json::json!({ "wordsPerDot": c.words_per_dot }));
-            }
-            ui.separator();
-            ui.label(RichText::new(format!("Vault: {}", app.vault.as_ref().map(|v| v.root.display().to_string()).unwrap_or_default())).small().color(app.palette.muted));
         });
     });
+    ctx.data_mut(|d| d.insert_temp(page_id, page));
+    // a click outside closes (but not the click that opened it)
+    if let Some(w) = win {
+        let outside = ctx.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|pos| !w.response.rect.contains(pos) && pos.x > 48.0));
+        if outside && !ctx.memory(|m| m.any_popup_open()) {
+            close = true;
+        }
+    }
     if retheme {
         if let Some(cfg) = &app.cfg {
             app.appearance.save(cfg);
@@ -876,25 +930,44 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
         app.palette = crate::theme::apply(ctx, &app.appearance);
         app.caches.clear_queries();
     }
-    app.settings_open = open;
+    if close {
+        app.settings_open = false;
+    }
 }
 
 pub fn vault_picker(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show(ctx, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg_secondary)).show(ctx, |ui| {
         ui.vertical_centered(|ui| {
-            ui.add_space(ui.available_height() * 0.2);
-            ui.label(RichText::new("Ateliet").size(34.0).family(egui::FontFamily::Name("bold".into())));
-            ui.add_space(20.0);
+            ui.add_space((ui.available_height() * 0.16).max(30.0));
+            ui.label(kit::icon(icons::FEATHER, 34.0).color(p.accent_strong));
+            ui.add_space(12.0);
+            ui.label(RichText::new("Ateliet").font(kit::bold(30.0)).color(p.text));
+            ui.add_space(4.0);
+            ui.label(RichText::new("Escolha um cofre para começar.").color(p.muted));
+            ui.add_space(26.0);
             let mut chosen = None;
-            for v in config::known_vaults().into_iter().take(12) {
-                let name = v.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if ui.add(egui::Button::new(RichText::new(format!("{name}   {}", v.display())).size(15.0)).min_size(egui::vec2(420.0, 30.0))).clicked() {
-                    chosen = Some(v);
+            egui::Frame::new().fill(p.bg).stroke(egui::Stroke::new(1.0_f32, p.border)).corner_radius(12.0).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
+                ui.set_width(460.0);
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let vaults = config::known_vaults();
+                if vaults.is_empty() {
+                    ui.add_space(10.0);
+                    ui.label(RichText::new("Nenhum cofre aberto ainda.").color(p.faint));
+                    ui.add_space(10.0);
                 }
-            }
-            ui.add_space(14.0);
-            if ui.button(RichText::new("Open folder as vault…").size(15.0)).clicked() {
+                for v in vaults.into_iter().take(10) {
+                    let name = v.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    let parent = v.parent().map(|d| d.display().to_string()).unwrap_or_default();
+                    let mut row = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).trailing(parent);
+                    row.height = 38.0;
+                    if row.show(ui, p).clicked() {
+                        chosen = Some(v);
+                    }
+                }
+            });
+            ui.add_space(16.0);
+            if kit::primary_icon(ui, icons::FOLDER_OPEN, "Abrir pasta como cofre", p).clicked() {
                 chosen = rfd::FileDialog::new().pick_folder();
             }
             if let Some(v) = chosen {

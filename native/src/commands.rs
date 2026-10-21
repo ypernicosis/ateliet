@@ -378,6 +378,7 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
         Kind::Templates { .. } => "Escolha um modelo",
     };
     let p = app.palette;
+    kit::scrim(ctx, p);
     egui::Window::new("palette")
         .title_bar(false)
         .resizable(false)
