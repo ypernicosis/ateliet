@@ -642,6 +642,22 @@ impl Index {
         Link { path, display, subpath: sub, embed }
     }
 
+    /// Notes linking to `path`.
+    pub fn inlinks(&self, path: &str) -> Vec<String> {
+        self.inlinks.get(path).cloned().unwrap_or_default()
+    }
+
+    /// Every tag with the number of notes carrying it.
+    pub fn tag_counts(&self) -> Vec<(String, usize)> {
+        let mut m: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for p in self.pages.values() {
+            for t in &p.tags {
+                *m.entry(t.clone()).or_default() += 1;
+            }
+        }
+        m.into_iter().collect()
+    }
+
     pub fn page(&self, path: &str) -> Option<&Page> {
         self.pages.get(path)
     }
