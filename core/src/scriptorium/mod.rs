@@ -4,6 +4,10 @@
 //! vault works the same in both.
 
 pub mod book;
+pub mod css;
+pub mod docx;
+pub mod export;
+pub mod manuscript;
 pub mod stats;
 
 use once_cell::sync::Lazy;

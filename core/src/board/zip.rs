@@ -78,35 +78,50 @@ pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
 
 /// A stored (uncompressed) zip of the given entries.
 pub fn write(entries: &[(String, &[u8])]) -> Vec<u8> {
-    let total: usize = entries.iter().map(|(n, d)| 30 + 46 + 2 * n.len() + d.len()).sum::<usize>() + 22;
-    let mut out = Vec::with_capacity(total);
+    let e: Vec<(String, &[u8], bool)> = entries.iter().map(|(n, d)| (n.clone(), *d, false)).collect();
+    write_with(&e)
+}
+
+/// A zip where entries marked `true` are deflated (the others stored).
+pub fn write_with(entries: &[(String, &[u8], bool)]) -> Vec<u8> {
+    use std::io::Write;
+    let mut out = Vec::new();
     let mut central = Vec::new();
-    for (name, data) in entries {
+    for (name, data, deflate) in entries {
         let crc = crc32(data);
         let offset = out.len() as u32;
         let n = name.as_bytes();
+        let packed: Vec<u8>;
+        let (method, body): (u16, &[u8]) = if *deflate {
+            let mut enc = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            let _ = enc.write_all(data);
+            packed = enc.finish().unwrap_or_default();
+            if packed.len() < data.len() { (8, &packed) } else { (0, data) }
+        } else {
+            (0, data)
+        };
         // local header
         out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
         out.extend_from_slice(&20u16.to_le_bytes()); // version needed
         out.extend_from_slice(&0x0800u16.to_le_bytes()); // utf-8 names
-        out.extend_from_slice(&0u16.to_le_bytes()); // stored
+        out.extend_from_slice(&method.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // time/date
         out.extend_from_slice(&crc.to_le_bytes());
-        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out.extend_from_slice(&(n.len() as u16).to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes());
         out.extend_from_slice(n);
-        out.extend_from_slice(data);
+        out.extend_from_slice(body);
         // central directory entry
         central.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
         central.extend_from_slice(&20u16.to_le_bytes()); // made by
         central.extend_from_slice(&20u16.to_le_bytes());
         central.extend_from_slice(&0x0800u16.to_le_bytes());
-        central.extend_from_slice(&0u16.to_le_bytes());
+        central.extend_from_slice(&method.to_le_bytes());
         central.extend_from_slice(&0u32.to_le_bytes());
         central.extend_from_slice(&crc.to_le_bytes());
-        central.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        central.extend_from_slice(&(body.len() as u32).to_le_bytes());
         central.extend_from_slice(&(data.len() as u32).to_le_bytes());
         central.extend_from_slice(&(n.len() as u16).to_le_bytes());
         central.extend_from_slice(&[0u8; 8]); // extra and comment lengths, disk, internal attributes
@@ -138,6 +153,10 @@ mod tests {
         let z = write(&[("board.json".into(), &a), ("tiles/l/0_0.png".into(), &b)]);
         let back = read(&z).unwrap();
         assert_eq!(back.len(), 2);
+        let z2 = write_with(&[("a.txt".into(), &b, true), ("b".into(), &a, false)]);
+        let back2 = read(&z2).unwrap();
+        assert_eq!(back2[0].1, b);
+        assert!(z2.len() < 400);
         assert_eq!(back[0].0, "board.json");
         assert_eq!(back[0].1, a);
         assert_eq!(back[1].1, b);
