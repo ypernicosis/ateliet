@@ -371,7 +371,7 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
                 let active = app.active_path();
                 let acts = {
                     let (Some(v), Some(sc)) = (app.vault.as_ref(), app.sc.as_mut()) else { return };
-                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut app.caches, palette: app.palette };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut app.caches, palette: app.palette, dv: &app.dv_settings };
                     app.binder.ui(ui, &mut cx, active.as_deref())
                 };
                 for a in acts {
@@ -581,6 +581,8 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             ui.painter().rect_filled(shape.shrink2(egui::vec2(0.0, 3.0)).translate(egui::vec2(0.0, -2.0)), 7.0, p.bg_hover);
                         }
                         let glyph = match &t.view {
+                            Some(crate::sc::View::Sheet(_)) => icons::CONTACT,
+                            Some(crate::sc::View::Cast(_)) => icons::USERS,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
                             None => icons::FILE_TEXT,

@@ -8,6 +8,7 @@ pub mod css;
 pub mod docx;
 pub mod export;
 pub mod manuscript;
+pub mod sheet;
 pub mod stats;
 
 use once_cell::sync::Lazy;

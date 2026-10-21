@@ -54,6 +54,11 @@ impl App {
                 self.right_tab = crate::app::RightTab::Manuscript;
                 self.binder.book = book;
             }
+            "cast" => {
+                if let Some(b) = book {
+                    self.open(&format!("scriptorium:cast:{b}"), true);
+                }
+            }
             _ => self.open(&format!("scriptorium:{view}"), true),
         }
     }
@@ -139,6 +144,64 @@ impl App {
             }
             Action::Continue(b) => self.continue_book(&b),
             Action::Export(b) => self.open_export(&b),
+            Action::Pick(p) => self.picker = Some(*p),
+            Action::Saved(p) => {
+                if let Some(v) = &self.vault {
+                    v.index.write().unwrap().update(&[p]);
+                }
+            }
+            Action::Rename(p, name) => {
+                self.save_all();
+                self.rename(&p, &name);
+                let to = format!("{}{name}.md", p.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default());
+                if let Some(t) = self.tabs.iter_mut().find(|t| t.path == to) {
+                    if let Some(crate::sc::View::Sheet(s)) = t.view.as_mut() {
+                        s.path = to.clone();
+                    }
+                }
+            }
+            Action::AsMarkdown(p) => {
+                self.save_all();
+                if let Some(i) = self.tabs.iter().position(|t| t.path == p) {
+                    let text = self.vault.as_ref().and_then(|v| std::fs::read_to_string(v.abs(&p)).ok()).unwrap_or_default();
+                    let t = &mut self.tabs[i];
+                    t.view = None;
+                    t.text = text.clone();
+                    t.saved = text;
+                    t.mode = Mode::Edit;
+                }
+            }
+            Action::CreateSheetFor { sheet, list, idx, name } => {
+                let made = {
+                    let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_ref()) else { return };
+                    let ix = v.index.read().unwrap();
+                    book::book_for(&ix, &sheet, &sc.author()).map(|b| book::create_character(&v.root, &ix, &b, &name))
+                };
+                match made {
+                    Some(Ok(path)) => {
+                        self.written(std::slice::from_ref(&path));
+                        let base = path.rsplit('/').next().unwrap_or(&path).trim_end_matches(".md").to_string();
+                        if let Some(crate::sc::View::Sheet(s)) = self.tabs.iter_mut().find(|t| t.path == sheet).and_then(|t| t.view.as_mut()) {
+                            let mut l = s.sheet.list(&list);
+                            if idx < l.len() {
+                                l[idx] = json!(format!("[[{base}]]"));
+                            }
+                            s.sheet.fm.insert(list, Json::Array(l));
+                            s.changed();
+                        }
+                        self.open(&path, true);
+                    }
+                    Some(Err(e)) => self.toast(format!("Não foi possível criar a ficha: {e}")),
+                    None => self.toast("Esta ficha não pertence a um livro."),
+                }
+            }
+            Action::OpenLink(t, source, nt) => {
+                let target = self.vault.as_ref().and_then(|v| v.resolve(t.split('#').next().unwrap_or(&t), &source));
+                match target {
+                    Some(p) => self.open(&p, nt),
+                    None => self.open_link(&t, nt),
+                }
+            }
         }
     }
 
@@ -251,6 +314,23 @@ impl App {
     pub fn sprint_tick(&mut self) {
         if self.sprint.as_ref().is_some_and(|s| s.done()) {
             self.finish_sprint(false);
+        }
+    }
+
+    pub fn picker_ui(&mut self, ctx: &eframe::egui::Context) {
+        let p = self.palette;
+        let Some(pk) = self.picker.as_mut() else { return };
+        let (chosen, close) = pk.show(ctx, p);
+        if close {
+            let pk = self.picker.take().unwrap();
+            if let Some(v) = chosen {
+                let target = match &pk.purpose {
+                    crate::sc::picker::Purpose::Portrait(s) | crate::sc::picker::Purpose::Gallery(s) | crate::sc::picker::Purpose::Person(s, _) => s.clone(),
+                };
+                if let Some(crate::sc::View::Sheet(s)) = self.tabs.iter_mut().find(|t| t.path == target).and_then(|t| t.view.as_mut()) {
+                    s.picked(&pk.purpose, &v);
+                }
+            }
         }
     }
 

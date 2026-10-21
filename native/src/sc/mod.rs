@@ -4,6 +4,9 @@
 
 pub mod actions;
 pub mod binder;
+pub mod cast_ui;
+pub mod picker;
+pub mod sheet_ui;
 pub mod export_ui;
 pub mod focus;
 pub mod library;
@@ -56,6 +59,14 @@ pub enum Action {
     Trash(String),
     Continue(String),
     Export(String),
+    Pick(Box<picker::Picker>),
+    /// A sheet wrote its note.
+    Saved(String),
+    Rename(String, String),
+    AsMarkdown(String),
+    CreateSheetFor { sheet: String, list: String, idx: usize, name: String },
+    /// (target, source note, new tab)
+    OpenLink(String, String, bool),
 }
 
 impl Sc {
@@ -145,19 +156,23 @@ impl Sc {
 /// A Scriptorium screen open in a tab.
 pub enum View {
     Library(library::Library),
+    Cast(cast_ui::CastView),
+    Sheet(Box<sheet_ui::SheetView>),
 }
 
 impl View {
     pub fn title(&self) -> String {
         match self {
             View::Library(_) => "Biblioteca".into(),
+            View::Cast(_) => "Elenco".into(),
+            View::Sheet(s) => s.title(),
         }
     }
 
     pub fn from_path(path: &str) -> Option<View> {
         match path {
             "scriptorium:library" => Some(View::Library(library::Library::default())),
-            _ => None,
+            _ => path.strip_prefix("scriptorium:cast:").map(|b| View::Cast(cast_ui::CastView::new(b))),
         }
     }
 }

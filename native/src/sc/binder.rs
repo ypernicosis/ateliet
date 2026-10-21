@@ -59,6 +59,9 @@ impl Binder {
                 if kit::icon_button_sized(ui, icons::DOWNLOAD, "Exportar", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::Export(book.path.clone()));
                 }
+                if kit::icon_button_sized(ui, icons::USERS, "Elenco", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::View("cast".into(), Some(book.path.clone())));
+                }
                 if kit::icon_button_sized(ui, icons::USER_PLUS, "Novo personagem", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::NewCharacter(book.path.clone()));
                 }

@@ -144,6 +144,7 @@ pub struct App {
     pub binder: crate::sc::binder::Binder,
     pub form: Option<crate::form::Form>,
     pub export: Option<crate::sc::export_ui::ExportDialog>,
+    pub picker: Option<crate::sc::picker::Picker>,
     pub focus: Option<crate::sc::focus::Focus>,
     pub sprint: Option<crate::sc::focus::Sprint>,
     pub focus_restore: (bool, bool),
@@ -192,6 +193,7 @@ impl App {
             binder: Default::default(),
             form: None,
             export: None,
+            picker: None,
             focus: None,
             sprint: None,
             focus_restore: (true, true),
@@ -327,6 +329,29 @@ impl App {
         } else {
             None
         };
+        // characters open as their sheet (the plugin's "abrirFichas")
+        if !is_board && self.sc.as_ref().is_some_and(|s| s.settings.data["abrirFichas"].as_bool().unwrap_or(true)) {
+            // the index may still be building (session restore): read the note itself then
+            let kind = v.index.read().unwrap().page(path).map(|p| ateliet_core::scriptorium::book::kind(p).to_string()).unwrap_or_else(|| {
+                let text = std::fs::read_to_string(v.abs(path)).unwrap_or_default();
+                ateliet_core::scriptorium::sheet::split(&text).0.and_then(|m| m.get("scriptorium").and_then(|k| k.as_str()).map(str::to_string)).unwrap_or_default()
+            });
+            if kind == "personagem" || kind == "modelo-ficha" {
+                let view = crate::sc::View::Sheet(Box::new(crate::sc::sheet_ui::SheetView::open(path, &v.root)));
+                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view) };
+                if new_tab || self.tabs.is_empty() {
+                    self.tabs.push(tab);
+                    self.active = self.tabs.len() - 1;
+                } else {
+                    self.save_tab(self.active);
+                    self.tabs[self.active] = tab;
+                }
+                self.recent.retain(|p| p != path);
+                self.recent.insert(0, path.to_string());
+                self.save_session();
+                return;
+            }
+        }
         let text = if is_board { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
         let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: None };
         tab.board = board;
@@ -395,6 +420,12 @@ impl App {
         let Some(t) = self.tabs.get_mut(i) else { return };
         if let Some(b) = t.board.as_mut() {
             b.save();
+            return;
+        }
+        if let Some(crate::sc::View::Sheet(s)) = t.view.as_mut() {
+            if let Some(p) = s.save(&v.root) {
+                v.index.write().unwrap().update(&[p]);
+            }
             return;
         }
         if !t.dirty() {
@@ -757,6 +788,7 @@ impl eframe::App for App {
         panels::ask_dialog(self, ctx);
         self.form_ui(ctx);
         self.export_ui(ctx);
+        self.picker_ui(ctx);
         panels::settings_window(self, ctx);
         self.templater.show_prompt(ctx, self.palette);
         panels::toasts(self, ctx);
@@ -865,9 +897,11 @@ impl App {
             if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
                 let acts = {
                     let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };
-                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p, dv: &self.dv_settings };
                     match self.tabs[self.active].view.as_mut().unwrap() {
                         crate::sc::View::Library(l) => l.ui(ui, &mut cx),
+                        crate::sc::View::Cast(c) => c.ui(ui, &mut cx),
+                        crate::sc::View::Sheet(s) => s.ui(ui, &mut cx),
                     }
                 };
                 sc_actions = acts;

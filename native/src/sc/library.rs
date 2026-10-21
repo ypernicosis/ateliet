@@ -21,6 +21,7 @@ pub struct Cx<'a> {
     pub sc: &'a mut Sc,
     pub caches: &'a mut Caches,
     pub palette: Palette,
+    pub dv: &'a ateliet_core::dataview::Settings,
 }
 
 /// The cover: the book's picture (`capa`) or a plain coloured board with the title.
@@ -173,6 +174,9 @@ impl Library {
                             }
                             if kit::button(ui, Some(icons::LIST_TREE), "Manuscrito", p).clicked() {
                                 acts.push(Action::View("binder".into(), Some(b.path.clone())));
+                            }
+                            if kit::button(ui, Some(icons::USERS), "Elenco", p).clicked() {
+                                acts.push(Action::View("cast".into(), Some(b.path.clone())));
                             }
                             if kit::button(ui, Some(icons::FILE_PLUS), "Capítulo", p).clicked() {
                                 acts.push(Action::NewChapter(b.path.clone()));
