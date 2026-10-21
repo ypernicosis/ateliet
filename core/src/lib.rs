@@ -19,7 +19,9 @@ pub mod search;
 pub mod syntax;
 pub mod text;
 pub mod vault;
+#[cfg(feature = "vision")]
 pub mod clip;
+#[cfg(feature = "vision")]
 pub mod images;
 pub mod clipstudio;
 pub mod datefmt;

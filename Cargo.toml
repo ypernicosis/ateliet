@@ -1,13 +1,12 @@
+[workspace]
+members = [".", "core"]
+
 [package]
 name = "ateliet"
 version = "0.1.0"
 description = "A minimal, Obsidian-compatible markdown workshop"
 edition = "2021"
 default-run = "ateliet"
-
-[lib]
-name = "ateliet_core"
-path = "src/lib.rs"
 
 [[bin]]
 name = "ateliet"
@@ -18,24 +17,21 @@ path = "src/main.rs"
 # binaries fetched at build time. `ort-dynamic` loads a system library instead
 # (set ORT_DYLIB_PATH), for platforms or sandboxes without those binaries.
 default = ["ort-bundled"]
-ort-bundled = ["ort/download-binaries", "ort/tls-native"]
-ort-dynamic = ["ort/load-dynamic"]
+ort-bundled = ["ateliet_core/ort-bundled"]
+ort-dynamic = ["ateliet_core/ort-dynamic"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+ateliet_core = { path = "core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 notify = "8"
 walkdir = "2"
 rayon = "1"
-regex = "1"
-once_cell = "1"
 ureq = "2"
 base64 = "0.22"
 percent-encoding = "2"
@@ -43,14 +39,9 @@ dirs = "6"
 trash = "5"
 open = "5"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "rayon"] }
-ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "ndarray"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
 url = "2"
-flate2 = "1"
-rusqlite = { version = "0.32", features = ["bundled"] }
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
