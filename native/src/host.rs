@@ -90,6 +90,45 @@ pub fn image(ctx: &egui::Context, vault: &Vault, caches: &mut Caches, target: &s
     out
 }
 
+/// The front of a book's composed cover (`Capa.md`), drawn in the
+/// background; None while it is drawn or when the book has none.
+pub fn cover_front(ctx: &egui::Context, vault: &Vault, caches: &mut Caches, b: &ateliet_core::scriptorium::book::Book) -> Option<(egui::TextureId, egui::Vec2)> {
+    use ateliet_core::scriptorium::capa;
+    let rel = capa::path(b);
+    let mtime = std::fs::metadata(vault.abs(&rel)).and_then(|m| m.modified()).ok()?;
+    let k = key(&["capa", &b.path, &format!("{mtime:?}"), &b.fm["capa"].to_string()]);
+    if !caches.composed.contains_key(&k) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (root, index, b) = (vault.root.clone(), vault.index.clone(), b.clone());
+        std::thread::spawn(move || {
+            let out = (|| {
+                let m = capa::load(&root, &b)?;
+                let ix = index.read().ok()?;
+                let db = crate::fonts::book_fonts();
+                let pic = capa::front_rgba(&root, &ix, &b, &m, &db, 200, 420);
+                Some(egui::ColorImage::from_rgba_unmultiplied([pic.w as usize, pic.h as usize], &pic.rgba))
+            })();
+            let _ = tx.send(out);
+        });
+        caches.composed.insert(k, Composed::Pending(rx));
+    }
+    let slot = caches.composed.get_mut(&k)?;
+    if let Composed::Pending(rx) = slot {
+        match rx.try_recv() {
+            Ok(Some(img)) => {
+                let size = egui::vec2(img.size[0] as f32, img.size[1] as f32);
+                *slot = Composed::Ready(ctx.load_texture(format!("capa-{k}"), img, egui::TextureOptions::LINEAR), size);
+            }
+            Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => *slot = Composed::Failed,
+            Err(_) => ctx.request_repaint_after(std::time::Duration::from_millis(80)),
+        }
+    }
+    match slot {
+        Composed::Ready(t, s) => Some((t.id(), *s)),
+        _ => None,
+    }
+}
+
 impl Host for RenderHost<'_> {
     fn palette(&self) -> Palette {
         self.palette

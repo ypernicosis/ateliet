@@ -33,7 +33,7 @@ pub fn cover(ui: &mut egui::Ui, cx: &mut Cx, b: &Book, size: egui::Vec2) -> egui
         painter.rect_filled(rect.translate(egui::vec2(0.0, i * 0.6)).expand(i * 0.3), 6.0, Color32::from_black_alpha(a));
     }
     let capa = link_text(b.fm.get("capa").unwrap_or(&serde_json::Value::Null));
-    let tex = if capa.is_empty() { None } else { host::image(ui.ctx(), cx.vault, cx.caches, &capa, &b.path) };
+    let tex = host::cover_front(ui.ctx(), cx.vault, cx.caches, b).or_else(|| if capa.is_empty() { None } else { host::image(ui.ctx(), cx.vault, cx.caches, &capa, &b.path) });
     if let Some((id, sz)) = tex {
         // fill the board, cropping what overflows
         let k = (rect.width() / sz.x).max(rect.height() / sz.y);
