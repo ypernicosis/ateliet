@@ -1095,8 +1095,24 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// Pictures of the vault moved to another folder: renamed with their links.
+    fn move_pictures(&mut self, keys: Vec<String>, folder: &str) {
+        let n = keys.len();
+        for k in keys {
+            let name = k.rsplit('/').next().unwrap_or(&k).to_string();
+            let to = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+            self.rename(&k, &to);
+        }
+        self.images.rescan();
+        self.toast(format!("{n} {} para {}", if n == 1 { "imagem movida" } else { "imagens movidas" }, if folder.is_empty() { "a raiz" } else { folder }));
+    }
+
     fn image_mode(&mut self, ctx: &egui::Context) {
         let p = self.palette;
+        let mut moves: Option<(Vec<String>, String)> = None;
+        if let Some(n) = self.images.notice.take() {
+            self.toast(n);
+        }
         if let Some(v) = &self.vault {
             let root = v.root.clone();
             self.images.open(&root, ctx);
@@ -1104,8 +1120,13 @@ impl App {
         egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show(ctx, |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
-            self.images.collections_ui(ui, p);
+            if let Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) = self.images.collections_ui(ui, p) {
+                moves = Some((keys, folder));
+            }
         });
+        if let Some((keys, folder)) = moves {
+            self.move_pictures(keys, &folder);
+        }
         egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
@@ -1152,6 +1173,7 @@ impl App {
                 self.insert_pictures(&keys);
             }
             Some(crate::images_ui::ImageAction::OpenNote(n)) => self.open(&n, false),
+            Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) => self.move_pictures(keys, &folder),
             None => {}
         }
     }

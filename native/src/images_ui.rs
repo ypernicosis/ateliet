@@ -115,6 +115,10 @@ pub struct ImagesState {
     /// Shared collections: (name, members' absolute paths).
     collections: Vec<(String, HashSet<String>)>,
     pin: pinterest::PinState,
+    /// A shared collection being named: (its old name, or None for a new one; the text).
+    col_edit: Option<(Option<String>, String)>,
+    /// A message for the app to show.
+    pub notice: Option<String>,
 }
 
 impl Default for ImagesState {
@@ -140,6 +144,8 @@ impl Default for ImagesState {
             collection: None,
             collections: Vec::new(),
             pin: pinterest::PinState::default(),
+            col_edit: None,
+            notice: None,
         }
     }
 }
@@ -147,6 +153,8 @@ impl Default for ImagesState {
 /// What image mode asks the app to do.
 pub enum ImageAction {
     Insert(Vec<String>),
+    /// Move vault pictures into a vault folder (their links follow).
+    MoveTo(Vec<String>, String),
     NewNote(Vec<String>),
     OpenNote(String),
 }
@@ -370,7 +378,36 @@ impl ImagesState {
     }
 
     /// The collections column (left side in image mode).
-    pub fn collections_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+    /// The shared collections read again (after one was made, renamed, filled…).
+    fn reload_collections(&mut self) {
+        self.collections = self.shared.as_ref().map(|h| ateliet_core::pictogrep::collection_names(h).into_iter().map(|n| {
+            let members = ateliet_core::pictogrep::collection_images(h, &n).into_iter().map(|p| p.to_string_lossy().to_string()).collect();
+            (n, members)
+        }).collect()).unwrap_or_default();
+        self.shown_key = String::from("\u{0}");
+    }
+
+    /// Pictures put in a shared collection (as links, the way Pictogrep keeps them).
+    fn add_to_collection(&mut self, name: &str, idx: &[usize]) -> usize {
+        let Some(home) = self.shared.clone() else { return 0 };
+        let mut n = 0;
+        for &i in idx {
+            if ateliet_core::pictogrep::link(&home, name, Path::new(&self.entries[i].abs)).unwrap_or(false) {
+                n += 1;
+            }
+        }
+        ateliet_core::pictogrep::library_changed(&home, &idx.iter().map(|&i| PathBuf::from(&self.entries[i].abs)).collect::<Vec<_>>());
+        self.reload_collections();
+        n
+    }
+
+    /// The pictures a drag carries: the selection when the dragged one is in it.
+    fn dragged(&self, i: usize) -> Vec<usize> {
+        if self.selection.contains(&i) { self.selection.iter().copied().collect() } else { vec![i] }
+    }
+
+    pub fn collections_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) -> Option<ImageAction> {
+        let mut action = None;
         self.poll(ui.ctx());
         self.pin_tick(ui.ctx());
         self.pin_ui(ui.ctx(), p);
@@ -401,13 +438,94 @@ impl ImagesState {
                 self.viewer = None;
             }
             let names: Vec<(String, usize)> = self.collections.iter().map(|(n, m)| (n.clone(), m.len())).collect();
+            let home = self.shared.clone();
             for (name, n) in names {
-                if kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str())).show(ui, p).clicked() {
+                // renaming in place
+                if let Some((Some(old), text)) = &mut self.col_edit {
+                    if *old == name {
+                        let r = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()).margin(egui::Margin::symmetric(8, 4)));
+                        let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                        if !(enter || esc || r.clicked_elsewhere()) {
+                            r.request_focus();
+                        } else {
+                            let (old, text) = (old.clone(), text.trim().to_string());
+                            if enter && !text.is_empty() && text != old {
+                                if let Some(h) = &home {
+                                    match ateliet_core::pictogrep::rename_collection(h, &old, &text) {
+                                        Ok(new) => {
+                                            if self.collection.as_deref() == Some(old.as_str()) {
+                                                self.collection = Some(new);
+                                            }
+                                        }
+                                        Err(e) => self.notice = Some(e),
+                                    }
+                                }
+                            }
+                            self.col_edit = None;
+                            self.reload_collections();
+                        }
+                        continue;
+                    }
+                }
+                let r = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str())).show(ui, p);
+                // pictures dropped on a collection join it
+                if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
+                    let k = self.add_to_collection(&name, &idx);
+                    self.notice = Some(format!("{k} na coleção {name}"));
+                }
+                if r.dnd_hover_payload::<Vec<usize>>().is_some() {
+                    ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                }
+                if r.clicked() {
                     self.folder = None;
                     self.collection = Some(name.clone());
                     self.similar_to = None;
                     self.viewer = None;
                 }
+                r.context_menu(|ui| {
+                    if kit::menu_item(ui, icons::PEN_LINE, "Renomear", p) {
+                        self.col_edit = Some((Some(name.clone()), name.clone()));
+                        ui.close_menu();
+                    }
+                    if kit::menu_item(ui, icons::TRASH_2, "Excluir a coleção (as imagens ficam)", p) {
+                        if let Some(h) = &home {
+                            let _ = ateliet_core::pictogrep::delete_collection(h, &name);
+                        }
+                        if self.collection.as_deref() == Some(name.as_str()) {
+                            self.collection = None;
+                        }
+                        self.reload_collections();
+                        ui.close_menu();
+                    }
+                });
+            }
+            // a new collection: named, Enter
+            if let Some((None, text)) = &mut self.col_edit {
+                let r = ui.add(egui::TextEdit::singleline(text).hint_text("Nome da coleção").desired_width(ui.available_width()).margin(egui::Margin::symmetric(8, 4)));
+                let (enter, esc) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+                if !(enter || esc || r.clicked_elsewhere()) {
+                    r.request_focus();
+                } else {
+                    let text = text.trim().to_string();
+                    if enter && !text.is_empty() {
+                        if let Some(h) = &home {
+                            match ateliet_core::pictogrep::create_collection(h, &text) {
+                                Ok(n) => {
+                                    // the selected pictures go in right away
+                                    let sel: Vec<usize> = self.selection.iter().copied().collect();
+                                    if !sel.is_empty() {
+                                        self.add_to_collection(&n, &sel);
+                                    }
+                                }
+                                Err(e) => self.notice = Some(e),
+                            }
+                        }
+                    }
+                    self.col_edit = None;
+                    self.reload_collections();
+                }
+            } else if kit::Row::new("Nova coleção").icon(icons::PLUS).depth(1).show(ui, p).clicked() {
+                self.col_edit = Some((None, String::new()));
             }
         }
         ui.add_space(10.0);
@@ -435,6 +553,16 @@ impl ImagesState {
                 }
                 ui.painter().text(egui::pos2(thumb.right() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, if sel { kit::medium(13.0) } else { egui::FontId::proportional(13.0) }, p.text);
                 ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), egui::FontId::proportional(11.5), p.faint);
+                // pictures of the vault dropped on a folder move there (links follow)
+                if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
+                    let keys: Vec<String> = idx.iter().filter(|&&i| self.entries[i].origin == ateliet_core::images::Origin::Vault && self.entries[i].folder != folder).map(|&i| self.entries[i].key.clone()).collect();
+                    if !keys.is_empty() {
+                        action = Some(ImageAction::MoveTo(keys, folder.clone()));
+                    }
+                }
+                if r.dnd_hover_payload::<Vec<usize>>().is_some() {
+                    ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                }
                 if r.on_hover_text(&folder).clicked() {
                     self.collection = None;
                     self.folder = Some(folder.clone());
@@ -443,6 +571,7 @@ impl ImagesState {
                 }
             }
         });
+        action
     }
 
     /// The mosaic or the viewer (centre in image mode).
@@ -516,7 +645,10 @@ impl ImagesState {
                     ui.spacing_mut().item_spacing.x = gap;
                     for c in 0..cols {
                         let Some(&i) = shown.get(r * cols + c) else { break };
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click_and_drag());
+                        if resp.drag_started() {
+                            resp.dnd_set_drag_payload(self.dragged(i));
+                        }
                         ui.painter().rect_filled(rect, 10.0, p.bg_secondary);
                         if let Some(t) = self.thumb(i) {
                             // fill the square, cropping the long side
@@ -560,6 +692,19 @@ impl ImagesState {
                             if kit::menu_item(ui, icons::CORNER_DOWN_RIGHT, "Inserir na nota", p) {
                                 action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
                                 ui.close_menu();
+                            }
+                            if self.shared.is_some() {
+                                let names: Vec<String> = self.collections.iter().map(|c| c.0.clone()).collect();
+                                ui.menu_button("Adicionar à coleção", |ui| {
+                                    for n in names {
+                                        if ui.button(&n).clicked() {
+                                            let idx = self.dragged(i);
+                                            let k = self.add_to_collection(&n, &idx);
+                                            self.notice = Some(format!("{k} na coleção {n}"));
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
                             }
                             if kit::menu_item(ui, icons::SQUARE_CHECK, if sel { "Desmarcar" } else { "Selecionar" }, p) {
                                 if !self.selection.remove(&i) {
