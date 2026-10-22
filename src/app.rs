@@ -1090,6 +1090,7 @@ impl eframe::App for App {
                 Some(Some(o)) => {
                     let clip = d.clip.take();
                     self.new_board_dlg = None;
+                    self.images_mode = false;
                     match clip {
                         Some(f) => self.new_board_from_clip(&f),
                         None => self.new_board_of(o),

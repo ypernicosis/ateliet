@@ -110,6 +110,7 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             if icon_button(ui, icons::IMAGES, "Modo imagem (Ctrl+Shift+I)", app.images_mode, p).clicked() {
                 app.images_mode = !app.images_mode;
             }
+            storyboards_button(app, ui, p);
             if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());
             }
@@ -150,6 +151,46 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             });
         });
     });
+}
+
+/// Storyboards: a new one, an infinite canvas, or one of the vault's, most
+/// recently changed first.
+fn storyboards_button(app: &mut App, ui: &mut egui::Ui, p: Palette) {
+    let on_board = !app.images_mode && app.active_tab().is_some_and(|t| t.board.is_some());
+    let r = icon_button(ui, icons::CLAPPERBOARD, "Storyboards", on_board, p);
+    let id = ui.make_persistent_id("ribbon-storyboards");
+    if r.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let mut boards: Vec<(String, u64)> = app.vault.as_ref().map(|v| v.files.iter().filter(|e| !e.folder && e.path.to_lowercase().ends_with(".storyboard")).map(|e| (e.path.clone(), e.mtime)).collect()).unwrap_or_default();
+    boards.sort_by_key(|b| std::cmp::Reverse(b.1));
+    let mut open: Option<String> = None;
+    egui::popup::popup_above_or_below_widget(ui, id, &r, egui::AboveOrBelow::Below, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(250.0);
+        if kit::menu_item(ui, icons::PLUS, "Novo storyboard…", p) {
+            app.new_board_dlg = Some(crate::board_ui::NewBoard::new());
+        }
+        if kit::menu_item(ui, icons::PEN_TOOL, "Nova tela infinita", p) {
+            app.images_mode = false;
+            app.new_board("canvas");
+        }
+        if !boards.is_empty() {
+            kit::menu_sep(ui, p);
+            for (path, _) in boards.iter().take(14) {
+                let name = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".storyboard");
+                if kit::menu_item(ui, icons::CLAPPERBOARD, name, p) {
+                    open = Some(path.clone());
+                }
+            }
+            if boards.len() > 14 {
+                ui.label(RichText::new(format!("e mais {} no explorador de arquivos", boards.len() - 14)).size(11.5).color(p.faint));
+            }
+        }
+    });
+    if let Some(path) = open {
+        app.images_mode = false;
+        app.open(&path, false);
+    }
 }
 
 fn toggle_left(app: &mut App, tab: LeftTab) {
@@ -847,7 +888,9 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             }
                         }
                         let rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 0.5));
-                        let hovered = r.hovered();
+                        // the pointer over the tab, its close button included (that
+                        // button takes the hover from the tab when under the pointer)
+                        let hovered = ui.rect_contains_pointer(rect) && !egui::DragAndDrop::has_any_payload(ui.ctx());
                         let shape = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y + 1.0));
                         if active {
                             ui.painter().rect(shape, egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 }, p.bg, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);

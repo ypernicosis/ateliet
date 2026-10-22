@@ -52,41 +52,40 @@ impl Binder {
             ui.label(RichText::new(&book.title).font(kit::medium(15.0)).color(p.text));
         }
         let stats = cx.sc.stats(&ix, &book);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{} palavras · {} hoje", fmt_n(stats.words as i64), fmt_n(cx.sc.settings.today_words(Some(&book.path))))).size(12.0).color(p.muted));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                if kit::icon_button_sized(ui, icons::DOWNLOAD, "Exportar", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::Export(book.path.clone()));
-                }
-                if kit::icon_button_sized(ui, icons::BOOK_OPEN, "Capa", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("capa".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::LAYOUT_TEMPLATE, "Diagramação", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("layout".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::GLOBE, "Mundo", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("mundo".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::WAYPOINTS, "Enredo", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("enredo".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::MUSIC, "Trilha", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("trilha".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::USERS, "Elenco", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("cast".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::USER_PLUS, "Novo personagem", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::NewCharacter(book.path.clone()));
-                }
-                if kit::icon_button_sized(ui, icons::LIBRARY_BIG, "Biblioteca", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::View("library".into(), Some(book.path.clone())));
-                }
-                if kit::icon_button_sized(ui, icons::FILE_PLUS, "Novo capítulo", false, p, 24.0, 14.0).clicked() {
-                    acts.push(Action::NewChapter(book.path.clone()));
-                }
-            });
+        ui.label(RichText::new(format!("{} palavras · {} hoje", fmt_n(stats.words as i64), fmt_n(cx.sc.settings.today_words(Some(&book.path))))).size(12.0).color(p.muted));
+        // the book's tools on a row of their own, wrapping when the panel is narrow
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            if kit::icon_button_sized(ui, icons::FILE_PLUS, "Novo capítulo", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::NewChapter(book.path.clone()));
+            }
+            if kit::icon_button_sized(ui, icons::LIBRARY_BIG, "Biblioteca", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("library".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::USER_PLUS, "Novo personagem", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::NewCharacter(book.path.clone()));
+            }
+            if kit::icon_button_sized(ui, icons::USERS, "Elenco", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("cast".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::MUSIC, "Trilha", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("trilha".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::WAYPOINTS, "Enredo", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("enredo".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::GLOBE, "Mundo", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("mundo".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::LAYOUT_TEMPLATE, "Diagramação", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("layout".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::BOOK_OPEN, "Capa", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::View("capa".into(), Some(book.path.clone())));
+            }
+            if kit::icon_button_sized(ui, icons::DOWNLOAD, "Exportar", false, p, 24.0, 14.0).clicked() {
+                acts.push(Action::Export(book.path.clone()));
+            }
         });
         if book.goal > 0 {
             ui.add_space(4.0);
