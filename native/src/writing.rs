@@ -214,7 +214,7 @@ pub fn after(ui: &mut egui::Ui, id: egui::Id, text: &mut String, out: &egui::tex
                     let r = ui.add(egui::TextEdit::multiline(note).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Texto da nota").color(p.faint)));
                     r.request_focus();
                     ui.horizontal(|ui| {
-                        if kit::primary(ui, "Inserir", p).clicked() || (ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command)) {
+                        if kit::primary(ui, "Inserir", p).clicked() || kit::cmd_enter(ui.ctx()) {
                             footnote_done = Some(note.clone());
                         }
                         if kit::quiet(ui, None, "Cancelar", p).clicked() {

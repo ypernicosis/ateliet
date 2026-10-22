@@ -22,14 +22,18 @@ pub enum Mode {
     Cronologia,
     Pistas,
     Arcos,
+    Mural,
+    Relacoes,
 }
 
-pub const MODES: [(Mode, &str, &str); 5] = [
+pub const MODES: [(Mode, &str, &str); 7] = [
     (Mode::Grade, icons::LAYOUT_GRID, "Grade"),
     (Mode::Escaleta, icons::LIST_ORDERED, "Escaleta"),
     (Mode::Cronologia, icons::CALENDAR_RANGE, "Cronologia"),
     (Mode::Pistas, icons::KEY_ROUND, "Pistas"),
     (Mode::Arcos, icons::TRENDING_UP, "Arcos"),
+    (Mode::Mural, icons::STICKY_NOTE, "Mural"),
+    (Mode::Relacoes, icons::NETWORK, "Relações"),
 ];
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -93,6 +97,8 @@ pub struct EnredoView {
     pub(super) st_dialog: Option<super::enredo_st::StDialog>,
     pub(super) st_editor: Option<Box<super::enredo_st::StEditor>>,
     pub(super) st_folder: String,
+    pub(super) board_state: super::enredo_board::Board,
+    pub(super) pending_open: Option<String>,
 }
 
 pub fn status_color(k: &str) -> Color32 {
@@ -146,6 +152,8 @@ impl EnredoView {
             st_dialog: None,
             st_editor: None,
             st_folder: String::new(),
+            board_state: Default::default(),
+            pending_open: None,
         }
     }
 
@@ -269,6 +277,8 @@ impl EnredoView {
             ui.painter().vline(rr.left(), rr.y_range(), Stroke::new(1.0_f32, p.border));
         }
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show_inside(ui, |ui| match self.mode {
+            Mode::Mural => self.board(ui, p, cx, &b, "mural", &chars, &mut acts),
+            Mode::Relacoes => self.board(ui, p, cx, &b, "relacoes", &chars, &mut acts),
             Mode::Grade => self.grade(ui, p, &b, &cols, &chars, &mut acts),
             Mode::Escaleta => self.escaleta(ui, p, &b, &cols, &root, &ix, &mut acts),
             Mode::Cronologia => self.cronologia(ui, p, &b, &cols),
@@ -280,6 +290,9 @@ impl EnredoView {
         self.arc_dialog(ui.ctx(), p, &ix);
         self.structures_dialog(ui.ctx(), p, &cols, &ix, &root);
         self.structure_editor(ui.ctx(), p, &ix, &root, &author, &mut acts);
+        if let Some(t) = self.pending_open.take() {
+            acts.push(Action::OpenLink(t, b.path.clone(), true));
+        }
         acts
     }
 
@@ -288,7 +301,7 @@ impl EnredoView {
             return;
         }
         let (esc, n, num) = ui.input(|i| {
-            let num = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5].iter().position(|k| i.key_pressed(*k) && !i.modifiers.command);
+            let num = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6, egui::Key::Num7].iter().position(|k| i.key_pressed(*k) && !i.modifiers.command);
             (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::N) && !i.modifiers.command && !i.modifiers.ctrl, num)
         });
         if esc {
@@ -309,6 +322,7 @@ impl EnredoView {
             Mode::Cronologia => self.new_event(),
             Mode::Pistas => self.new_pista(),
             Mode::Arcos => self.new_arc(),
+            Mode::Mural | Mode::Relacoes => {}
         }
     }
 
@@ -338,8 +352,9 @@ impl EnredoView {
                     Mode::Cronologia => "Evento",
                     Mode::Pistas => "Pista",
                     Mode::Arcos => "Arco",
+                    Mode::Mural | Mode::Relacoes => "",
                 };
-                if kit::primary_icon(ui, icons::PLUS, lab, p).on_hover_text(format!("Nova {} (N)", lab.to_lowercase())).clicked() {
+                if !lab.is_empty() && kit::primary_icon(ui, icons::PLUS, lab, p).on_hover_text(format!("Nova {} (N)", lab.to_lowercase())).clicked() {
                     self.primary();
                 }
                 if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Arcos) {

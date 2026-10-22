@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod binder;
 pub mod cast_ui;
+pub mod enredo_board;
 pub mod enredo_more;
 pub mod enredo_st;
 pub mod enredo_ui;

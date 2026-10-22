@@ -803,7 +803,7 @@ impl MundoView {
         let (mut save, mut cancel) = (false, false);
         ui.add_space(12.0);
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            save = kit::primary(ui, ok, p).clicked() || (ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command));
+            save = kit::primary(ui, ok, p).clicked() || kit::cmd_enter(ui.ctx());
             cancel = kit::button(ui, None, "Cancelar", p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
         });
         (save, cancel)

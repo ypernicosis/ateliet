@@ -366,3 +366,8 @@ pub fn menu_sep(ui: &mut Ui, p: Palette) {
     ui.painter().hline(rect.x_range().shrink(6.0), rect.center().y, Stroke::new(1.0_f32, p.border));
     ui.add_space(3.0);
 }
+
+/// Ctrl/Cmd+Enter this frame, even when a text field already used the Enter.
+pub fn cmd_enter(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.raw.events.iter().any(|e| matches!(e, egui::Event::Key { key: egui::Key::Enter, pressed: true, modifiers, .. } if modifiers.command)))
+}

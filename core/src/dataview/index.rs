@@ -665,6 +665,11 @@ impl Index {
         self.pages.get(path)
     }
 
+    /// Every file the index knows (notes and attachments).
+    pub fn file_paths(&self) -> impl Iterator<Item = &String> {
+        self.files.keys()
+    }
+
     pub fn page_paths(&self) -> impl Iterator<Item = &String> {
         self.pages.keys()
     }
