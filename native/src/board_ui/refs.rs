@@ -198,6 +198,16 @@ impl BoardEditor {
         self.add_references(pics, &format!("coleção {name}"));
     }
 
+    /// Pictures dropped on the storyboard become references.
+    pub fn add_reference_paths(&mut self, paths: &[PathBuf]) {
+        let pics = Self::read_pictures(paths, 200);
+        if !pics.is_empty() {
+            let n = pics.len();
+            self.add_references(pics, "arquivo");
+            self.error = Some(format!("{n} {} nas referências.", if n == 1 { "imagem" } else { "imagens" }));
+        }
+    }
+
     fn add_files(&mut self) {
         let Some(files) = rfd::FileDialog::new().add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "gif"]).pick_files() else { return };
         for f in files {

@@ -468,13 +468,21 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
         let clip = ui.clip_rect();
         ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
         let mut tab = app.right_tab;
-        header_tabs(ui, &mut tab, &[(RightTab::Calendar, icons::CALENDAR, "Calendário"), (RightTab::Backlinks, icons::LINK, "Backlinks"), (RightTab::Outline, icons::LIST, "Estrutura"), (RightTab::Tags, icons::HASH, "Tags"), (RightTab::Manuscript, icons::BOOK_TEXT, "Manuscrito")], p);
+        header_tabs(ui, &mut tab, &[(RightTab::Calendar, icons::CALENDAR, "Calendário"), (RightTab::Backlinks, icons::LINK, "Backlinks"), (RightTab::Outline, icons::LIST, "Estrutura"), (RightTab::Tags, icons::HASH, "Tags"), (RightTab::Manuscript, icons::BOOK_TEXT, "Manuscrito"), (RightTab::Pictures, icons::IMAGES, "Imagens")], p);
         app.right_tab = tab;
         match app.right_tab {
             RightTab::Backlinks => backlinks(app, ui),
             RightTab::Outline => outline(app, ui),
             RightTab::Tags => tags(app, ui),
             RightTab::Calendar => calendar_panel(app, ui),
+            RightTab::Pictures => {
+                if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
+                    app.images.open(&root, ui.ctx());
+                }
+                if let Some(crate::images_ui::ImageAction::Insert(keys)) = app.images.side_ui(ui, app.palette) {
+                    app.insert_pictures(&keys);
+                }
+            }
             RightTab::Manuscript => {
                 let active = app.active_path();
                 let acts = {

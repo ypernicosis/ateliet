@@ -95,6 +95,7 @@ pub enum RightTab {
     Tags,
     Calendar,
     Manuscript,
+    Pictures,
 }
 
 pub struct Toast {
@@ -969,6 +970,7 @@ impl eframe::App for App {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
+        self.drops_and_paste(ctx);
         if !self.themed {
             self.palette = theme::apply(ctx, &self.appearance);
             self.themed = true;
@@ -1162,8 +1164,11 @@ impl App {
         if !p.is_absolute() {
             return key.to_string();
         }
-        let st = crate::images_ui::ImagesState::settings(&v.root);
-        let folder = st["importFolder"].as_str().filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| self.active_path().map(|a| vault::parent(&a).to_string()).unwrap_or_default());
+        // already in the vault: its own path
+        if let Ok(rel) = p.strip_prefix(&v.root) {
+            return rel.to_string_lossy().replace('\\', "/");
+        }
+        let folder = self.attachment_folder();
         let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "imagem.png".into());
         let (stem, ext) = name.rsplit_once('.').map(|(a, b)| (a.to_string(), format!(".{b}"))).unwrap_or((name.clone(), String::new()));
         let mut rel = if folder.is_empty() { name.clone() } else { format!("{folder}/{name}") };
@@ -1181,6 +1186,70 @@ impl App {
         }
     }
 
+    /// Where files brought into notes go: the images setting's import
+    /// folder, else Obsidian's attachment folder (`/` the root, `./` the
+    /// note's folder), else the note's folder.
+    pub fn attachment_folder(&self) -> String {
+        let Some(v) = &self.vault else { return String::new() };
+        let st = crate::images_ui::ImagesState::settings(&v.root);
+        if let Some(f) = st["importFolder"].as_str().filter(|s| !s.is_empty()) {
+            return f.trim_matches('/').to_string();
+        }
+        let here = self.active_path().map(|a| vault::parent(&a).to_string()).unwrap_or_default();
+        let att = self.cfg.as_ref().map(|c| c.read("app.json")["attachmentFolderPath"].as_str().unwrap_or("./").to_string()).unwrap_or_else(|| "./".into());
+        match att.as_str() {
+            "/" | "" => String::new(),
+            "./" | "." => here,
+            a if a.starts_with("./") => {
+                let sub = a.trim_start_matches("./").trim_matches('/');
+                if here.is_empty() { sub.to_string() } else { format!("{here}/{sub}") }
+            }
+            a => a.trim_matches('/').to_string(),
+        }
+    }
+
+    /// Files dropped on the window, and an image pasted into a note.
+    fn drops_and_paste(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let board = self.tabs.get(self.active).is_some_and(|t| t.board.is_some());
+        let note = self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
+        if !dropped.is_empty() && !self.images_mode {
+            if board {
+                if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
+                    b.add_reference_paths(&dropped);
+                }
+            } else if note || self.tabs.is_empty() {
+                let keys: Vec<String> = dropped.iter().map(|p| p.to_string_lossy().to_string()).collect();
+                self.insert_pictures(&keys);
+                if let Some(v) = self.vault.as_mut() {
+                    v.rescan();
+                }
+            }
+        }
+        // a picture on the clipboard (no text): saved as an attachment and embedded
+        let paste = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(t) if t.is_empty()) || matches!(e, egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command)));
+        if paste && note && !self.images_mode {
+            let Ok(mut cb) = arboard::Clipboard::new() else { return };
+            if cb.get_text().is_ok_and(|t| !t.is_empty()) {
+                return;
+            }
+            let Ok(img) = cb.get_image() else { return };
+            let png = ateliet_core::board::tile::encode_png(&img.bytes, img.width as u32, img.height as u32);
+            let folder = self.attachment_folder();
+            let Some(v) = &self.vault else { return };
+            let stamp = chrono::Local::now().format("%Y%m%d%H%M%S").to_string();
+            let base = if folder.is_empty() { format!("Pasted image {stamp}") } else { format!("{folder}/Pasted image {stamp}") };
+            let rel = v.available_path(&base, "png");
+            if let Some(d) = v.abs(&rel).parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            if std::fs::write(v.abs(&rel), png).is_ok() {
+                self.vault.as_mut().unwrap().rescan();
+                self.insert_pictures(&[rel]);
+            }
+        }
+    }
+
     /// `![[picture]]` lines at the cursor of the open note (a new note when none is open).
     pub fn insert_pictures(&mut self, keys: &[String]) {
         if self.tabs.is_empty() {
@@ -1191,10 +1260,20 @@ impl App {
         let keys: Vec<String> = keys.iter().map(|k| self.picture_into_vault(k)).collect();
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let embeds: String = keys.iter().map(|k| format!("![[{}]]\n", k.rsplit('/').next().unwrap_or(k))).collect();
-        let b = editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));
+        let mut b = editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));
+        // never inside the frontmatter: after it
+        if let Some(rest) = t.text.strip_prefix("---\n") {
+            if let Some(i) = rest.find("\n---") {
+                let end = 4 + i + 4;
+                let end = t.text[end..].find('\n').map(|j| end + j + 1).unwrap_or(t.text.len());
+                if b < end {
+                    b = end;
+                }
+            }
+        }
         let prefix = if b > 0 && !t.text[..b].ends_with('\n') { "\n" } else { "" };
         t.text.insert_str(b, &format!("{prefix}{embeds}"));
-        t.cursor += prefix.chars().count() + embeds.chars().count();
+        t.cursor = editor::byte_to_char(&t.text, b) + prefix.chars().count() + embeds.chars().count();
         t.last_edit = Some(Instant::now());
         t.live.close();
         let msg = format!("{} picture(s) added to {}", keys.len(), vault::basename(&t.path));

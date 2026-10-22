@@ -583,6 +583,54 @@ impl ImagesState {
         action
     }
 
+    /// The pictures in the side panel of the writing mode: search, small
+    /// squares; a click puts the picture in the note.
+    pub fn side_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) -> Option<ImageAction> {
+        self.poll(ui.ctx());
+        let mut action = None;
+        kit::search_field(ui, &mut self.query, "Buscar imagens", p);
+        ui.add_space(8.0);
+        self.refresh_shown();
+        if self.shown.is_empty() {
+            ui.label(RichText::new(if self.scanning.is_some() { "Procurando imagens…" } else { "Nenhuma imagem." }).size(12.5).color(p.faint));
+            return None;
+        }
+        let gap = 6.0;
+        // room for the scroll bar
+        let avail_w = ui.available_width() - 14.0;
+        let cols = ((avail_w + gap) / (88.0 + gap)).floor().max(2.0) as usize;
+        let cell = ((avail_w - gap * (cols as f32 - 1.0)) / cols as f32).floor();
+        let rows = self.shown.len().div_ceil(cols);
+        let shown = self.shown.clone();
+        egui::ScrollArea::vertical().id_salt("side-pictures").auto_shrink([false, false]).show_rows(ui, cell + gap, rows, |ui, range| {
+            for r in range {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for c in 0..cols {
+                        let Some(&i) = shown.get(r * cols + c) else { break };
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click());
+                        ui.painter().rect_filled(rect, 6.0, p.bg_hover);
+                        if let Some(t) = self.thumb(i) {
+                            let e = &self.entries[i];
+                            let k = (e.width.max(1) as f32 / e.height.max(1) as f32).max(1e-3);
+                            let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
+                            ui.painter().add(egui::epaint::RectShape::filled(rect, 6.0, Color32::WHITE).with_texture(t, uv));
+                        }
+                        if resp.hovered() {
+                            ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                        }
+                        let name = self.entries[i].name.clone();
+                        if resp.on_hover_text(format!("{name}\nClique para pôr na nota")).clicked() {
+                            action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
+                        }
+                    }
+                });
+                ui.add_space(gap - ui.spacing().item_spacing.y);
+            }
+        });
+        action
+    }
+
     fn selected_keys(&self) -> Vec<String> {
         let mut v: Vec<usize> = self.selection.iter().copied().collect();
         v.sort();

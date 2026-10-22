@@ -50,6 +50,7 @@ pub enum Cmd {
     Back,
     Forward,
     ReplaceTemplates,
+    InsertPicture,
 }
 
 pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -91,6 +92,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Focus, "scriptorium-omena:modo-foco", "Scriptorium: Alternar modo foco"),
     (Cmd::Back, "app:go-back", "Voltar"),
     (Cmd::Forward, "app:go-forward", "Avançar"),
+    (Cmd::InsertPicture, "ateliet:insert-picture", "Inserir imagem…"),
     (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
@@ -183,6 +185,16 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
+        Cmd::InsertPicture => {
+            let start = app.vault.as_ref().map(|v| v.root.clone()).unwrap_or_default();
+            if let Some(files) = rfd::FileDialog::new().set_directory(start).add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"]).pick_files() {
+                let keys: Vec<String> = files.iter().map(|f| f.to_string_lossy().to_string()).collect();
+                app.insert_pictures(&keys);
+                if let Some(v) = app.vault.as_mut() {
+                    v.rescan();
+                }
+            }
+        }
         Cmd::ReplaceTemplates => {
             if let Some(c) = app.ctx.clone() {
                 app.replace_templates(&c);
