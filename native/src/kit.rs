@@ -119,11 +119,17 @@ pub struct Row<'a> {
     /// A coloured dot instead of an icon.
     pub dot: Option<Color32>,
     pub height: f32,
+    /// Can be dragged (to drop somewhere else).
+    pub drag: bool,
 }
 
 impl<'a> Row<'a> {
     pub fn new(label: &'a str) -> Row<'a> {
-        Row { label, icon: None, depth: 0, selected: false, dim: false, chevron: None, trailing: None, dot: None, height: 28.0 }
+        Row { label, icon: None, depth: 0, selected: false, dim: false, chevron: None, trailing: None, dot: None, height: 28.0, drag: false }
+    }
+    pub fn draggable(mut self) -> Self {
+        self.drag = true;
+        self
     }
     pub fn icon(mut self, g: &'a str) -> Self {
         self.icon = Some(g);
@@ -156,7 +162,7 @@ impl<'a> Row<'a> {
 
     pub fn show(self, ui: &mut Ui, p: Palette) -> Response {
         let w = ui.available_width();
-        let (rect, r) = ui.allocate_exact_size(egui::vec2(w, self.height), Sense::click());
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(w, self.height), if self.drag { Sense::click_and_drag() } else { Sense::click() });
         if !ui.is_rect_visible(rect) {
             return r;
         }

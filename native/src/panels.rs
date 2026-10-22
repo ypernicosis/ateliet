@@ -1,6 +1,7 @@
 //! Sidebars and chrome: ribbon, file explorer, search, bookmarks, backlinks,
 //! outline, tags, calendar, tab bar, status bar, dialogs and settings.
 
+use std::collections::HashMap;
 use crate::app::{App, Ask, AskKind, LeftTab, Mode, RightTab};
 use crate::config::{self, VaultConfig};
 use crate::vault::{self, Folder};
@@ -17,6 +18,16 @@ enum FileCmd {
     Reveal,
     External,
     Similar,
+    /// Move into this folder ("" is the root).
+    MoveTo(String),
+}
+
+/// What the explorer shows first (Obsidian's `fileSortOrder` values).
+const SORTS: [(&str, &str); 6] = [("alphabetical", "Nome (A a Z)"), ("alphabeticalReverse", "Nome (Z a A)"), ("byModifiedTime", "Editados por último"), ("byModifiedTimeReverse", "Editados primeiro"), ("byCreatedTime", "Criados por último"), ("byCreatedTimeReverse", "Criados primeiro")];
+
+struct Order<'a> {
+    sort: &'a str,
+    times: &'a HashMap<String, (u64, u64)>,
 }
 
 enum TabCmd {
@@ -188,6 +199,22 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
             if kit::icon_button_sized(ui, icons::SQUARE_PEN, "Nova nota (Ctrl+N)", false, p, 24.0, 14.0).clicked() {
                 app.new_note("");
             }
+            let sr = kit::icon_button_sized(ui, icons::ARROW_UP_DOWN, "Ordem", false, p, 24.0, 14.0);
+            let sid = ui.make_persistent_id("file-sort");
+            if sr.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(sid));
+            }
+            let cur = app.cfg.as_ref().map(|c| c.read("app.json")["fileSortOrder"].as_str().unwrap_or("alphabetical").to_string()).unwrap_or_default();
+            egui::popup_below_widget(ui, sid, &sr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                ui.set_min_width(190.0);
+                for (k, l) in SORTS {
+                    if ui.selectable_label(cur == k, l).clicked() {
+                        if let Some(c) = &app.cfg {
+                            c.merge("app.json", serde_json::json!({ "fileSortOrder": k }));
+                        }
+                    }
+                }
+            });
         });
     });
     ui.add_space(4.0);
@@ -197,10 +224,25 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
     let mut new_in: Option<String> = None;
     let marks = app.cfg.as_ref().map(|c| bookmarked(&c.read("bookmarks.json"))).unwrap_or_default();
     let mut cmd: Option<(String, FileCmd)> = None;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let sort = app.cfg.as_ref().map(|c| c.read("app.json")["fileSortOrder"].as_str().unwrap_or("alphabetical").to_string()).unwrap_or_default();
+    let times: HashMap<String, (u64, u64)> = match &app.vault {
+        Some(v) if !sort.starts_with("alpha") => v.files.iter().map(|e| (e.path.clone(), (e.mtime, e.ctime))).collect(),
+        _ => HashMap::new(),
+    };
+    let order = Order { sort: &sort, times: &times };
+    let resp = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, &marks, &mut cmd, p);
+        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, &marks, &mut cmd, &order, p);
+        // the space below: drop here to move to the root
+        let (rest, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.available_height().max(40.0)), Sense::hover());
+        if let Some(src) = r.dnd_release_payload::<String>() {
+            cmd = Some(((*src).clone(), FileCmd::MoveTo(String::new())));
+        }
+        if r.dnd_hover_payload::<String>().is_some() {
+            ui.painter().rect_stroke(rest.shrink(2.0), 6.0, egui::Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
+        }
     });
+    let _ = resp;
     if let Some((p, nt)) = open {
         app.open(&p, nt);
     }
@@ -215,6 +257,13 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
             FileCmd::Bookmark => {
                 if let Some(cfg) = &app.cfg {
                     toggle_bookmark(cfg, &path);
+                }
+            }
+            FileCmd::MoveTo(folder) => {
+                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                let to = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+                if to != path {
+                    app.rename(&path, &to);
                 }
             }
             FileCmd::Similar => {
@@ -289,12 +338,29 @@ fn toggle_bookmark(cfg: &VaultConfig, path: &str) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, marks: &[String], cmd: &mut Option<(String, FileCmd)>, p: Palette) {
-    for (name, sub) in &f.folders {
+#[allow(clippy::too_many_arguments)]
+fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, marks: &[String], cmd: &mut Option<(String, FileCmd)>, order: &Order, p: Palette) {
+    let mut folders: Vec<(&String, &Folder)> = f.folders.iter().collect();
+    if order.sort == "alphabeticalReverse" {
+        folders.reverse();
+    }
+    for (name, sub) in folders {
         let full = if path.is_empty() { name.clone() } else { format!("{path}/{name}") };
         let id = ui.make_persistent_id(("folder", &full));
         let is_open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-        let r = kit::Row::new(name).depth(depth).chevron(is_open).show(ui, p);
+        let r = kit::Row::new(name).depth(depth).chevron(is_open).draggable().show(ui, p);
+        if r.drag_started() {
+            r.dnd_set_drag_payload(full.clone());
+        }
+        // a file or folder dropped here moves in (not a folder into itself)
+        if let Some(src) = r.dnd_release_payload::<String>() {
+            if *src != full && !full.starts_with(&format!("{src}/")) {
+                *cmd = Some(((*src).clone(), FileCmd::MoveTo(full.clone())));
+            }
+        }
+        if r.dnd_hover_payload::<String>().is_some() {
+            ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
+        }
         if r.clicked() {
             ui.data_mut(|d| d.insert_temp(id, !is_open));
         }
@@ -321,15 +387,27 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
             }
         });
         if is_open {
-            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, marks, cmd, p);
+            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, marks, cmd, order, p);
         }
     }
-    for (name, full) in &f.files {
+    let mut files: Vec<(&String, &String)> = f.files.iter().collect();
+    match order.sort {
+        "alphabeticalReverse" => files.reverse(),
+        "byModifiedTime" => files.sort_by_key(|(_, full)| std::cmp::Reverse(order.times.get(*full).map(|t| t.0).unwrap_or(0))),
+        "byModifiedTimeReverse" => files.sort_by_key(|(_, full)| order.times.get(*full).map(|t| t.0).unwrap_or(0)),
+        "byCreatedTime" => files.sort_by_key(|(_, full)| std::cmp::Reverse(order.times.get(*full).map(|t| t.1).unwrap_or(0))),
+        "byCreatedTimeReverse" => files.sort_by_key(|(_, full)| order.times.get(*full).map(|t| t.1).unwrap_or(0)),
+        _ => {}
+    }
+    for (name, full) in files {
         let is_md = name.to_lowercase().ends_with(".md");
         let label = if is_md { &name[..name.len() - 3] } else { name.as_str() };
         let is_active = active == Some(full.as_str());
         // files line up with the folder names above them (past the chevron)
-        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard")).show(ui, p);
+        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard")).draggable().show(ui, p);
+        if r.drag_started() {
+            r.dnd_set_drag_payload(full.clone());
+        }
         if r.clicked() {
             *open = Some((full.clone(), ui.input(|i| i.modifiers.command)));
         }
