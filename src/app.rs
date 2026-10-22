@@ -1141,7 +1141,7 @@ impl App {
             let root = v.root.clone();
             self.images.open(&root, ctx);
         }
-        egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show(ctx, |ui| {
+        egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show_animated(ctx, self.images.panels[0], |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             if let Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) = self.images.collections_ui(ui, p) {
@@ -1151,7 +1151,7 @@ impl App {
         if let Some((keys, folder)) = moves {
             self.move_pictures(keys, &folder);
         }
-        egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
+        egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show_animated(ctx, self.images.panels[1], |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             if self.tabs.is_empty() {
@@ -1217,6 +1217,10 @@ impl App {
             Some(crate::images_ui::ImageAction::OpenNote(n)) => self.open(&n, false),
             Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) => self.move_pictures(keys, &folder),
             Some(crate::images_ui::ImageAction::CollectionNote(folder)) => self.collection_note(&folder),
+            Some(crate::images_ui::ImageAction::TogglePanel(left)) => {
+                let i = if left { 0 } else { 1 };
+                self.images.panels[i] = !self.images.panels[i];
+            }
             None => {}
         }
     }

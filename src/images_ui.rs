@@ -94,6 +94,9 @@ pub struct Viewer {
 
 pub struct ImagesState {
     pub entries: Vec<ImageEntry>,
+    /// Whether the collections (left) and notes (right) panels are shown in
+    /// image mode (the writing mode's sidebars are separate).
+    pub panels: [bool; 2],
     index: Arc<Mutex<images::Index>>,
     #[cfg(feature = "clip")]
     vision: Arc<Vision>,
@@ -128,6 +131,7 @@ pub struct ImagesState {
 impl Default for ImagesState {
     fn default() -> Self {
         ImagesState {
+            panels: [true, true],
             entries: Vec::new(),
             index: Arc::new(Mutex::new(images::Index::new(MODEL_KEY, 512))),
             #[cfg(feature = "clip")]
@@ -164,6 +168,8 @@ pub enum ImageAction {
     OpenNote(String),
     /// Open (creating it if missing) the note of a vault folder: `<folder>/<folder>.md`.
     CollectionNote(String),
+    /// Show or hide a side panel (true: the left one).
+    TogglePanel(bool),
 }
 
 impl ImagesState {
@@ -596,53 +602,67 @@ impl ImagesState {
             return self.viewer_ui(ui, p, vault);
         }
         let mut action = None;
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = 8.0;
-            #[cfg(feature = "clip")]
-            let hint = if self.vision.ready() { "Descreva uma imagem" } else { "Buscar imagens pelo nome" };
-            #[cfg(not(feature = "clip"))]
-            let hint = "Buscar imagens pelo nome";
-            ui.allocate_ui(egui::vec2(320.0, 30.0), |ui| {
-                let r = kit::search_field(ui, &mut self.query, hint, p);
-                if r.changed() {
+        // the notes toggle sits at the right edge, the rest wraps before it
+        let bar = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 30.0));
+        let right = egui::Rect::from_min_max(egui::pos2(bar.right() - 30.0, bar.top()), bar.max);
+        // a child that doesn't move the cursor: the bar starts at the same top
+        let mut corner = ui.new_child(egui::UiBuilder::new().max_rect(right).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        if let Some(a) = panel_toggle(&mut corner, self.panels, false, p) {
+            action = Some(a);
+        }
+        ui.scope(|ui| {
+            ui.set_max_width(ui.available_width() - 36.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if let Some(a) = panel_toggle(ui, self.panels, true, p) {
+                    action = Some(a);
+                }
+                #[cfg(feature = "clip")]
+                let hint = if self.vision.ready() { "Descreva uma imagem" } else { "Buscar imagens pelo nome" };
+                #[cfg(not(feature = "clip"))]
+                let hint = "Buscar imagens pelo nome";
+                ui.allocate_ui(egui::vec2(320.0, 30.0), |ui| {
+                    let r = kit::search_field(ui, &mut self.query, hint, p);
+                    if r.changed() {
+                        self.similar_to = None;
+                    }
+                });
+                if self.similar_to.is_some() && kit::button(ui, Some(icons::X), "Semelhantes", p).on_hover_text("Voltar a todas as imagens").clicked() {
                     self.similar_to = None;
                 }
-            });
-            if self.similar_to.is_some() && kit::button(ui, Some(icons::X), "Semelhantes", p).on_hover_text("Voltar a todas as imagens").clicked() {
-                self.similar_to = None;
-            }
-            ui.add_space(4.0);
-            ui.label(kit::icon(icons::LAYOUT_GRID, 13.0).color(p.faint));
-            ui.spacing_mut().slider_width = 90.0;
-            ui.add(egui::Slider::new(&mut self.cell, 90.0..=320.0).show_value(false)).on_hover_text("Tamanho das miniaturas");
-            if !self.selection.is_empty() {
-                ui.add_space(8.0);
-                ui.label(RichText::new(format!("{} {}", self.selection.len(), if self.selection.len() == 1 { "selecionada" } else { "selecionadas" })).color(p.muted));
-                if kit::primary(ui, "Inserir na nota", p).clicked() {
-                    let keys = self.selected_keys();
-                    action = Some(ImageAction::Insert(keys));
-                }
-                if kit::button(ui, Some(icons::FILE_PLUS), "Nova nota", p).clicked() {
-                    action = Some(ImageAction::NewNote(self.selected_keys()));
-                }
-                if kit::quiet(ui, None, "Limpar", p).clicked() {
-                    self.selection.clear();
-                }
-            }
-            if let Some(f) = self.folder.clone().filter(|f| !f.is_empty() && !Path::new(f).is_absolute()) {
-                if self.selection.is_empty() {
+                ui.add_space(4.0);
+                ui.label(kit::icon(icons::LAYOUT_GRID, 13.0).color(p.faint));
+                ui.spacing_mut().slider_width = 90.0;
+                ui.add(egui::Slider::new(&mut self.cell, 90.0..=320.0).show_value(false)).on_hover_text("Tamanho das miniaturas");
+                if !self.selection.is_empty() {
                     ui.add_space(8.0);
-                    let name = f.rsplit('/').next().unwrap_or(&f).to_string();
-                    if kit::button(ui, Some(icons::FILE_TEXT), "Nota da coleção", p).on_hover_text(format!("{f}/{name}.md: o que esta pasta reúne")).clicked() {
-                        action = Some(ImageAction::CollectionNote(f));
+                    ui.label(RichText::new(format!("{} {}", self.selection.len(), if self.selection.len() == 1 { "selecionada" } else { "selecionadas" })).color(p.muted));
+                    if kit::primary(ui, "Inserir na nota", p).clicked() {
+                        let keys = self.selected_keys();
+                        action = Some(ImageAction::Insert(keys));
+                    }
+                    if kit::button(ui, Some(icons::FILE_PLUS), "Nova nota", p).clicked() {
+                        action = Some(ImageAction::NewNote(self.selected_keys()));
+                    }
+                    if kit::quiet(ui, None, "Limpar", p).clicked() {
+                        self.selection.clear();
                     }
                 }
-            }
-            if self.scanning.is_some() {
-                ui.spinner();
-            }
-            #[cfg(feature = "clip")]
-            self.vision_bar(ui, p);
+                if let Some(f) = self.folder.clone().filter(|f| !f.is_empty() && !Path::new(f).is_absolute()) {
+                    if self.selection.is_empty() {
+                        ui.add_space(8.0);
+                        let name = f.rsplit('/').next().unwrap_or(&f).to_string();
+                        if kit::button(ui, Some(icons::FILE_TEXT), "Nota da coleção", p).on_hover_text(format!("{f}/{name}.md: o que esta pasta reúne")).clicked() {
+                            action = Some(ImageAction::CollectionNote(f));
+                        }
+                    }
+                }
+                if self.scanning.is_some() {
+                    ui.spinner();
+                }
+                #[cfg(feature = "clip")]
+                self.vision_bar(ui, p);
+            });
         });
         ui.add_space(14.0);
         self.refresh_shown();
@@ -656,94 +676,93 @@ impl ImagesState {
             return action;
         }
         let gap = 10.0;
-        // as many columns as the chosen size allows, stretched to fill the width
+        // justified rows: every picture in its own proportions, the rows
+        // about the chosen height, stretched to fill the width
         let avail_w = ui.available_width() - 4.0;
-        let cols = ((avail_w + gap) / (self.cell + gap)).floor().max(1.0) as usize;
-        let cell = ((avail_w - gap * (cols as f32 - 1.0)) / cols as f32).floor();
-        let rows = self.shown.len().div_ceil(cols);
         let shown = self.shown.clone();
+        let rows = justified_rows(&shown.iter().map(|&i| aspect(&self.entries[i])).collect::<Vec<_>>(), avail_w, self.cell, gap);
+        let total = rows.last().map(|r| r.y + r.h).unwrap_or(0.0);
         let mut open: Option<usize> = None;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, cell + gap, rows, |ui, range| {
-            for r in range {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for c in 0..cols {
-                        let Some(&i) = shown.get(r * cols + c) else { break };
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click_and_drag());
-                        if resp.drag_started() {
-                            resp.dnd_set_drag_payload(self.dragged(i));
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, view| {
+            let origin = ui.min_rect().min;
+            ui.allocate_space(egui::vec2(avail_w, total));
+            for row in rows.iter().filter(|r| r.y + r.h >= view.top() - 200.0 && r.y <= view.bottom() + 200.0) {
+                let mut x = 0.0;
+                for (k, w) in row.widths.iter().enumerate() {
+                    let i = shown[row.start + k];
+                    let rect = egui::Rect::from_min_size(origin + egui::vec2(x, row.y), egui::vec2(*w, row.h));
+                    x += w + gap;
+                    let resp = ui.interact(rect, ui.id().with(("tile", i)), Sense::click_and_drag());
+                if resp.drag_started() {
+                    resp.dnd_set_drag_payload(self.dragged(i));
+                }
+                ui.painter().rect_filled(rect, 10.0, p.bg_secondary);
+                if let Some(t) = self.thumb(i) {
+                    // the whole picture: the tile already has its proportions
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    ui.painter().add(egui::epaint::RectShape::filled(rect, 10.0, Color32::WHITE).with_texture(t, uv));
+                }
+                let sel = self.selection.contains(&i);
+                if resp.hovered() || sel {
+                    // a soft shade at the foot with the name
+                    let foot = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 30.0), rect.max);
+                    ui.painter().rect_filled(foot, egui::CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, Color32::from_black_alpha(110));
+                    let mut job = egui::text::LayoutJob::single_section(self.entries[i].name.clone(), egui::TextFormat { font_id: egui::FontId::proportional(11.5), color: Color32::WHITE, ..Default::default() });
+                    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 20.0);
+                    let g = ui.fonts(|f| f.layout_job(job));
+                    ui.painter().galley(egui::pos2(foot.left() + 10.0, foot.center().y - g.size().y / 2.0), g, Color32::WHITE);
+                }
+                if sel {
+                    ui.painter().rect_stroke(rect, 10.0, egui::Stroke::new(3.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                    let c = egui::pos2(rect.right() - 16.0, rect.top() + 16.0);
+                    ui.painter().circle_filled(c, 10.0, p.accent_strong);
+                    ui.painter().text(c, egui::Align2::CENTER_CENTER, icons::CHECK, kit::icon_font(12.0), p.on_accent);
+                }
+                let resp = resp;
+                if resp.clicked() {
+                    if ui.input(|inp| inp.modifiers.command || inp.modifiers.shift) {
+                        if !self.selection.remove(&i) {
+                            self.selection.insert(i);
                         }
-                        ui.painter().rect_filled(rect, 10.0, p.bg_secondary);
-                        if let Some(t) = self.thumb(i) {
-                            // fill the square, cropping the long side
-                            let e = &self.entries[i];
-                            let k = (e.width.max(1) as f32 / e.height.max(1) as f32).max(1e-3);
-                            let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
-                            ui.painter().add(egui::epaint::RectShape::filled(rect, 10.0, Color32::WHITE).with_texture(t, uv));
-                        }
-                        let sel = self.selection.contains(&i);
-                        if resp.hovered() || sel {
-                            // a soft shade at the foot with the name
-                            let foot = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 30.0), rect.max);
-                            ui.painter().rect_filled(foot, egui::CornerRadius { nw: 0, ne: 0, sw: 10, se: 10 }, Color32::from_black_alpha(110));
-                            let mut job = egui::text::LayoutJob::single_section(self.entries[i].name.clone(), egui::TextFormat { font_id: egui::FontId::proportional(11.5), color: Color32::WHITE, ..Default::default() });
-                            job.wrap = egui::text::TextWrapping::truncate_at_width(cell - 20.0);
-                            let g = ui.fonts(|f| f.layout_job(job));
-                            ui.painter().galley(egui::pos2(foot.left() + 10.0, foot.center().y - g.size().y / 2.0), g, Color32::WHITE);
-                        }
-                        if sel {
-                            ui.painter().rect_stroke(rect, 10.0, egui::Stroke::new(3.0_f32, p.accent_strong), egui::StrokeKind::Inside);
-                            let c = egui::pos2(rect.right() - 16.0, rect.top() + 16.0);
-                            ui.painter().circle_filled(c, 10.0, p.accent_strong);
-                            ui.painter().text(c, egui::Align2::CENTER_CENTER, icons::CHECK, kit::icon_font(12.0), p.on_accent);
-                        }
-                        let resp = resp;
-                        if resp.clicked() {
-                            if ui.input(|inp| inp.modifiers.command || inp.modifiers.shift) {
-                                if !self.selection.remove(&i) {
-                                    self.selection.insert(i);
+                    } else {
+                        open = Some(i);
+                    }
+                }
+                resp.context_menu(|ui| {
+                    if kit::menu_item(ui, icons::SCAN_SEARCH, "Imagens semelhantes", p) {
+                        self.similar_to = Some(i);
+                        self.query.clear();
+                        ui.close_menu();
+                    }
+                    if kit::menu_item(ui, icons::CORNER_DOWN_RIGHT, "Inserir na nota", p) {
+                        action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
+                        ui.close_menu();
+                    }
+                    if self.shared.is_some() {
+                        let names: Vec<String> = self.collections.iter().map(|c| c.0.clone()).collect();
+                        ui.menu_button("Adicionar à coleção", |ui| {
+                            for n in names {
+                                if ui.button(&n).clicked() {
+                                    let idx = self.dragged(i);
+                                    let k = self.add_to_collection(&n, &idx);
+                                    self.notice = Some(format!("{k} na coleção {n}"));
+                                    ui.close_menu();
                                 }
-                            } else {
-                                open = Some(i);
-                            }
-                        }
-                        resp.context_menu(|ui| {
-                            if kit::menu_item(ui, icons::SCAN_SEARCH, "Imagens semelhantes", p) {
-                                self.similar_to = Some(i);
-                                self.query.clear();
-                                ui.close_menu();
-                            }
-                            if kit::menu_item(ui, icons::CORNER_DOWN_RIGHT, "Inserir na nota", p) {
-                                action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
-                                ui.close_menu();
-                            }
-                            if self.shared.is_some() {
-                                let names: Vec<String> = self.collections.iter().map(|c| c.0.clone()).collect();
-                                ui.menu_button("Adicionar à coleção", |ui| {
-                                    for n in names {
-                                        if ui.button(&n).clicked() {
-                                            let idx = self.dragged(i);
-                                            let k = self.add_to_collection(&n, &idx);
-                                            self.notice = Some(format!("{k} na coleção {n}"));
-                                            ui.close_menu();
-                                        }
-                                    }
-                                });
-                            }
-                            if kit::menu_item(ui, icons::SQUARE_CHECK, if sel { "Desmarcar" } else { "Selecionar" }, p) {
-                                if !self.selection.remove(&i) {
-                                    self.selection.insert(i);
-                                }
-                                ui.close_menu();
-                            }
-                            if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
-                                let _ = open::that(&self.entries[i].abs);
-                                ui.close_menu();
                             }
                         });
                     }
+                    if kit::menu_item(ui, icons::SQUARE_CHECK, if sel { "Desmarcar" } else { "Selecionar" }, p) {
+                        if !self.selection.remove(&i) {
+                            self.selection.insert(i);
+                        }
+                        ui.close_menu();
+                    }
+                    if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
+                        let _ = open::that(&self.entries[i].abs);
+                        ui.close_menu();
+                    }
                 });
-                ui.add_space(gap - ui.spacing().item_spacing.y);
+                }
             }
         });
         if let Some(i) = open {
@@ -830,7 +849,12 @@ impl ImagesState {
         let e = self.entries[v.idx].clone();
         let mut close = false;
         let mut step: i64 = 0;
+        let panels = self.panels;
+        let mut toggle = None;
         ui.horizontal(|ui| {
+            if let Some(a) = panel_toggle(ui, panels, true, p) {
+                toggle = Some(a);
+            }
             let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
             if kit::icon_button(ui, icons::ARROW_LEFT, "Voltar (Esc)", false, p).clicked() || (esc && !v.full) {
                 close = true;
@@ -840,9 +864,15 @@ impl ImagesState {
             }
             ui.add_space(4.0);
             ui.label(RichText::new(&e.name).font(kit::medium(14.0)).color(p.text));
-            ui.label(RichText::new(format!("{} × {}", e.width, e.height)).size(12.0).color(p.faint));
+            // the size only where the buttons on the right leave room for it
+            if ui.available_width() > 380.0 {
+                ui.label(RichText::new(format!("{} × {}", e.width, e.height)).size(12.0).color(p.faint));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                if let Some(a) = panel_toggle(ui, panels, false, p) {
+                    toggle = Some(a);
+                }
                 if kit::icon_button(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", false, p).clicked() {
                     let _ = open::that(&e.abs);
                 }
@@ -1032,6 +1062,85 @@ impl ImagesState {
         if close {
             self.viewer = None;
         }
-        action
+        toggle.or(action)
+    }
+}
+
+/// A picture's width over its height, kept within reason for odd sizes.
+fn aspect(e: &ImageEntry) -> f32 {
+    if e.width == 0 || e.height == 0 {
+        return 1.0;
+    }
+    (e.width as f32 / e.height as f32).clamp(0.25, 4.0)
+}
+
+struct JRow {
+    start: usize,
+    y: f32,
+    h: f32,
+    widths: Vec<f32>,
+}
+
+/// Lays pictures out in rows of about `target` height that fill `width`
+/// exactly; the last row keeps the target height instead of stretching.
+fn justified_rows(aspects: &[f32], width: f32, target: f32, gap: f32) -> Vec<JRow> {
+    let mut rows = Vec::new();
+    let (mut start, mut y) = (0, 0.0);
+    while start < aspects.len() {
+        let mut end = start;
+        let mut sum = 0.0;
+        while end < aspects.len() {
+            sum += aspects[end];
+            end += 1;
+            if sum * target + gap * (end - start - 1) as f32 >= width {
+                break;
+            }
+        }
+        let gaps = gap * (end - start - 1) as f32;
+        let full = sum * target + gaps >= width;
+        // a single very wide picture never gets taller than the target
+        let h = if full { ((width - gaps) / sum).min(target * 2.0) } else { target };
+        let mut widths: Vec<f32> = aspects[start..end].iter().map(|a| (a * h).floor()).collect();
+        // what flooring left over goes to the last picture, so the row ends flush
+        if full && h < target * 2.0 {
+            let used: f32 = widths.iter().sum::<f32>() + gaps;
+            if let Some(w) = widths.last_mut() {
+                *w += width - used;
+            }
+        }
+        rows.push(JRow { start, y, h, widths });
+        y += h + gap;
+        start = end;
+    }
+    rows
+}
+
+fn panel_toggle(ui: &mut egui::Ui, panels: [bool; 2], left: bool, p: crate::theme::Palette) -> Option<ImageAction> {
+    let open = panels[if left { 0 } else { 1 }];
+    let (glyph, tip) = match (left, open) {
+        (true, true) => (icons::PANEL_LEFT_CLOSE, "Ocultar coleções"),
+        (true, false) => (icons::PANEL_LEFT_OPEN, "Mostrar coleções"),
+        (false, true) => (icons::PANEL_RIGHT_CLOSE, "Ocultar notas"),
+        (false, false) => (icons::PANEL_RIGHT_OPEN, "Mostrar notas"),
+    };
+    kit::icon_button(ui, glyph, tip, false, p).clicked().then_some(ImageAction::TogglePanel(left))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::justified_rows;
+
+    #[test]
+    fn rows_fill_the_width_and_keep_proportions() {
+        let rows = justified_rows(&[1.0, 2.0, 0.5, 1.5, 1.0, 0.5], 600.0, 200.0, 10.0);
+        let first = &rows[0];
+        let used: f32 = first.widths.iter().sum::<f32>() + 10.0 * (first.widths.len() - 1) as f32;
+        assert!((used - 600.0).abs() < 0.01, "{used}");
+        // the widths keep each picture's proportions at the row's height
+        assert!((first.widths[1] - 2.0 * first.h).abs() < 1.0);
+        // the last row is not stretched
+        let last = rows.last().unwrap();
+        assert_eq!(last.h, 200.0);
+        assert_eq!(rows[1].y, first.h + 10.0);
     }
 }
