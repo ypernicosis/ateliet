@@ -154,6 +154,15 @@ impl DiagramacaoView {
             if let Ok(d) = rx.try_recv() {
                 self.job = None;
                 if d.gen == self.gen {
+                    if self.print {
+                        // the cover's spine follows the real page count
+                        let mut pc = cx.sc.settings.data["pageCounts"].clone();
+                        if !pc.is_object() {
+                            pc = json!({});
+                        }
+                        pc[&b.path] = json!(d.laid.pages.len());
+                        cx.sc.settings.set("pageCounts", pc);
+                    }
                     self.laid = Some((d.laid, d.pics, d.took));
                     self.asked.clear();
                 }
@@ -672,7 +681,7 @@ fn row(ui: &mut egui::Ui, p: Palette, label: &str, control: impl FnOnce(&mut egu
     });
 }
 
-fn font_families() -> Vec<String> {
+pub fn font_families() -> Vec<String> {
     static CACHE: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
     CACHE.get_or_init(|| crate::fonts::book_fonts().families()).clone()
 }

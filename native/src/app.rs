@@ -44,6 +44,9 @@ pub struct Tab {
 
 impl Tab {
     pub fn dirty(&self) -> bool {
+        if let Some(crate::sc::View::Capa(c)) = &self.view {
+            return c.dirty();
+        }
         self.text != self.saved
     }
 
@@ -961,6 +964,7 @@ impl App {
                         crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
                         crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
                         crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
+                        crate::sc::View::Capa(c) => c.ui(ui, &mut cx),
                     }
                 };
                 // a map can walk into its submaps: the tab follows

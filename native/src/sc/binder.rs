@@ -59,6 +59,9 @@ impl Binder {
                 if kit::icon_button_sized(ui, icons::DOWNLOAD, "Exportar", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::Export(book.path.clone()));
                 }
+                if kit::icon_button_sized(ui, icons::BOOK_OPEN, "Capa", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::View("capa".into(), Some(book.path.clone())));
+                }
                 if kit::icon_button_sized(ui, icons::LAYOUT_TEMPLATE, "Diagramação", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::View("layout".into(), Some(book.path.clone())));
                 }

@@ -46,7 +46,7 @@ const BOOK_SERIFS: [&[u8]; 14] = [
 pub fn book_fonts() -> std::sync::Arc<ateliet_core::typeset::fonts::FontDb> {
     static DB: std::sync::OnceLock<std::sync::Arc<ateliet_core::typeset::fonts::FontDb>> = std::sync::OnceLock::new();
     DB.get_or_init(|| {
-        let mut db = ateliet_core::typeset::fonts::FontDb::new(&[&[GARAMOND, GARAMOND_ITALIC, GARAMOND_BOLD, GARAMOND_BOLD_ITALIC, CORMORANT, CORMORANT_ITALIC, CORMORANT_BOLD][..], &BOOK_SERIFS[..]].concat());
+        let mut db = ateliet_core::typeset::fonts::FontDb::new(&[&[GARAMOND, GARAMOND_ITALIC, GARAMOND_BOLD, GARAMOND_BOLD_ITALIC, CORMORANT, CORMORANT_ITALIC, CORMORANT_BOLD, INTER_REGULAR, INTER_SEMIBOLD][..], &BOOK_SERIFS[..]].concat());
         db.scan_system();
         std::sync::Arc::new(db)
     })

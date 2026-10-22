@@ -4,6 +4,7 @@
 //! vault works the same in both.
 
 pub mod book;
+pub mod capa;
 pub mod css;
 pub mod docx;
 pub mod enredo;

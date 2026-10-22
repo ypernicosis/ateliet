@@ -223,4 +223,27 @@ mod book_tests {
             image::RgbaImage::from_raw(w, h, px).unwrap().save(format!("{out}/p{:02}.png", i + 1)).unwrap();
         }
     }
+
+    #[test]
+    fn cover_to_pdf() {
+        let (Ok(vault), Ok(book_path), Ok(out)) = (std::env::var("TYPESET_VAULT"), std::env::var("TYPESET_BOOK"), std::env::var("TYPESET_OUT")) else { return };
+        let root = std::path::Path::new(&vault);
+        let ix = crate::dataview::index::Index::build(root);
+        let b = crate::scriptorium::book::book_by_path(&ix, &book_path, "").expect("book");
+        let db = fonts::FontDb::new(&[
+            include_bytes!("../../../native/assets/fonts/EBGaramond-Medium.ttf"),
+            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
+            include_bytes!("../../../native/assets/fonts/Cinzel-Bold.ttf"),
+            include_bytes!("../../../native/assets/fonts/Inter-Regular.ttf"),
+        ]);
+        let m = crate::scriptorium::capa::load_or_default(root, &b);
+        let cfg = crate::scriptorium::book::layout(&b);
+        let env = compose::cover_env(&m, &cfg, 240);
+        let pics = crate::scriptorium::capa::CoverPics::load(root, &ix, &b.path, &m);
+        let pg = crate::scriptorium::capa::page(&m, &env, &db, &pics);
+        let bytes = pdf::write(&[pg.clone()], &db, &pics.pics.list, &pdf::Meta { title: "capa".into(), author: String::new(), lang: "pt-BR".into() }).unwrap();
+        std::fs::write(format!("{out}/capa.pdf"), bytes).unwrap();
+        let (w, h, px) = raster::render(&pg, &db, &pics.pics.list, 3.0);
+        image::RgbaImage::from_raw(w, h, px).unwrap().save(format!("{out}/capa.png")).unwrap();
+    }
 }
