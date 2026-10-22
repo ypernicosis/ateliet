@@ -12,13 +12,20 @@
 //! - `dataview` — the Dataview index, query language and functions
 //! - `script`   — QuickJS for `dataviewjs` blocks and Templater commands
 //! - `calendar` — a month of daily notes for the calendar view
+//! - `board`    — storyboards: file format, brushes, compositing, tracing
 
+pub mod css_theme;
 pub mod metadata;
+pub mod pictogrep;
+pub mod pinterest;
+pub mod relink;
 pub mod render;
 pub mod search;
 pub mod syntax;
+pub mod texmath;
 pub mod text;
 pub mod vault;
+#[cfg(feature = "vision")]
 pub mod clip;
 pub mod images;
 pub mod clipstudio;
@@ -26,3 +33,6 @@ pub mod datefmt;
 pub mod dataview;
 pub mod script;
 pub mod calendar;
+pub mod scriptorium;
+pub mod typeset;
+pub mod board;

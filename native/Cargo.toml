@@ -1,0 +1,43 @@
+[package]
+name = "ateliet-native"
+version = "0.1.0"
+description = "Ateliet with a native interface (egui): no web view, no GTK"
+build = "build.rs"
+edition = "2021"
+
+[[bin]]
+name = "ateliet-native"
+path = "src/main.rs"
+
+[features]
+# Search pictures by description (CLIP on ONNX Runtime, fetched at build time
+# like the web shell). `vision-dynamic` loads a system ONNX Runtime instead
+# (ORT_DYLIB_PATH); --no-default-features leaves image search by name only.
+default = ["vision", "audio"]
+# Play the vault's audio in the app (Trilha). On Linux it needs the ALSA
+# headers (libasound2-dev / alsa-lib-devel).
+audio = ["dep:rodio"]
+clip = ["dep:ureq"]
+vision = ["clip", "ateliet_core/ort-bundled"]
+vision-dynamic = ["clip", "ateliet_core/ort-dynamic"]
+
+[dependencies]
+ateliet_core = { path = "../core" }
+eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+egui_extras = { version = "0.31", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = "8"
+dirs = "6"
+regex = "1"
+once_cell = "1"
+pulldown-cmark = { version = "0.13", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+rfd = { version = "0.15", default-features = false, features = ["xdg-portal", "tokio"] }
+open = "5"
+ureq = { version = "2", optional = true }
+trash = "5"
+arboard = { version = "3", default-features = false }
+ab_glyph = "0.2"
+rodio = { version = "0.21", optional = true, default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav", "symphonia-isomp4", "symphonia-aac"] }

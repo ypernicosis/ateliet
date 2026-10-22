@@ -32,6 +32,13 @@
 └─────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+## Crates
+
+O repositório é um workspace com três crates:
+- **`core/` (`ateliet_core`)**: tudo o que não depende de janela (vault, Markdown, metadados, busca, Dataview, scripts, calendário, imagens, Clip Studio). A busca de imagens por CLIP (ONNX Runtime) é a feature opcional `vision`.
+- **`.` (`ateliet`)**: a interface web atual, com Tauri e a webview do sistema, descrita no diagrama acima.
+- **`native/` (`ateliet-native`)**: a interface nativa em egui, sem webview nem GTK, que está substituindo a web. Os módulos são `app` (estado, abas, salvamento, ações), `editor` (realce de Markdown no editor), `live` (Live Preview por bloco), `markdown` (árvore do documento e renderização, com um parágrafo por bloco de texto e links achados pela posição do clique), `dv` (resultados do Dataview), `host` (caches de imagens, consultas e notas embutidas), `panels`, `commands` (paleta e atalhos), `templater`, `daily`, `images_ui` (modo imagens), `vault` (arquivos, índice e watcher), `theme` e `fonts`.
+
 ## Princípios
 
 1. **O vault é a fonte da verdade.** Nada fica num banco próprio. O índice de metadados é recalculado pelo Rust (em paralelo) a cada abertura e mantido por eventos do watcher.

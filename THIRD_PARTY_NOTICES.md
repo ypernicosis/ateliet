@@ -55,3 +55,7 @@ SOFTWARE.
 The built-in Dataview, Templater and Calendar tools (`src/dataview/`, `src/script/`, `src/calendar.rs`, `ui/tools/`) reimplement the query language, script APIs and behaviour of the Dataview (https://github.com/blacksmithgu/obsidian-dataview), Templater (https://github.com/SilentVoid13/Templater) and Calendar (https://github.com/liamcain/obsidian-calendar-plugin) plugins for Obsidian, all distributed under the MIT License, so that notes written for them keep working. No code from those projects is included.
 
 The script engine embeds QuickJS (https://bellard.org/quickjs/, MIT License, Copyright (c) 2017-2021 Fabrice Bellard and Charlie Gordon) through the rquickjs crate (MIT License).
+
+## Portuguese hyphenation patterns
+
+`core/assets/hyph-pt.txt` holds the patterns of `hyph-pt.tex` from the hyph-utf8 package (Copyright (C) 1987, 1994, 1996, 2015 Pedro J. de Rezende, 1996, 2015 J. Joao Dias Almeida, 2024 Leonardo Araujo and Aline Benevides), under the BSD 3-clause licence reproduced at the top of that file.
