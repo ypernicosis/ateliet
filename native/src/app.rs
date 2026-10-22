@@ -1053,6 +1053,7 @@ impl App {
         let frame = egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO);
         let mut actions: Vec<Action> = Vec::new();
         let mut sc_actions = Vec::new();
+        let mut open_board: Option<String> = None;
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
@@ -1094,13 +1095,22 @@ impl App {
                 return;
             }
             if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
-                if let Some(msg) = b.ui(ui, p) {
+                let msg = b.ui(ui, p);
+                open_board = b.open.take();
+                if let Some(msg) = msg {
                     self.toast(msg);
                 }
                 return;
             }
             self.note_ui(ui, &mut actions, true);
         });
+        // a storyboard the editor made (thumbnails turned into an animatic)
+        if let Some(path) = open_board {
+            if let Some(v) = self.vault.as_mut() {
+                v.rescan();
+            }
+            self.open(&path, true);
+        }
         for a in actions {
             self.apply(a);
         }

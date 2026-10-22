@@ -104,6 +104,35 @@ impl BoardEditor {
         self.error = Some(format!("{} camadas importadas.{}", clip.layers.len(), ateliet_core::board::clip::summary(&clip, &approx)));
     }
 
+    /// Thumbnails into a new animatic next to this storyboard, opened in a tab.
+    pub(super) fn thumbnails_to_animatic(&mut self) {
+        let db = crate::fonts::book_fonts();
+        let fps = self.doc.fps().max(1);
+        let Some(doc) = ateliet_core::board::pages::animatic_from_pages(&mut self.doc, &mut self.pics, &db, fps) else {
+            self.error = Some("Não há quadros desenhados nas páginas.".into());
+            return;
+        };
+        let stem = self.stem();
+        let dir = self.path.rsplit_once('/').map(|(d, _)| format!("{d}/")).unwrap_or_default();
+        let mut k = 1;
+        let path = loop {
+            let name = if k == 1 { format!("{dir}{stem} - animatic.storyboard") } else { format!("{dir}{stem} - animatic {k}.storyboard") };
+            if !self.abs.with_file_name(name.rsplit('/').next().unwrap_or(&name)).exists() {
+                break name;
+            }
+            k += 1;
+        };
+        let abs = self.abs.with_file_name(path.rsplit('/').next().unwrap_or(&path));
+        let n = doc.frame_count();
+        match BoardEditor::create_doc(&path, abs, doc) {
+            Ok(_) => {
+                self.error = Some(format!("Animatic com {n} planos."));
+                self.open = Some(path);
+            }
+            Err(e) => self.error = Some(format!("Não foi possível criar o animatic: {e}")),
+        }
+    }
+
     /// The export button and its menu.
     pub(super) fn export_menu(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let r = kit::icon_button(ui, icons::DOWNLOAD, "Exportar imagens", false, p);

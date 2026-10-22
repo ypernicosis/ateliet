@@ -79,6 +79,8 @@ pub struct BoardEditor {
     thumbs: HashMap<String, (u64, egui::TextureHandle)>,
     versions: HashMap<String, u64>,
     pub error: Option<String>,
+    /// A storyboard to open in a tab (vault path), made from this one.
+    pub open: Option<String>,
     pg: pages::PageState,
     /// A panel to zoom to (centre x, y, width, height).
     zoom_target: Option<(f32, f32, f32, f32)>,
@@ -138,6 +140,7 @@ impl BoardEditor {
             thumbs: HashMap::new(),
             versions: HashMap::new(),
             error: None,
+            open: None,
             pg,
             zoom_target: None,
             tl: timeline::TimelineState::default(),
@@ -782,6 +785,9 @@ impl BoardEditor {
             self.export_presentation_pdf();
         }
         self.export_menu(ui, p);
+        if self.doc.kind() == "thumbnails" && kit::icon_button(ui, icons::CLAPPERBOARD, "Virar animatic: cada quadro, na ordem de leitura, vira um plano de um storyboard novo", false, p).clicked() {
+            self.thumbnails_to_animatic();
+        }
         ui.add_space(6.0);
         ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(12.0).color(p.faint));
         if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {

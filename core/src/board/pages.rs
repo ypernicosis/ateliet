@@ -834,6 +834,72 @@ pub fn presentation_pdf(doc: &mut BoardDoc, pics: &mut super::compose::Pictures,
     crate::typeset::pdf::write(&pages, db, &pictures, &crate::typeset::pdf::Meta { title: title.into(), author: String::new(), lang: "pt-BR".into() })
 }
 
+/// Thumbnails into an animatic: every panel, in reading order, becomes a
+/// frame of a new storyboard (the drawing cropped and fitted to the
+/// panels' shape), with the page's script as the first frame's action.
+pub fn animatic_from_pages(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, db: &FontDb, fps: u32) -> Option<BoardDoc> {
+    let n = doc.frame_count();
+    let rtl = doc.board["page"]["rtl"].as_bool().unwrap_or(false);
+    // the shape of the frames: the panels' typical proportion
+    let mut aspects: Vec<f32> = (0..n).flat_map(|i| doc.frame(i)["panels"].as_array().cloned().unwrap_or_default()).map(|p| { let r = bounds(&points(&p)); r.h / r.w.max(1.0) }).filter(|a| a.is_finite() && *a > 0.0).collect();
+    if aspects.is_empty() {
+        return None;
+    }
+    aspects.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let aspect = aspects[aspects.len() / 2].clamp(0.3, 3.0);
+    let (tw, th) = if aspect <= 1.0 { (1920u32, (1920.0 * aspect).round() as u32) } else { ((1920.0 / aspect).round() as u32, 1920u32) };
+    let mut out = BoardDoc::new("animatic", tw, th, doc::PAPER, fps);
+    let paper = super::tile::parse_color(doc::PAPER);
+    let mut first = true;
+    for i in 0..n {
+        let panels = doc.frame(i)["panels"].as_array().cloned().unwrap_or_default();
+        if panels.is_empty() {
+            continue;
+        }
+        let (pw, ph, px) = page_image(doc, pics, db, i, 1.0, false);
+        let script = doc.frame(i)["script"].as_str().unwrap_or("").trim().to_string();
+        for (k, pi) in reading_order(&panels, rtl).into_iter().enumerate() {
+            let r = bounds(&points(&panels[pi]));
+            let (x0, y0) = (r.x.max(0.0) as u32, r.y.max(0.0) as u32);
+            let (x1, y1) = ((r.x + r.w).min(pw as f32) as u32, (r.y + r.h).min(ph as f32) as u32);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
+            let page = image::RgbaImage::from_raw(pw, ph, px.clone()).unwrap_or_default();
+            let crop = image::imageops::crop_imm(&page, x0, y0, x1 - x0, y1 - y0).to_image();
+            let s = (tw as f32 / crop.width() as f32).min(th as f32 / crop.height() as f32);
+            let (cw, ch) = (((crop.width() as f32 * s).round() as u32).max(1), ((crop.height() as f32 * s).round() as u32).max(1));
+            let fit = image::imageops::resize(&crop, cw, ch, image::imageops::FilterType::Lanczos3);
+            // the cell on the paper, as premultiplied pixels of the whole frame
+            let mut full = vec![0u8; (tw * th * 4) as usize];
+            for p in full.chunks_exact_mut(4) {
+                p.copy_from_slice(&[paper[0], paper[1], paper[2], 255]);
+            }
+            let (ox, oy) = ((tw - cw.min(tw)) / 2, (th - ch.min(th)) / 2);
+            for y in 0..ch.min(th) {
+                for x in 0..cw.min(tw) {
+                    let sp = fit.get_pixel(x, y).0;
+                    let a = sp[3] as u32;
+                    let d = (((oy + y) * tw + ox + x) * 4) as usize;
+                    for c in 0..3 {
+                        full[d + c] = ((sp[c] as u32 * a + full[d + c] as u32 * (255 - a)) / 255) as u8;
+                    }
+                }
+            }
+            let f = if first { 0 } else { out.add_frame(out.frame_count()) };
+            first = false;
+            let layer = out.active_layer(f);
+            super::paint::apply_image(&mut out, &layer, 0, 0, tw as usize, th as usize, &full, 1.0, super::paint::Mode::Over);
+            out.board["frames"][f]["name"] = json!(format!("{}.{}", i + 1, k + 1));
+            if k == 0 && !script.is_empty() {
+                out.board["frames"][f]["notes"]["action"] = json!(script);
+            }
+            out.mark_frame(f);
+        }
+    }
+    (!first).then_some(out)
+}
+
 /// A webtoon's parts cut into upload-sized slices (trailing blank paper
 /// left out): (part, slice number, w, h, rgba).
 pub fn webtoon_slices(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, db: &FontDb) -> Vec<(usize, usize, u32, u32, Vec<u8>)> {
@@ -866,6 +932,23 @@ pub fn webtoon_slices(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, d
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn thumbnails_become_frames() {
+        let o = KindOptions::defaults("thumbnails");
+        let mut d = board_for_kind(&o);
+        let db = crate::typeset::fonts::FontDb::default();
+        let n: usize = (0..d.frame_count()).map(|i| d.frame(i)["panels"].as_array().map(|a| a.len()).unwrap_or(0)).sum();
+        let a = animatic_from_pages(&mut d, &mut super::super::compose::Pictures::default(), &db, 24).unwrap();
+        assert_eq!(a.frame_count(), n);
+        assert_eq!(a.kind(), "animatic");
+        if let Ok(p) = std::env::var("ATELIET_THUMBS_OUT") {
+            let mut d = d;
+            let mut pics = super::super::compose::Pictures::default();
+            d.save(std::path::Path::new(&p), |dd, i| super::super::compose::thumbnail_png(dd, &mut pics, i)).unwrap();
+        }
+    }
+
     use super::*;
 
     #[test]
