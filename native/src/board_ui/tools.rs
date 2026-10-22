@@ -119,7 +119,7 @@ impl BoardEditor {
 
     /// The box (canvas) a region tool may paint in, clipped to the page.
     fn clip_box(&self, r: egui::Rect) -> Option<(i32, i32, usize, usize)> {
-        let r = if self.doc.infinite() { r } else { r.intersect(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.doc.width() as f32, self.doc.height() as f32))) };
+        let r = if self.doc.infinite() { r } else { r.intersect(self.draw_bounds()) };
         if !(r.width() > 0.0 && r.height() > 0.0) {
             return None;
         }
@@ -132,11 +132,8 @@ impl BoardEditor {
         if tiles.is_empty() {
             return;
         }
-        self.doc.mark_layer(layer);
-        self.undo.push(Edit::Tiles { layer: layer.to_string(), tiles });
-        self.redo.clear();
+        self.push_tiles(layer, tiles);
         self.invalidate();
-        self.changed();
     }
 
     fn fill_at(&mut self, c: egui::Pos2) -> Result<(), String> {
@@ -145,7 +142,7 @@ impl BoardEditor {
             let v = self.ts.view;
             egui::Rect::from_min_max(egui::pos2(v.0, v.1), egui::pos2(v.2, v.3))
         } else {
-            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.doc.width() as f32, self.doc.height() as f32))
+            self.draw_bounds()
         };
         if !region.contains(c) {
             return Ok(());

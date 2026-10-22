@@ -402,7 +402,11 @@ impl BoardEditor {
         }
         if self.pg.job.is_none() && self.pg.deco.as_ref().map(|d| &d.1) != Some(&key) {
             let (tx, rx) = mpsc::channel();
-            let board = json!({ "page": self.doc.board["page"], "width": w, "height": h, "background": self.doc.board["background"], "kind": self.doc.kind() });
+            let mut board = json!({ "page": self.doc.board["page"], "width": w, "height": h, "background": self.doc.board["background"], "kind": self.doc.kind() });
+            if self.is_joined() {
+                // joined pages: no paper over the margins
+                board["page"]["mask"] = json!(false);
+            }
             let numbers = self.pg.numbers;
             std::thread::spawn(move || {
                 let db = crate::fonts::book_fonts();

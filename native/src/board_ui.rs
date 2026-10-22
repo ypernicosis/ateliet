@@ -18,6 +18,7 @@ mod export;
 mod focus;
 mod pages;
 mod refs;
+mod spread;
 mod timeline;
 mod tools;
 pub use pages::NewBoard;
@@ -246,6 +247,14 @@ impl BoardEditor {
                     self.doc.set_tile(layer, k.0, k.1, t.clone());
                 }
                 self.doc.mark_layer(layer);
+                // every page showing the layer has a new picture (the facing one of a spread too)
+                for i in 0..self.doc.frame_count() {
+                    if self.doc.frame_layers(i).iter().any(|x| x == layer) {
+                        let id = self.doc.frame_id(i);
+                        *self.versions.entry(id).or_default() += 1;
+                    }
+                }
+                self.spread_tex = None;
             }
             Edit::Structure { before, after, tiles } => {
                 self.doc.board = if undo { before.clone() } else { after.clone() };
@@ -382,11 +391,9 @@ impl BoardEditor {
                 self.invalidate_rect(k.0 as f32 * t + a.off.0, k.1 as f32 * t + a.off.1, (k.0 + 1) as f32 * t + a.off.0, (k.1 + 1) as f32 * t + a.off.1);
             }
         }
-        if !tiles.is_empty() {
-            self.doc.mark_layer(&a.layer);
-            self.undo.push(Edit::Tiles { layer: a.layer.clone(), tiles });
-            self.redo.clear();
-            self.changed();
+        self.push_tiles(&a.layer, tiles);
+        if self.joined_facing().is_some() {
+            self.invalidate();
         }
     }
 
@@ -425,10 +432,18 @@ impl BoardEditor {
     fn draw_facing(&mut self, ui: &egui::Ui, painter: &egui::Painter, origin: egui::Pos2, j: usize, off: f32, p: crate::theme::Palette) {
         let id = self.doc.frame_id(j);
         let version = *self.versions.get(&id).unwrap_or(&0);
+        let joined = self.is_joined();
         if self.spread_tex.as_ref().is_none_or(|t| t.0 != id || t.1 != version) {
-            // the page as printed: panels, balloons and paper included
+            // the page as printed: panels, balloons and paper included (joined: no paper over the margins)
             let db = crate::fonts::book_fonts();
+            let mask = self.doc.board["page"]["mask"].clone();
+            if joined {
+                self.doc.board["page"]["mask"] = json!(false);
+            }
             let (w, h, px) = ateliet_core::board::pages::page_image(&mut self.doc, &mut self.pics, &db, j, 1.0, false);
+            if joined {
+                self.doc.board["page"]["mask"] = mask;
+            }
             let img = image::RgbaImage::from_raw(w, h, px).unwrap_or_default();
             let img = if img.width() > 1600 { image::DynamicImage::ImageRgba8(img).thumbnail(1600, 1600).to_rgba8() } else { img };
             let img = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
@@ -439,11 +454,13 @@ impl BoardEditor {
         if let Some((_, _, t)) = &self.spread_tex {
             painter.image(t.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
-        // the other page is shown, not edited: a light veil and the spine
-        painter.rect_filled(r, 0.0, if p.dark { Color32::from_black_alpha(70) } else { Color32::from_white_alpha(70) });
+        // the other page is shown, not edited: a light veil (none when joined) and the spine
+        if !joined {
+            painter.rect_filled(r, 0.0, if p.dark { Color32::from_black_alpha(70) } else { Color32::from_white_alpha(70) });
+        }
         let spine = if off > 0.0 { r.left() } else { r.right() };
         painter.vline(spine, r.y_range(), egui::Stroke::new(1.0_f32, Color32::from_black_alpha(60)));
-        if ui.rect_contains_pointer(r) {
+        if !joined && ui.rect_contains_pointer(r) {
             painter.text(r.center_top() + egui::vec2(0.0, 10.0), egui::Align2::CENTER_TOP, "Clique para desenhar nesta página", egui::FontId::proportional(11.0), p.faint);
         }
     }
@@ -507,7 +524,9 @@ impl BoardEditor {
         // the facing page of a spread: a click there goes to it
         if let Some((j, off)) = spread {
             let fr = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
-            if resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| fr.contains(q)) {
+            // joined pages are one surface: a click there paints (fill), except with the hand
+            let switch = !self.is_joined() || self.tool == Tool::Hand;
+            if switch && resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| fr.contains(q)) {
                 self.finish_editing();
                 self.pg.sel_panel = None;
                 self.pg.sel_balloon = None;
@@ -663,11 +682,11 @@ impl BoardEditor {
 
     fn toolbar(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let full = ui.available_width();
-        let right_w = 290.0;
-        if full >= 1060.0 {
+        let right_w = 330.0;
+        if full >= 1110.0 {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                ui.allocate_ui_with_layout(egui::vec2(full - right_w - 6.0, 28.0), egui::Layout::left_to_right(egui::Align::Center), |ui| self.toolbar_left(ui, p));
+                ui.allocate_ui_with_layout(egui::vec2(full - right_w - 6.0, 28.0), egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), |ui| self.toolbar_left(ui, p));
                 ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| self.toolbar_right(ui, p));
             });
         } else {
@@ -791,6 +810,12 @@ impl BoardEditor {
             self.export_presentation_pdf();
         }
         self.export_menu(ui, p);
+        if self.spread().is_some() {
+            let joined = self.is_joined();
+            if kit::icon_button(ui, icons::BOOK_OPEN, if joined { "Separar as páginas" } else { "Unir as páginas: desenhar através da lombada e das margens" }, joined, p).clicked() {
+                self.toggle_joined();
+            }
+        }
         if kit::icon_button(ui, icons::FOCUS, "Modo foco (Tab): só o desenho e a referência", false, p).clicked() {
             self.fx.on = true;
             self.fit = true;
