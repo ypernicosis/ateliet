@@ -282,7 +282,7 @@ impl App {
         self.recent = session["recent"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     }
 
-    fn save_session(&self) {
+    pub fn save_session(&self) {
         if let Some(cfg) = &self.cfg {
             let tabs: Vec<&str> = self.tabs.iter().map(|t| t.path.as_str()).collect();
             let path = cfg.dir.join("ateliet/native-session.json");

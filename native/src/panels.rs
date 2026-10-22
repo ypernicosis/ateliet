@@ -663,6 +663,10 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         let n_tabs = app.tabs.len();
         let mut select = None;
         let mut focus = false;
+        // dragging a tab: (from, pointer x, released)
+        let mut drag: Option<(usize, f32, bool)> = None;
+        let mut first_x = 0.0;
+        let mut tab_step = 0.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (g, tip) = if app.left_open { (icons::PANEL_LEFT_CLOSE, "Esconder barra lateral") } else { (icons::PANEL_LEFT_OPEN, "Mostrar barra lateral") };
@@ -679,7 +683,16 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for (i, t) in app.tabs.iter().enumerate() {
                         let active = i == app.active;
-                        let (rect, r) = ui.allocate_exact_size(egui::vec2(tab_w, 35.0), Sense::click());
+                        let (rect, r) = ui.allocate_exact_size(egui::vec2(tab_w, 35.0), Sense::click_and_drag());
+                        if i == 0 {
+                            first_x = rect.left();
+                            tab_step = tab_w + 2.0;
+                        }
+                        if r.dragged() || r.drag_stopped() {
+                            if let Some(ptr) = ui.input(|inp| inp.pointer.latest_pos()) {
+                                drag = Some((i, ptr.x, r.drag_stopped()));
+                            }
+                        }
                         let rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 0.5));
                         let hovered = r.hovered();
                         let shape = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y + 1.0));
@@ -756,6 +769,31 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                                 }
                             }
                         });
+                    }
+                    // where a dragged tab would land
+                    if let Some((from, x, released)) = drag {
+                        let to = (((x - first_x) / tab_step.max(1.0)).floor().max(0.0) as usize).min(n_tabs.saturating_sub(1));
+                        if released {
+                            if to != from {
+                                let t = app.tabs.remove(from);
+                                app.tabs.insert(to, t);
+                                // the active tab stays the same tab
+                                app.active = if app.active == from {
+                                    to
+                                } else if from < app.active && to >= app.active {
+                                    app.active - 1
+                                } else if from > app.active && to <= app.active {
+                                    app.active + 1
+                                } else {
+                                    app.active
+                                };
+                                app.save_session();
+                            }
+                        } else if to != from {
+                            let lx = first_x + to as f32 * tab_step + if to > from { tab_step - 2.0 } else { -1.0 };
+                            let top = ui.min_rect().top();
+                            ui.painter().vline(lx, egui::Rangef::new(top + 4.0, top + 31.0), egui::Stroke::new(2.0_f32, p.accent_strong));
+                        }
                     }
                     if kit::icon_button_sized(ui, icons::PLUS, "Nova nota", false, p, 26.0, 14.0).clicked() {
                         app.new_note("");
