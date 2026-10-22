@@ -134,6 +134,8 @@ pub struct App {
     pub templater_settings: TemplaterSettings,
     /// The egui context (for work started outside a frame's UI code).
     pub ctx: Option<egui::Context>,
+    /// The shared library being copied (Settings → Images).
+    pub copy_job: Option<crate::settings_pages::CopyJob>,
     pub templater: Templater,
     pub search: panels::SearchState,
     pub calendar: panels::CalendarState,
@@ -197,6 +199,7 @@ impl App {
             daily: DailySettings::default(),
             templater_settings: TemplaterSettings::default(),
             ctx: None,
+            copy_job: None,
             templater: Templater::default(),
             search: Default::default(),
             calendar: panels::CalendarState::new(),

@@ -121,6 +121,8 @@ pub struct ImagesState {
     col_edit: Option<(Option<String>, String)>,
     /// A message for the app to show.
     pub notice: Option<String>,
+    /// "Similar pictures" asked before the scan finished.
+    pending_similar: Option<String>,
 }
 
 impl Default for ImagesState {
@@ -148,6 +150,7 @@ impl Default for ImagesState {
             pin: pinterest::PinState::default(),
             col_edit: None,
             notice: None,
+            pending_similar: None,
         }
     }
 }
@@ -260,6 +263,9 @@ impl ImagesState {
                 self.shown_key = String::from("\u{0}");
                 self.selection.clear();
                 self.viewer = None;
+                if let Some(k) = self.pending_similar.take() {
+                    self.show_similar(&k);
+                }
             }
         }
         if let Some(l) = &self.loader {
@@ -776,6 +782,24 @@ impl ImagesState {
             }
         });
         action
+    }
+
+    /// Pictures like this one (from the file explorer).
+    pub fn show_similar(&mut self, key: &str) {
+        if let Some(i) = self.entries.iter().position(|e| e.key == key) {
+            self.folder = None;
+            self.collection = None;
+            self.query.clear();
+            self.similar_to = Some(i);
+            self.viewer = None;
+        } else if self.scanning.is_some() {
+            self.pending_similar = Some(key.to_string());
+        }
+    }
+
+    /// "Trazer do Pinterest…".
+    pub fn open_pinterest(&mut self) {
+        self.pin.open = true;
     }
 
     fn selected_keys(&self) -> Vec<String> {

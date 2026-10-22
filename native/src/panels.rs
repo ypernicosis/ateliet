@@ -16,6 +16,7 @@ enum FileCmd {
     Bookmark,
     Reveal,
     External,
+    Similar,
 }
 
 enum TabCmd {
@@ -216,6 +217,15 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                     toggle_bookmark(cfg, &path);
                 }
             }
+            FileCmd::Similar => {
+                if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
+                    if let Some(c) = app.ctx.clone() {
+                        app.images.open(&root, &c);
+                    }
+                }
+                app.images.show_similar(&path);
+                app.images_mode = true;
+            }
             FileCmd::Reveal | FileCmd::External => {
                 if let Some(v) = &app.vault {
                     let abs = v.abs(&path);
@@ -346,6 +356,9 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
             }
             if !is_md && kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
                 *cmd = Some((full.clone(), FileCmd::External));
+            }
+            if ateliet_core::pictogrep::is_image_name(name) && kit::menu_item(ui, icons::SCAN_SEARCH, "Imagens semelhantes", p) {
+                *cmd = Some((full.clone(), FileCmd::Similar));
             }
             kit::menu_sep(ui, p);
             if kit::menu_item(ui, icons::PENCIL, "Renomear", p) {
@@ -1312,6 +1325,8 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                         }
                         6 => {
                             let root = app.vault.as_ref().map(|v| v.root.clone()).unwrap_or_default();
+                            // the library state (and its automatic detection) loaded once
+                            app.images.open(&root, ui.ctx());
                             let st = crate::images_ui::ImagesState::settings(&root);
                             let shared = st["shared"].as_str().unwrap_or("auto").to_string();
                             let mut rescan = false;
@@ -1338,10 +1353,18 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                     }
                                 });
                             });
-                            match &app.images.shared {
+                            // the library the setting points at (image mode may not have loaded it yet)
+                            let in_use = match shared.trim() {
+                                "" => None,
+                                "auto" => app.images.shared.clone(),
+                                path => Some(ateliet_core::pictogrep::Home::new(std::path::PathBuf::from(path))).filter(|h| h.root.is_dir()),
+                            };
+                            match &in_use {
                                 Some(h) => ui.label(RichText::new(format!("Em uso: {}{}", h.root.display(), if ateliet_core::pictogrep::is_running(h) { " (o Pictogrep está aberto)" } else { "" })).size(11.5).color(p.faint)),
                                 None => ui.label(RichText::new("Nenhuma biblioteca compartilhada em uso.").size(11.5).color(p.faint)),
                             };
+                            ui.add_space(6.0);
+                            rescan |= crate::settings_pages::copy_library_ui(app, ui, &root, p);
                             ui.add_space(10.0);
                             ui.label(RichText::new("Pastas de fora do cofre").font(kit::medium(13.0)).color(p.text));
                             ui.label(RichText::new("As imagens ficam onde estão; só são copiadas para o cofre quando usadas numa nota.").size(11.5).color(p.faint));

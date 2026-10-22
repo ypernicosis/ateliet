@@ -151,3 +151,91 @@ pub fn hotkeys_page(app: &mut App, ui: &mut egui::Ui, cfg: &VaultConfig, p: Pale
         None => d.remove::<String>(cap_id),
     });
 }
+
+/// Copying the shared library into one of Ateliet's own, in the background.
+pub struct CopyJob {
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub state: std::sync::Arc<std::sync::Mutex<(ateliet_core::pictogrep::CopyProgress, Option<Result<std::path::PathBuf, String>>)>>,
+}
+
+/// "Copiar biblioteca…": what the shared library holds, where the copy goes,
+/// the progress; when done, the copy becomes the library in use.
+pub fn copy_library_ui(app: &mut App, ui: &mut egui::Ui, root: &std::path::Path, p: Palette) -> bool {
+    use std::sync::atomic::Ordering;
+    let mut rescan = false;
+    if let Some(job) = &app.copy_job {
+        let (prog, done) = job.state.lock().map(|s| (s.0.clone(), s.1.clone())).unwrap_or_default();
+        match done {
+            Some(Ok(dest)) => {
+                crate::images_ui::ImagesState::save_settings(root, json!({ "shared": dest.to_string_lossy() }));
+                app.copy_job = None;
+                rescan = true;
+                app.toast("Biblioteca copiada; o Ateliet passa a usar a cópia.");
+            }
+            Some(Err(e)) => {
+                app.copy_job = None;
+                app.toast(format!("A cópia não terminou: {e}"));
+            }
+            None => {
+                let frac = if prog.total_bytes > 0 { prog.bytes as f32 / prog.total_bytes as f32 } else { 0.0 };
+                ui.horizontal(|ui| {
+                    ui.add(egui::ProgressBar::new(frac).desired_width(300.0).text(format!("{} de {} arquivos", prog.files, prog.total_files)));
+                    if kit::button(ui, None, "Cancelar", p).clicked() {
+                        job.cancel.store(true, Ordering::Relaxed);
+                    }
+                });
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+            }
+        }
+        return rescan;
+    }
+    let st = crate::images_ui::ImagesState::settings(root);
+    let home = match st["shared"].as_str().unwrap_or("auto").trim() {
+        "" => None,
+        "auto" => app.images.shared.clone(),
+        path => Some(ateliet_core::pictogrep::Home::new(std::path::PathBuf::from(path))).filter(|h| h.root.is_dir()),
+    };
+    let Some(home) = home else { return false };
+    if ateliet_core::pictogrep::copied_from(&home).is_some() {
+        ui.label(RichText::new("A biblioteca em uso já é uma cópia só do Ateliet.").size(12.0).color(p.faint));
+        return false;
+    }
+    let plan_id = egui::Id::new("copy-plan");
+    let plan: Option<Result<ateliet_core::pictogrep::CopyPlan, String>> = ui.data(|d| d.get_temp(plan_id));
+    if kit::button(ui, Some(crate::icons::COPY), "Copiar biblioteca…", p).on_hover_text("Uma cópia da pasta do Pictogrep só para o Ateliet: imagens, coleções, análises, quadros do Pinterest e storyboards").clicked() {
+        ui.data_mut(|d| d.insert_temp(plan_id, ateliet_core::pictogrep::copy_plan(&home)));
+    }
+    match plan {
+        Some(Ok(pl)) => {
+            let dest = ateliet_core::pictogrep::own_library_dir();
+            ui.label(RichText::new(format!("{} imagens, {} coleções, {} storyboards, {} arquivos ({:.1} MB) para {}", pl.pictures, pl.collections, pl.storyboards, pl.files, pl.bytes as f64 / 1e6, dest.display())).size(12.0).color(p.muted));
+            ui.horizontal(|ui| {
+                if kit::primary(ui, "Copiar", p).clicked() {
+                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                    let state = std::sync::Arc::new(std::sync::Mutex::new((ateliet_core::pictogrep::CopyProgress::default(), None)));
+                    let (c2, s2, home2, dest2) = (cancel.clone(), state.clone(), home.clone(), dest.clone());
+                    std::thread::spawn(move || {
+                        let r = ateliet_core::pictogrep::copy_home(&home2, &dest2, &c2, |pr| {
+                            if let Ok(mut s) = s2.lock() {
+                                s.0 = pr.clone();
+                            }
+                        });
+                        if let Ok(mut s) = s2.lock() {
+                            s.1 = Some(r.map(|h| h.root));
+                        }
+                    });
+                    app.copy_job = Some(CopyJob { cancel, state });
+                    ui.data_mut(|d| d.remove::<Result<ateliet_core::pictogrep::CopyPlan, String>>(plan_id));
+                }
+                if kit::button(ui, None, "Agora não", p).clicked() {
+                    ui.data_mut(|d| d.remove::<Result<ateliet_core::pictogrep::CopyPlan, String>>(plan_id));
+                }
+            });
+        }
+        Some(Err(e)) => {
+            ui.label(RichText::new(e).size(12.0).color(p.faint));
+        }
+        None => {}
+    }
+    rescan
+}

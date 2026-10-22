@@ -51,6 +51,7 @@ pub enum Cmd {
     Forward,
     ReplaceTemplates,
     InsertPicture,
+    Pinterest,
 }
 
 pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -93,6 +94,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Back, "app:go-back", "Voltar"),
     (Cmd::Forward, "app:go-forward", "Avançar"),
     (Cmd::InsertPicture, "ateliet:insert-picture", "Inserir imagem…"),
+    (Cmd::Pinterest, "ateliet:pinterest", "Imagens: Trazer do Pinterest…"),
     (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
@@ -185,6 +187,13 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
+        Cmd::Pinterest => {
+            if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
+                app.images.open(&root, ctx);
+            }
+            app.images_mode = true;
+            app.images.open_pinterest();
+        }
         Cmd::InsertPicture => {
             let start = app.vault.as_ref().map(|v| v.root.clone()).unwrap_or_default();
             if let Some(files) = rfd::FileDialog::new().set_directory(start).add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "gif", "bmp", "svg"]).pick_files() {
