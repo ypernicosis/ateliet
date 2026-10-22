@@ -1587,6 +1587,15 @@ impl App {
                                 let mut acts = crate::live::show(ui, tab, &mut host, &st);
                                 actions.append(&mut acts);
                             }
+                            // the source, with Dataview results shown in place
+                            Mode::Edit if !crate::live::query_blocks(&tab.text).is_empty() => {
+                                let st = editor::Styles { size, p };
+                                let blocks = crate::live::query_blocks(&tab.text);
+                                let path = tab.path.clone();
+                                let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
+                                let mut acts = crate::live::source_with_queries(ui, tab, &mut host, &st, &blocks);
+                                actions.append(&mut acts);
+                            }
                             Mode::Edit => {
                                 let st = editor::Styles { size, p };
                                 let id = tab.editor_id();
