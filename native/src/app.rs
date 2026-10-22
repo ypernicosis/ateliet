@@ -44,8 +44,10 @@ pub struct Tab {
 
 impl Tab {
     pub fn dirty(&self) -> bool {
-        if let Some(crate::sc::View::Capa(c)) = &self.view {
-            return c.dirty();
+        match &self.view {
+            Some(crate::sc::View::Capa(c)) => return c.dirty(),
+            Some(crate::sc::View::Pagina(c)) => return c.dirty(),
+            _ => {}
         }
         self.text != self.saved
     }
@@ -623,6 +625,12 @@ impl App {
                 }
             }
             Action::ToggleTaskIn(path, line, c) => self.toggle_task(&path, line, c),
+            Action::EditPage(id) => {
+                if let Some(src) = self.active_path() {
+                    self.save_all();
+                    self.open(&format!("scriptorium:pagina:{src}#{id}"), true);
+                }
+            }
             Action::Play(src) => {
                 let source = self.active_path().unwrap_or_default();
                 self.sc_apply(crate::sc::Action::Music(crate::music::Cmd::PlaySrc(src, source)));
@@ -965,6 +973,7 @@ impl App {
                         crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
                         crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
                         crate::sc::View::Capa(c) => c.ui(ui, &mut cx),
+                        crate::sc::View::Pagina(c) => c.ui(ui, &mut cx),
                     }
                 };
                 // a map can walk into its submaps: the tab follows

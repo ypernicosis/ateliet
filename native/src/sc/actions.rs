@@ -551,3 +551,38 @@ impl App {
         }
     }
 }
+
+impl App {
+    /// A blank composed page at the cursor of the open note, opened in the compositor.
+    pub fn insert_composed_page(&mut self) {
+        use ateliet_core::typeset::compose;
+        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.path.ends_with(".md")) else {
+            self.toast("Abra uma nota ou um capítulo para inserir a página.");
+            return;
+        };
+        let path = t.path.clone();
+        let cfg = self.vault.as_ref().and_then(|v| {
+            let ix = v.index.read().unwrap();
+            book::book_for(&ix, &path, "").map(|b| book::layout(&b))
+        });
+        let cfg = cfg.unwrap_or_else(|| book::DEFAULT_LAYOUT.clone());
+        let env = compose::page_env(&json!({}), &cfg, true);
+        let model = compose::new_page("pagina", "livre", &env);
+        let id = model["id"].as_str().unwrap_or("").to_string();
+        let block = compose::page_block(&model);
+        let i = self.active;
+        let t = &mut self.tabs[i];
+        let b = crate::editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));
+        let before = if b == 0 || t.text[..b].ends_with("\n\n") { "" } else if t.text[..b].ends_with('\n') { "\n" } else { "\n\n" };
+        let ins = format!("{before}{block}\n");
+        t.text.insert_str(b, &ins);
+        t.cursor += ins.chars().count();
+        t.last_edit = Some(std::time::Instant::now());
+        t.live.close();
+        self.save_tab(i);
+        if let Some(v) = &self.vault {
+            v.index.write().unwrap().update(std::slice::from_ref(&path));
+        }
+        self.open(&format!("scriptorium:pagina:{path}#{id}"), true);
+    }
+}

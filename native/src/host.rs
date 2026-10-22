@@ -18,6 +18,14 @@ pub struct Caches {
     /// key → (index generation, result)
     pub queries: HashMap<u64, (u64, Value)>,
     pub docs: HashMap<String, (std::time::SystemTime, Arc<Doc>)>,
+    /// Composed pages drawn for reading: key of (note, model) → picture.
+    pub composed: HashMap<u64, Composed>,
+}
+
+pub enum Composed {
+    Pending(std::sync::mpsc::Receiver<Option<egui::ColorImage>>),
+    Ready(egui::TextureHandle, egui::Vec2),
+    Failed,
 }
 
 impl Caches {
@@ -131,6 +139,47 @@ impl Host for RenderHost<'_> {
                 query::inline(&ix, h.settings, &origin, &e)
             }
         })
+    }
+
+    fn composed(&mut self, ctx: &egui::Context, model: &str) -> Option<(egui::TextureId, egui::Vec2)> {
+        let k = key(&["pagina", model, self.source]);
+        if !self.caches.composed.contains_key(&k) {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (root, index, source, model) = (self.vault.root.clone(), self.vault.index.clone(), self.source.to_string(), model.to_string());
+            std::thread::spawn(move || {
+                let out = (|| {
+                    use ateliet_core::scriptorium::{book, capa};
+                    use ateliet_core::typeset::{compose, raster};
+                    let m: Value = serde_json::from_str(&model).ok()?;
+                    let ix = index.read().ok()?;
+                    let cfg = book::book_for(&ix, &source, "").map(|b| book::layout(&b)).unwrap_or_else(|| book::DEFAULT_LAYOUT.clone());
+                    let env = compose::page_env(&m, &cfg, false);
+                    let pics = capa::CoverPics::load(&root, &ix, &source, &m);
+                    drop(ix);
+                    let db = crate::fonts::book_fonts();
+                    let page = capa::page(&m, &env, &db, &pics);
+                    let (w, h, px) = raster::render(&page, &db, &pics.pics.list, 900.0 / page.w.max(page.h));
+                    Some(egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &px))
+                })();
+                let _ = tx.send(out);
+            });
+            self.caches.composed.insert(k, Composed::Pending(rx));
+        }
+        let slot = self.caches.composed.get_mut(&k)?;
+        if let Composed::Pending(rx) = slot {
+            match rx.try_recv() {
+                Ok(Some(img)) => {
+                    let size = egui::vec2(img.size[0] as f32, img.size[1] as f32);
+                    *slot = Composed::Ready(ctx.load_texture(format!("pagina-{k}"), img, egui::TextureOptions::LINEAR), size);
+                }
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => *slot = Composed::Failed,
+                Err(_) => ctx.request_repaint_after(std::time::Duration::from_millis(80)),
+            }
+        }
+        match slot {
+            Composed::Ready(t, s) => Some((t.id(), *s)),
+            _ => None,
+        }
     }
 
     fn embed(&mut self, target: &str) -> Option<(String, Arc<Doc>)> {

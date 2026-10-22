@@ -515,6 +515,8 @@ pub enum Action {
     ToggleTaskIn(String, usize, char),
     /// Play a link or an audio file of the vault (a `playlist` block).
     Play(String),
+    /// Open a composed page (its id) of this note in the compositor.
+    EditPage(String),
 }
 
 /// What the renderer needs from the app.
@@ -530,6 +532,10 @@ pub trait Host {
     fn inline_query(&mut self, js: bool, expr: &str) -> serde_json::Value;
     /// A note embedded with `![[note]]`: its path and parsed document.
     fn embed(&mut self, target: &str) -> Option<(String, Arc<Doc>)>;
+    /// A composed page (`scriptorium-pagina`) drawn as a picture, when ready.
+    fn composed(&mut self, _ctx: &egui::Context, _model: &str) -> Option<(egui::TextureId, egui::Vec2)> {
+        None
+    }
 }
 
 /// Text with clickable ranges, laid out as one block.
@@ -910,6 +916,36 @@ impl<'h> Renderer<'h> {
                     let res = self.host.query(&l, text);
                     crate::dv::render(self, ui, &res);
                     return;
+                }
+                if l == ateliet_core::typeset::compose::PAGE_LANG {
+                    if let Ok(model) = serde_json::from_str::<serde_json::Value>(text) {
+                        let id = model["id"].as_str().unwrap_or("").to_string();
+                        let dupla = model["tipo"].as_str() == Some("dupla");
+                        let w = ui.available_width().min(if dupla { 640.0 } else { 360.0 });
+                        ui.vertical_centered(|ui| {
+                            match self.host.composed(ui.ctx(), text) {
+                                Some((tex, sz)) => {
+                                    let h = w * sz.y / sz.x;
+                                    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click());
+                                    ui.painter().rect_filled(r.translate(egui::vec2(0.0, 2.0)), 2.0, egui::Color32::from_black_alpha(if p.dark { 80 } else { 24 }));
+                                    ui.painter().image(tex, r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                                    if resp.on_hover_cursor(egui::CursorIcon::PointingHand).double_clicked() {
+                                        self.actions.push(Action::EditPage(id.clone()));
+                                    }
+                                }
+                                None => {
+                                    let (r, _) = ui.allocate_exact_size(egui::vec2(w, w * 1.4), Sense::hover());
+                                    ui.painter().rect_filled(r, 2.0, p.code_bg);
+                                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Compondo a página…", egui::FontId::proportional(size * 0.8), p.faint);
+                                }
+                            }
+                            ui.add_space(4.0);
+                            if crate::kit::quiet(ui, Some(crate::icons::PENCIL), if dupla { "Editar página dupla" } else { "Editar página composta" }, p).clicked() {
+                                self.actions.push(Action::EditPage(id.clone()));
+                            }
+                        });
+                        return;
+                    }
                 }
                 if l == "playlist" {
                     let lines: Vec<String> = text.lines().map(String::from).collect();

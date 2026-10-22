@@ -397,32 +397,39 @@ impl Compositor {
                 if kit::button(ui, None, "Fechar", p).clicked() {
                     ev = Some(Event::Close);
                 }
-                ui.add_space(8.0);
-                if kit::icon_button(ui, icons::REDO_2, "Refazer (⇧⌘Z)", false, p).clicked() {
-                    self.redo();
-                }
-                if kit::icon_button(ui, icons::UNDO_2, "Desfazer (⌘Z)", false, p).clicked() {
-                    self.undo();
-                }
-                ui.add_space(6.0);
-                let z = self.zoom.unwrap_or(3.0);
-                if kit::icon_button(ui, icons::ZOOM_IN, "Aproximar", false, p).clicked() {
-                    self.zoom = Some((z * 1.2).min(16.0));
-                }
-                if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela", self.zoom.is_none(), p).clicked() {
-                    self.zoom = None;
-                }
-                if kit::icon_button(ui, icons::ZOOM_OUT, "Afastar", false, p).clicked() {
-                    self.zoom = Some((z / 1.2).max(0.5));
-                }
-                ui.add_space(6.0);
-                if kit::icon_button(ui, icons::MAGNET, "Ímã (arredonda a meio por cento)", self.snap, p).clicked() {
-                    self.snap = !self.snap;
-                }
-                if kit::icon_button(ui, icons::RULER, "Guias: corte, sangria, dobras, área de segurança", self.guides, p).clicked() {
-                    self.guides = !self.guides;
-                }
             });
+        });
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if kit::icon_button(ui, icons::UNDO_2, "Desfazer (⌘Z)", false, p).clicked() {
+                self.undo();
+            }
+            if kit::icon_button(ui, icons::REDO_2, "Refazer (⇧⌘Z)", false, p).clicked() {
+                self.redo();
+            }
+            ui.add_space(8.0);
+            let z = self.zoom.unwrap_or(3.0);
+            if kit::icon_button(ui, icons::ZOOM_OUT, "Afastar", false, p).clicked() {
+                self.zoom = Some((z / 1.2).max(0.5));
+            }
+            if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela", self.zoom.is_none(), p).clicked() {
+                self.zoom = None;
+            }
+            if kit::icon_button(ui, icons::ZOOM_IN, "Aproximar", false, p).clicked() {
+                self.zoom = Some((z * 1.2).min(16.0));
+            }
+            ui.add_space(8.0);
+            if kit::icon_button(ui, icons::RULER, "Guias: corte, sangria, dobras, área de segurança", self.guides, p).clicked() {
+                self.guides = !self.guides;
+            }
+            if kit::icon_button(ui, icons::MAGNET, "Ímã (arredonda a meio por cento)", self.snap, p).clicked() {
+                self.snap = !self.snap;
+            }
+            if self.dirty() {
+                ui.add_space(10.0);
+                ui.label(RichText::new("alterações não salvas").size(11.5).color(p.faint));
+            }
         });
         ev
     }

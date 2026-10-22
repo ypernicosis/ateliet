@@ -24,6 +24,7 @@ pub mod mapa_ui;
 pub mod mundo_mapas;
 pub mod mundo_more;
 pub mod mundo_ui;
+pub mod pagina_ui;
 
 use crate::vault::Vault;
 use ateliet_core::dataview::index::Index;
@@ -180,6 +181,7 @@ pub enum View {
     Trilha(Box<trilha_ui::TrilhaView>),
     Diagramacao(Box<diagramacao_ui::DiagramacaoView>),
     Capa(Box<capa_ui::CapaView>),
+    Pagina(Box<pagina_ui::PaginaView>),
 }
 
 impl View {
@@ -194,6 +196,7 @@ impl View {
             View::Trilha(t) => t.title(),
             View::Diagramacao(d) => d.title(),
             View::Capa(c) => c.title(),
+            View::Pagina(c) => c.title(),
         }
     }
 
@@ -203,6 +206,9 @@ impl View {
             _ => {
                 if let Some(b) = path.strip_prefix("scriptorium:mundo:") {
                     return Some(View::Mundo(Box::new(mundo_ui::MundoView::new(b))));
+                }
+                if let Some(b) = path.strip_prefix("scriptorium:pagina:") {
+                    return Some(View::Pagina(Box::new(pagina_ui::PaginaView::new(b))));
                 }
                 if let Some(b) = path.strip_prefix("scriptorium:capa:") {
                     return Some(View::Capa(Box::new(capa_ui::CapaView::new(b))));

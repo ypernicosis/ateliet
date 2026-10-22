@@ -945,6 +945,52 @@ pub fn filter(rgba: &mut [u8], w: u32, h: u32, name: &str) {
     }
 }
 
+// ── composed pages in notes ───────────────────────────────────────────
+
+pub const PAGE_LANG: &str = "scriptorium-pagina";
+
+/// The composed pages of a note: each fence's byte range and its model.
+pub fn page_blocks(text: &str) -> Vec<(std::ops::Range<usize>, Json)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    let mut open: Option<usize> = None;
+    let mut body = String::new();
+    for line in text.split_inclusive('\n') {
+        let t = line.trim();
+        match open {
+            None if t.starts_with("```") && t.trim_start_matches('`').trim() == PAGE_LANG => {
+                open = Some(at);
+                body.clear();
+            }
+            Some(start) if t == "```" => {
+                if let Ok(j) = serde_json::from_str::<Json>(&body) {
+                    out.push((start..at + line.len(), j));
+                }
+                open = None;
+            }
+            Some(_) => body.push_str(line),
+            None => {}
+        }
+        at += line.len();
+    }
+    out
+}
+
+/// A model as the fenced block that holds it.
+pub fn page_block(model: &Json) -> String {
+    format!("```{PAGE_LANG}\n{}\n```\n", serde_json::to_string_pretty(model).unwrap_or_default())
+}
+
+/// The note with the page of this id replaced by the model.
+pub fn replace_page(text: &str, id: &str, model: &Json) -> Option<String> {
+    let (r, _) = page_blocks(text).into_iter().find(|(_, m)| m["id"].as_str() == Some(id))?;
+    let mut out = String::with_capacity(text.len() + 256);
+    out.push_str(&text[..r.start]);
+    out.push_str(&page_block(model));
+    out.push_str(&text[r.end..]);
+    Some(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -966,6 +1012,20 @@ mod tests {
         let l = json!({ "zona": "capa", "sangria": true });
         let r = layer_rect(&l, &e);
         assert!((r.x - front.x).abs() < 1e-3 && (r.w - (front.w)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn page_blocks_round_trip() {
+        let m = json!({ "id": "pg1", "tipo": "pagina", "camadas": [] });
+        let text = format!("Antes.\n\n{}\nDepois.\n", page_block(&m));
+        let found = page_blocks(&text);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].1["id"], "pg1");
+        let m2 = json!({ "id": "pg1", "tipo": "dupla", "camadas": [] });
+        let t2 = replace_page(&text, "pg1", &m2).unwrap();
+        assert!(t2.starts_with("Antes.\n\n```scriptorium-pagina"));
+        assert!(t2.ends_with("```\n\nDepois.\n"));
+        assert_eq!(page_blocks(&t2)[0].1["tipo"], "dupla");
     }
 
     #[test]
