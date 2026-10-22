@@ -22,6 +22,7 @@ pub mod relink;
 pub mod render;
 pub mod search;
 pub mod syntax;
+pub mod texmath;
 pub mod text;
 pub mod vault;
 #[cfg(feature = "vision")]

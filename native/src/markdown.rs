@@ -3,6 +3,7 @@
 //! egui. A paragraph is one laid-out text block, so it wraps and selects like
 //! text; links inside it are found from the click position.
 
+use std::collections::HashMap;
 use ateliet_core::syntax;
 use ateliet_core::text::LineIndex;
 use eframe::egui::{self, text::LayoutJob, Color32, FontFamily, FontId, Sense, Stroke, TextFormat};
@@ -38,6 +39,10 @@ pub enum Inline {
     Break,
     Math(String),
     Field { key: String, value: String, paren: bool },
+    /// A footnote reference, by its number in order of first use.
+    FootRef(u32),
+    /// `$$…$$` met inside a paragraph (split out into a block when parsing).
+    DisplayMath(String),
 }
 
 #[derive(Clone, Debug)]
@@ -61,6 +66,8 @@ pub enum Block {
     Math(String),
     /// `![[note]]` or `![[image.png]]` alone in its paragraph.
     Embed { target: String, alt: String },
+    /// The footnotes, numbered, gathered at the end of the note.
+    Footnotes(Vec<(u32, Vec<Block>)>),
 }
 
 pub struct Doc {
@@ -126,12 +133,34 @@ struct Builder<'a> {
     events: std::iter::Peekable<pulldown_cmark::OffsetIter<'a>>,
     lines: LineIndex<'a>,
     headings: Vec<(u8, String, usize)>,
+    /// Footnote labels by number, and their definitions.
+    foot: HashMap<String, u32>,
+    defs: Vec<(String, Vec<Block>)>,
+    /// Blocks a paragraph split off (display math in its middle).
+    pending: Vec<Block>,
 }
 
 pub fn parse(text: &str) -> Doc {
     let src = prepare(text);
-    let mut b = Builder { events: Parser::new_ext(&src, syntax::md_options()).into_offset_iter().peekable(), lines: LineIndex::new(&src), headings: Vec::new() };
-    let blocks = b.blocks(None);
+    let mut b = Builder { events: Parser::new_ext(&src, syntax::md_options()).into_offset_iter().peekable(), lines: LineIndex::new(&src), headings: Vec::new(), foot: HashMap::new(), defs: Vec::new(), pending: Vec::new() };
+    let mut blocks = b.blocks(None);
+    if !b.defs.is_empty() {
+        // numbered as first referenced; ones never referenced come after
+        let mut notes: Vec<(u32, Vec<Block>)> = Vec::new();
+        let mut next = b.foot.len() as u32 + 1;
+        for (label, body) in std::mem::take(&mut b.defs) {
+            let n = match b.foot.get(&label) {
+                Some(n) => *n,
+                None => {
+                    next += 1;
+                    next - 1
+                }
+            };
+            notes.push((n, body));
+        }
+        notes.sort_by_key(|x| x.0);
+        blocks.push(Block::Footnotes(notes));
+    }
     Doc { blocks, headings: b.headings }
 }
 
@@ -144,6 +173,8 @@ fn plain(inl: &[Inline]) -> String {
             Inline::Image { alt, .. } => s.push_str(alt),
             Inline::Break => s.push(' '),
             Inline::Field { key, value, .. } => s.push_str(&format!("{key}: {value}")),
+            Inline::FootRef(_) => {}
+            Inline::DisplayMath(m) => s.push_str(m),
         }
     }
     s
@@ -242,6 +273,7 @@ impl<'a> Builder<'a> {
                     if let Some(b) = self.block(tag, r.start) {
                         out.push(b);
                     }
+                    out.append(&mut self.pending);
                 }
                 Event::Rule => {
                     flush(&mut out, &mut loose);
@@ -273,6 +305,30 @@ impl<'a> Builder<'a> {
                 // an embed alone in its paragraph is a block
                 if let [Inline::Image { target, alt, internal: true }] = inl.as_slice() {
                     return Some(Block::Embed { target: target.clone(), alt: alt.clone() });
+                }
+                // display math splits the paragraph: text, formula, text
+                if inl.iter().any(|i| matches!(i, Inline::DisplayMath(_))) {
+                    let mut parts: Vec<Block> = Vec::new();
+                    let mut cur: Vec<Inline> = Vec::new();
+                    for i in inl {
+                        match i {
+                            Inline::DisplayMath(m) => {
+                                let text = tidy(std::mem::take(&mut cur));
+                                if text.iter().any(|x| !matches!(x, Inline::Text(t, _) if t.trim().is_empty()) && !matches!(x, Inline::Break)) {
+                                    parts.push(Block::Para(text));
+                                }
+                                parts.push(Block::Math(m));
+                            }
+                            other => cur.push(other),
+                        }
+                    }
+                    let text = tidy(cur);
+                    if text.iter().any(|x| !matches!(x, Inline::Text(t, _) if t.trim().is_empty()) && !matches!(x, Inline::Break)) {
+                        parts.push(Block::Para(text));
+                    }
+                    let first = parts.remove(0);
+                    self.pending = parts;
+                    return Some(first);
                 }
                 Block::Para(inl)
             }
@@ -383,7 +439,11 @@ impl<'a> Builder<'a> {
                 }
                 Block::Html(h)
             }
-            Tag::FootnoteDefinition(_) => Block::Quote(self.blocks(Some(TagEnd::FootnoteDefinition))),
+            Tag::FootnoteDefinition(label) => {
+                let body = self.blocks(Some(TagEnd::FootnoteDefinition));
+                self.defs.push((label.to_string(), body));
+                return None;
+            }
             Tag::Item => Block::List { start: None, items: vec![Item { task: None, line: 0, blocks: self.blocks(Some(TagEnd::Item)) }] },
             _ => return None,
         })
@@ -460,6 +520,7 @@ impl<'a> Builder<'a> {
             Event::SoftBreak => out.push(Inline::Text(" ".into(), *style)),
             Event::HardBreak => out.push(Inline::Break),
             Event::InlineMath(m) => out.push(Inline::Math(m.to_string())),
+            Event::DisplayMath(m) => out.push(Inline::DisplayMath(m.to_string())),
             Event::InlineHtml(h) => match h.trim() {
                 "<mark>" => style.mark = true,
                 "</mark>" => style.mark = false,
@@ -470,7 +531,11 @@ impl<'a> Builder<'a> {
                 "</i>" | "</em>" => style.italic = false,
                 _ => {}
             },
-            Event::FootnoteReference(f) => out.push(Inline::Text(format!("[{f}]"), Style { ..*style })),
+            Event::FootnoteReference(f) => {
+                let k = self.foot.len() as u32 + 1;
+                let n = *self.foot.entry(f.to_string()).or_insert(k);
+                out.push(Inline::FootRef(n));
+            }
             _ => {}
         }
     }
@@ -719,8 +784,18 @@ impl<'h> Renderer<'h> {
                     runs.push(t, f);
                 }
                 Inline::Math(t) => {
-                    let f = TextFormat { font_id: FontId::new(size * 0.9, FontFamily::Monospace), color: p.muted, italics: true, ..Default::default() };
-                    runs.push(t, f);
+                    // TeX read as symbols, in the text's italic
+                    let mut f = self.fmt(size, merge(base, Style { italic: true, ..Default::default() }));
+                    if let Some(c) = color {
+                        f.color = c;
+                    }
+                    runs.push(&ateliet_core::texmath::convert(t), f);
+                }
+                Inline::DisplayMath(_) => {}
+                Inline::FootRef(n) => {
+                    // a small raised number in the accent colour
+                    let f = TextFormat { font_id: FontId::new(size * 0.68, FontFamily::Proportional), color: p.accent_strong, valign: egui::Align::TOP, ..Default::default() };
+                    runs.push(&n.to_string(), f);
                 }
                 Inline::Break => runs.push("\n", self.fmt(size, base)),
                 Inline::Field { key, value, paren } => {
@@ -1025,7 +1100,28 @@ impl<'h> Renderer<'h> {
                 }
             }
             Block::Math(m) => {
-                ui.vertical_centered(|ui| ui.label(egui::RichText::new(m.trim()).monospace().italics().size(size).color(p.muted)));
+                let text = ateliet_core::texmath::convert(m.trim());
+                ui.add_space(size * 0.3);
+                ui.vertical_centered(|ui| ui.label(egui::RichText::new(text.trim()).family(FontFamily::Name("italic".into())).size(size * 1.12).color(p.text)));
+                ui.add_space(size * 0.3);
+            }
+            Block::Footnotes(notes) => {
+                ui.add_space(size * 0.8);
+                let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
+                ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, p.border));
+                ui.add_space(size * 0.5);
+                for (n, body) in notes {
+                    ui.horizontal_top(|ui| {
+                        let (nr, _) = ui.allocate_exact_size(egui::vec2(size * 1.6, size * 1.3), Sense::hover());
+                        ui.painter().text(nr.right_top() + egui::vec2(-6.0, size * 0.18), egui::Align2::RIGHT_TOP, format!("{n}."), FontId::proportional(size * 0.85), p.muted);
+                        ui.vertical(|ui| {
+                            ui.scope(|ui| {
+                                ui.style_mut().override_font_id = Some(FontId::proportional(size * 0.88));
+                                self.blocks(ui, body);
+                            });
+                        });
+                    });
+                }
             }
             Block::Embed { target, alt } => {
                 let ext = target.rsplit('.').next().unwrap_or("").to_lowercase();
