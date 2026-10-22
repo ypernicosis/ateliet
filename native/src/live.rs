@@ -159,33 +159,110 @@ use crate::app::Tab;
 use crate::markdown::{Action, Host, Renderer};
 use eframe::egui;
 
-fn properties(ui: &mut egui::Ui, text: &str, host: &dyn Host) {
+/// A change to one frontmatter key: a new value, or `None` to remove it.
+type PropEdit = (String, Option<serde_json::Value>);
+
+/// The frontmatter as editable properties: a check box, a number, text, or
+/// a list of chips, by what each value is; plus adding and removing keys.
+fn properties(ui: &mut egui::Ui, text: &str, host: &dyn Host) -> Option<PropEdit> {
+    use serde_json::Value as J;
     let p = host.palette();
     let yaml = text.trim_start_matches("---").trim_end().trim_end_matches("---");
-    let data = syntax::parse_yaml(yaml).unwrap_or(serde_json::Value::Null);
-    let Some(o) = data.as_object().filter(|o| !o.is_empty()) else { return };
-    egui::Frame::new().fill(p.bg_secondary).corner_radius(8.0).inner_margin(egui::Margin { left: 14, right: 14, top: 10, bottom: 10 }).show(ui, |ui| {
+    let data = syntax::parse_yaml(yaml).unwrap_or(J::Null);
+    let empty = serde_json::Map::new();
+    let o = data.as_object().unwrap_or(&empty);
+    let mut edit: Option<PropEdit> = None;
+    let fs = 13.0;
+    egui::Frame::new().fill(p.bg_secondary).corner_radius(8.0).inner_margin(egui::Margin { left: 14, right: 10, top: 10, bottom: 8 }).show(ui, |ui| {
         ui.set_width(ui.available_width());
-        egui::Grid::new(("props", text.len())).spacing([20.0, 5.0]).show(ui, |ui| {
-            for (k, v) in o {
-                ui.label(egui::RichText::new(k).size(13.0).color(p.faint));
-                let shown = match v {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Array(a) => a.iter().map(|x| x.as_str().map(str::to_string).unwrap_or_else(|| x.to_string())).collect::<Vec<_>>().join(", "),
-                    serde_json::Value::Null => String::new(),
-                    other => other.to_string(),
-                };
-                ui.label(egui::RichText::new(if shown.is_empty() { "—".to_string() } else { shown }).size(13.0).color(p.text));
-                ui.end_row();
-            }
-        });
+        ui.spacing_mut().item_spacing.y = 6.0;
+        for (k, v) in o {
+            ui.horizontal_top(|ui| {
+                let (lr, _) = ui.allocate_exact_size(egui::vec2(120.0, 20.0), egui::Sense::hover());
+                ui.painter().text(lr.left_center(), egui::Align2::LEFT_CENTER, k, egui::FontId::proportional(fs), p.faint);
+                let id = egui::Id::new(("prop", k.as_str()));
+                let value_w = (ui.available_width() - 24.0).max(60.0);
+                ui.allocate_ui_with_layout(egui::vec2(value_w, 20.0), egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true), |ui| {
+                ui.set_width(value_w);
+                match v {
+                    J::Bool(b) => {
+                        let mut on = *b;
+                        if ui.checkbox(&mut on, "").changed() {
+                            edit = Some((k.clone(), Some(J::Bool(on))));
+                        }
+                    }
+                    J::Number(n) => {
+                        let mut x = n.as_f64().unwrap_or(0.0);
+                        let int = x.fract() == 0.0;
+                        if ui.add(egui::DragValue::new(&mut x).speed(if int { 1.0 } else { 0.1 }).max_decimals(if int { 0 } else { 6 })).changed() {
+                            let v = if x.fract() == 0.0 && x.abs() < 1e15 { J::from(x as i64) } else { J::from(x) };
+                            edit = Some((k.clone(), Some(v)));
+                        }
+                    }
+                    J::Array(a) => {
+                        {
+                            ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
+                            for (i, item) in a.iter().enumerate() {
+                                let label = item.as_str().map(str::to_string).unwrap_or_else(|| item.to_string());
+                                egui::Frame::new().fill(p.bg_hover).corner_radius(10.0).inner_margin(egui::Margin { left: 8, right: 4, top: 1, bottom: 1 }).show(ui, |ui| {
+                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    ui.label(egui::RichText::new(&label).size(12.5).color(p.text));
+                                    if ui.add(egui::Label::new(egui::RichText::new("×").size(12.5).color(p.faint)).sense(egui::Sense::click())).on_hover_text("Tirar").clicked() {
+                                        let mut na = a.clone();
+                                        na.remove(i);
+                                        edit = Some((k.clone(), Some(J::Array(na))));
+                                    }
+                                });
+                            }
+                            // a new item: typed, then Enter
+                            let mut draft: String = ui.data(|d| d.get_temp(id.with("draft"))).unwrap_or_default();
+                            let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text("+").desired_width(70.0).frame(false).font(egui::FontId::proportional(12.5)));
+                            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !draft.trim().is_empty() {
+                                let mut na = a.clone();
+                                na.push(J::String(draft.trim().to_string()));
+                                edit = Some((k.clone(), Some(J::Array(na))));
+                                draft.clear();
+                                r.request_focus();
+                            }
+                            ui.data_mut(|d| d.insert_temp(id.with("draft"), draft));
+                        }
+                    }
+                    other => {
+                        let mut s = match other {
+                            J::String(s) => s.clone(),
+                            J::Null => String::new(),
+                            o => o.to_string(),
+                        };
+                        let r = ui.add(egui::TextEdit::singleline(&mut s).desired_width(f32::INFINITY).frame(false).hint_text("vazio").font(egui::FontId::proportional(fs)));
+                        if r.changed() {
+                            edit = Some((k.clone(), Some(J::String(s))));
+                        }
+                    }
+                }
+                });
+                if ui.add(egui::Label::new(egui::RichText::new("×").size(fs).color(p.faint)).sense(egui::Sense::click())).on_hover_text("Remover a propriedade").clicked() {
+                    edit = Some((k.clone(), None));
+                }
+            });
+        }
+        // a new property: its name, Enter
+        let nid = egui::Id::new(("prop-new", text.len() / 1_000_000));
+        let mut name: String = ui.data(|d| d.get_temp(nid)).unwrap_or_default();
+        let r = ui.add(egui::TextEdit::singleline(&mut name).hint_text("+ Adicionar propriedade").desired_width(200.0).frame(false).font(egui::FontId::proportional(12.5)));
+        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !name.trim().is_empty() && !o.contains_key(name.trim()) {
+            edit = Some((name.trim().to_string(), Some(J::String(String::new()))));
+            name.clear();
+        }
+        ui.data_mut(|d| d.insert_temp(nid, name));
     });
     ui.add_space(host.size() * 0.6);
+    edit
 }
 
 /// Draw the note in Live Preview; returns the actions of clicked links and tasks.
 pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::Styles) -> Vec<Action> {
     let mut actions = Vec::new();
+    let mut prop_edit: Option<PropEdit> = None;
     tab.live.refresh(&tab.text);
     let segs = tab.live.segs.clone();
     let id = egui::Id::new(("live-editor", &tab.path));
@@ -245,7 +322,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         let dim = active.is_some() && crate::sc::focus::DIM.with(|d| d.get());
         if seg.frontmatter {
             if !crate::sc::focus::ON.with(|f| f.get()) {
-                properties(ui, &seg.text, host);
+                prop_edit = properties(ui, &seg.text, host);
             }
         } else {
             let mut r = Renderer::new(host);
@@ -266,10 +343,11 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         }
         let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
         let clicked = ui.input(|inp| inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
-        if clicked && actions.len() == before {
+        // the properties are edited with their own widgets, not as YAML
+        if clicked && actions.len() == before && !seg.frontmatter {
             open = Some((i, true));
         }
-        if ui.rect_contains_pointer(rect) && actions.len() == before {
+        if ui.rect_contains_pointer(rect) && actions.len() == before && !seg.frontmatter {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
     }
@@ -303,6 +381,11 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         if let Some(seg) = tab.live.segs.get(i).cloned() {
             tab.live.open(&seg, at_end);
         }
+    }
+    // a property edited: the frontmatter key changes, the rest stays as written
+    if let Some((key, value)) = prop_edit {
+        tab.text = ateliet_core::scriptorium::set_frontmatter(&tab.text, &key, value.as_ref());
+        tab.last_edit = Some(std::time::Instant::now());
     }
     actions
 }
