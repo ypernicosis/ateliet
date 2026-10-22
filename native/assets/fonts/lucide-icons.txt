@@ -211,3 +211,4 @@ gem
 ghost
 lightbulb
 file-search
+ trees pentagon ruler scaling image-down rotate-cw

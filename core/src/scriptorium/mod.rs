@@ -10,6 +10,7 @@ pub mod enredo;
 pub mod estruturas;
 pub mod export;
 pub mod manuscript;
+pub mod mapa;
 pub mod mundo;
 pub mod sheet;
 pub mod stats;

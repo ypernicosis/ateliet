@@ -127,7 +127,7 @@ pub fn parse_range(txt: &str, antes: &str, depois: &str) -> Option<(f64, f64)> {
     let s: String = txt.chars().map(|c| if c == '\u{a0}' || c == '\u{202f}' || c == '\u{2009}' { ' ' } else { c }).collect();
     let a = if antes.is_empty() { "AC" } else { antes };
     let d = if depois.is_empty() { "DC" } else { depois };
-    let re = Regex::new(&format!(r"(?i)(\d{{1,3}}(?:[ .]\d{{3}})*|\d+)\s*({}|{}|a\.\s?c\.|d\.\s?c\.)?", regex::escape(a), regex::escape(d))).ok()?;
+    let re = Regex::new(&format!(r"(?i)(\d{{1,3}}(?:[ .]\d{{3}})+|\d+)\s*({}|{}|a\.\s?c\.|d\.\s?c\.)?", regex::escape(a), regex::escape(d))).ok()?;
     let mut nums: Vec<(f64, char)> = Vec::new();
     for c in re.captures_iter(&s) {
         let Ok(n) = c[1].replace([' ', '.'], "").parse::<f64>() else { continue };
@@ -1014,6 +1014,8 @@ mod tests {
         assert_eq!(parse_range("≈200 000 – 12 000 AC", "", ""), Some((-200000.0, -12000.0)));
         assert_eq!(parse_range("≈1 100 – 2 840 DC", "", ""), Some((1100.0, 2840.0)));
         assert_eq!(parse_range("300 AC – 150", "", ""), Some((-300.0, 150.0)));
+        assert_eq!(parse_range("1200 DC", "AC", ""), Some((1200.0, 1200.0)));
+        assert_eq!(parse_range("12.000 AC", "", ""), Some((-12000.0, -12000.0)));
         assert_eq!(year(-3000.0, &json!({})), "3.000 AC");
     }
 

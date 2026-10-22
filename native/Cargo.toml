@@ -35,3 +35,4 @@ open = "5"
 ureq = { version = "2", optional = true }
 trash = "5"
 arboard = { version = "3", default-features = false }
+ab_glyph = "0.2"

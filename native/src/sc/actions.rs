@@ -59,6 +59,14 @@ impl App {
                     self.open(&format!("scriptorium:{view}:{b}"), true);
                 }
             }
+            "mapas" => {
+                if let Some(b) = book {
+                    self.open(&format!("scriptorium:mundo:{b}"), true);
+                    if let Some(crate::sc::View::Mundo(m)) = self.tabs.get_mut(self.active).and_then(|t| t.view.as_mut()) {
+                        m.aba = crate::sc::mundo_ui::Aba::Mapas;
+                    }
+                }
+            }
             _ => self.open(&format!("scriptorium:{view}"), true),
         }
     }

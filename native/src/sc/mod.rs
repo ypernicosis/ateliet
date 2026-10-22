@@ -14,6 +14,9 @@ pub mod sheet_ui;
 pub mod export_ui;
 pub mod focus;
 pub mod library;
+pub mod mapa_export;
+pub mod mapa_ui;
+pub mod mundo_mapas;
 pub mod mundo_more;
 pub mod mundo_ui;
 
@@ -167,6 +170,7 @@ pub enum View {
     Sheet(Box<sheet_ui::SheetView>),
     Enredo(Box<enredo_ui::EnredoView>),
     Mundo(Box<mundo_ui::MundoView>),
+    Mapa(Box<mapa_ui::MapaView>),
 }
 
 impl View {
@@ -177,6 +181,7 @@ impl View {
             View::Sheet(s) => s.title(),
             View::Enredo(e) => e.title(),
             View::Mundo(m) => m.title(),
+            View::Mapa(m) => m.title(),
         }
     }
 

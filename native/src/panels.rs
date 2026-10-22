@@ -676,6 +676,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             Some(crate::sc::View::Cast(_)) => icons::USERS,
                             Some(crate::sc::View::Enredo(_)) => icons::WAYPOINTS,
                             Some(crate::sc::View::Mundo(_)) => icons::GLOBE,
+                            Some(crate::sc::View::Mapa(_)) => icons::MAP,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
                             None => icons::FILE_TEXT,

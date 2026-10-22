@@ -27,11 +27,12 @@ use std::time::{Duration, Instant, SystemTime};
 pub enum Aba {
     Codice,
     Tempo,
+    Mapas,
     Genealogias,
     Linguas,
 }
 
-const ABAS: [(Aba, &str, &str); 4] = [(Aba::Codice, icons::LIBRARY, "Códice"), (Aba::Tempo, icons::HOURGLASS, "Tempo"), (Aba::Genealogias, icons::GIT_FORK, "Genealogias"), (Aba::Linguas, icons::LANGUAGES, "Línguas")];
+const ABAS: [(Aba, &str, &str); 5] = [(Aba::Codice, icons::LIBRARY, "Códice"), (Aba::Tempo, icons::HOURGLASS, "Tempo"), (Aba::Mapas, icons::MAP, "Mapas"), (Aba::Genealogias, icons::GIT_FORK, "Genealogias"), (Aba::Linguas, icons::LANGUAGES, "Línguas")];
 
 pub fn cat_icon(k: &str) -> &'static str {
     match k {
@@ -156,6 +157,9 @@ pub struct MundoView {
     pub(super) toast: Option<String>,
     pub(super) focus_name: bool,
     pub(super) pending_eras: Option<Vec<Json>>,
+    // maps
+    pub(super) maps: Option<(Instant, Vec<(String, Json)>)>,
+    pub(super) new_map: Option<super::mundo_mapas::NewMap>,
 }
 
 impl MundoView {
@@ -199,6 +203,8 @@ impl MundoView {
             toast: None,
             focus_name: false,
             pending_eras: None,
+            maps: None,
+            new_map: None,
         }
     }
 
@@ -347,11 +353,13 @@ impl MundoView {
             match self.aba {
                 Aba::Codice => self.codice(ui, p, cx, &root, &mut acts),
                 Aba::Tempo => self.tempo(ui, p, &root, &ix, &b),
+                Aba::Mapas => self.mapas(ui, p, cx, &root, &ix, &b, &author, &mut acts),
                 Aba::Genealogias => self.genealogias(ui, p, &mut acts),
                 Aba::Linguas => self.linguas(ui, p, &mut acts),
             }
         });
         self.dialogs(ui.ctx(), p, &root, &ix, &b, &author);
+        self.new_map_dialog(ui.ctx(), p, &root, &ix, &b, &author, &mut acts);
         if let Some(t) = self.toast.take() {
             acts.push(Action::Toast(t));
         }
@@ -362,14 +370,14 @@ impl MundoView {
         if ui.ctx().memory(|m| m.focused().is_some() || m.any_popup_open()) || self.any_dialog() {
             return;
         }
-        let k = ui.input(|i| [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4].iter().position(|k| i.key_pressed(*k) && !i.modifiers.command));
+        let k = ui.input(|i| [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5].iter().position(|k| i.key_pressed(*k) && !i.modifiers.command));
         if let Some(k) = k {
             self.aba = ABAS[k].0;
         }
     }
 
     pub(super) fn any_dialog(&self) -> bool {
-        self.new_world.is_some() || self.sources || self.era.is_some() || self.cal_edit.is_some() || self.note_pick.is_some() || self.new_tree.is_some() || self.recat.is_some() || self.retermos.is_some()
+        self.new_world.is_some() || self.new_map.is_some() || self.sources || self.era.is_some() || self.cal_edit.is_some() || self.note_pick.is_some() || self.new_tree.is_some() || self.recat.is_some() || self.retermos.is_some()
     }
 
     // ── bar ───────────────────────────────────────────────────────────────

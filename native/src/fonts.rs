@@ -4,7 +4,9 @@
 //! Inter does not cover (and for emoji).
 //!
 //! Families: `Proportional` (Inter Regular), `"medium"`, `"bold"` (Inter
-//! SemiBold), `"italic"`, `"icons"` (Lucide; see `icons.rs`).
+//! SemiBold), `"italic"`, `"icons"` (Lucide; see `icons.rs`); the serifs
+//! `"cormorant"`, `"cormorant-italic"`, `"cormorant-bold"` (map labels) and
+//! `"garamond"`, `"garamond-italic"` (typeset pages).
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
@@ -14,6 +16,11 @@ const INTER_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Inter-Medium.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 const INTER_ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-Italic.ttf");
 const LUCIDE: &[u8] = include_bytes!("../assets/fonts/Lucide.ttf");
+pub const CORMORANT: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-Medium.ttf");
+pub const CORMORANT_ITALIC: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-MediumItalic.ttf");
+pub const CORMORANT_BOLD: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-Bold.ttf");
+const GARAMOND: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Medium.ttf");
+const GARAMOND_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-MediumItalic.ttf");
 
 const SYSTEM_SANS: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
@@ -48,6 +55,11 @@ pub fn install(ctx: &egui::Context) {
     put("inter-semibold", FontData::from_static(INTER_SEMIBOLD));
     put("inter-italic", FontData::from_static(INTER_ITALIC));
     put("lucide", FontData::from_static(LUCIDE));
+    put("cormorant", FontData::from_static(CORMORANT));
+    put("cormorant-italic", FontData::from_static(CORMORANT_ITALIC));
+    put("cormorant-bold", FontData::from_static(CORMORANT_BOLD));
+    put("garamond", FontData::from_static(GARAMOND));
+    put("garamond-italic", FontData::from_static(GARAMOND_ITALIC));
     let sys = first(SYSTEM_SANS).map(|d| put("sys-sans", FontData::from_owned(d))).is_some();
     let mono = first(MONO).map(|d| put("sys-mono", FontData::from_owned(d))).is_some();
 
@@ -65,6 +77,9 @@ pub fn install(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("italic".into()), chain("inter-italic"));
+    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic"] {
+        fonts.families.insert(FontFamily::Name(f.into()), chain(f));
+    }
     fonts.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into(), "inter".into()]);
     let mut m: Vec<String> = if mono { vec!["sys-mono".into()] } else { Vec::new() };
     m.extend(builtin_mono);

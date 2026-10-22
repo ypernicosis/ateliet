@@ -329,15 +329,20 @@ impl App {
         } else {
             None
         };
-        // characters open as their sheet (the plugin's "abrirFichas")
-        if !is_board && self.sc.as_ref().is_some_and(|s| s.settings.data["abrirFichas"].as_bool().unwrap_or(true)) {
+        // characters open as their sheet (the plugin's "abrirFichas"), maps as maps
+        if !is_board {
             // the index may still be building (session restore): read the note itself then
             let kind = v.index.read().unwrap().page(path).map(|p| ateliet_core::scriptorium::book::kind(p).to_string()).unwrap_or_else(|| {
                 let text = std::fs::read_to_string(v.abs(path)).unwrap_or_default();
                 ateliet_core::scriptorium::sheet::split(&text).0.and_then(|m| m.get("scriptorium").and_then(|k| k.as_str()).map(str::to_string)).unwrap_or_default()
             });
-            if kind == "personagem" || kind == "modelo-ficha" {
-                let view = crate::sc::View::Sheet(Box::new(crate::sc::sheet_ui::SheetView::open(path, &v.root)));
+            let sheets = self.sc.as_ref().is_some_and(|s| s.settings.data["abrirFichas"].as_bool().unwrap_or(true));
+            let view = match kind.as_str() {
+                "personagem" | "modelo-ficha" if sheets => Some(crate::sc::View::Sheet(Box::new(crate::sc::sheet_ui::SheetView::open(path, &v.root)))),
+                "mapa" => Some(crate::sc::View::Mapa(Box::new(crate::sc::mapa_ui::MapaView::open(path)))),
+                _ => None,
+            };
+            if let Some(view) = view {
                 let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view) };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
@@ -424,6 +429,12 @@ impl App {
         }
         if let Some(crate::sc::View::Sheet(s)) = t.view.as_mut() {
             if let Some(p) = s.save(&v.root) {
+                v.index.write().unwrap().update(&[p]);
+            }
+            return;
+        }
+        if let Some(crate::sc::View::Mapa(m)) = t.view.as_mut() {
+            if let Some(p) = m.save(&v.root) {
                 v.index.write().unwrap().update(&[p]);
             }
             return;
@@ -925,8 +936,16 @@ impl App {
                         crate::sc::View::Sheet(s) => s.ui(ui, &mut cx),
                         crate::sc::View::Enredo(e) => e.ui(ui, &mut cx),
                         crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
+                        crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
                     }
                 };
+                // a map can walk into its submaps: the tab follows
+                let t = &mut self.tabs[self.active];
+                if let Some(crate::sc::View::Mapa(m)) = t.view.as_ref() {
+                    if t.path != m.path {
+                        t.path = m.path.clone();
+                    }
+                }
                 sc_actions = acts;
                 return;
             }

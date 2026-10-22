@@ -370,7 +370,7 @@ fn same(a: &Json, b: &Json) -> bool {
 
 // ── creating things ────────────────────────────────────────────────────────
 
-fn unique(root: &Path, path: &str) -> String {
+pub fn unique(root: &Path, path: &str) -> String {
     if !root.join(path).exists() {
         return path.to_string();
     }
@@ -384,7 +384,7 @@ fn unique(root: &Path, path: &str) -> String {
     path.to_string()
 }
 
-fn write(root: &Path, rel: &str, text: &str) -> Result<(), String> {
+pub fn write(root: &Path, rel: &str, text: &str) -> Result<(), String> {
     let abs = root.join(rel);
     if let Some(d) = abs.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;

@@ -273,6 +273,7 @@ dependencies = [
 name = "ateliet-native"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "arboard",
  "ateliet_core",
  "chrono",
