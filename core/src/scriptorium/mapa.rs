@@ -58,10 +58,9 @@ pub fn create(root: &Path, ix: &Index, home: &Book, name: &str, image: &str, wor
 pub fn list(ix: &Index, books: &[Book]) -> Vec<String> {
     let mut out: Vec<String> = ix
         .file_paths()
-        .into_iter()
-        .cloned()
         .filter(|p| books.iter().any(|b| p.starts_with(&format!("{}/", b.folder))))
         .filter(|p| ix.page(p).is_some_and(|pg| book::kind(pg) == "mapa"))
+        .cloned()
         .collect();
     out.sort();
     out
@@ -797,8 +796,8 @@ impl Raster {
                 }
                 let k = 1.0 - s[3] / 255.0;
                 let i = (y * self.w + x) * 4;
-                for c in 0..4 {
-                    self.px[i + c] = (s[c] + self.px[i + c] as f64 * k).round().clamp(0.0, 255.0) as u8;
+                for (d, v) in self.px[i..i + 4].iter_mut().zip(s) {
+                    *d = (v + *d as f64 * k).round().clamp(0.0, 255.0) as u8;
                 }
             }
         }

@@ -26,6 +26,13 @@ pub enum Mode {
     Relacoes,
 }
 
+impl Mode {
+    /// The views that can show the whole series.
+    pub fn has_saga(self) -> bool {
+        matches!(self, Mode::Grade | Mode::Cronologia | Mode::Pistas | Mode::Arcos)
+    }
+}
+
 pub const MODES: [(Mode, &str, &str); 7] = [
     (Mode::Grade, icons::LAYOUT_GRID, "Grade"),
     (Mode::Escaleta, icons::LIST_ORDERED, "Escaleta"),
@@ -99,6 +106,10 @@ pub struct EnredoView {
     pub(super) st_folder: String,
     pub(super) board_state: super::enredo_board::Board,
     pub(super) pending_open: Option<String>,
+    /// Livro or Saga.
+    pub saga: bool,
+    pub(super) saga_cache: std::collections::HashMap<String, (Option<SystemTime>, Json)>,
+    pub(super) pending_book: Option<(String, Option<Sel>)>,
 }
 
 pub fn status_color(k: &str) -> Color32 {
@@ -154,6 +165,9 @@ impl EnredoView {
             st_folder: String::new(),
             board_state: Default::default(),
             pending_open: None,
+            saga: false,
+            saga_cache: Default::default(),
+            pending_book: None,
         }
     }
 
@@ -265,9 +279,12 @@ impl EnredoView {
         self.st_folder = ateliet_core::scriptorium::estruturas::folder(&cx.sc.settings.str("pastaEstruturas", ""));
         self.resolve(&root, &cols, &words);
         self.keys(ui);
+        let saga = en::saga_books(&ix, &b, &author);
+        let srcs = self.sources(&root, &ix, &b, &cols, &saga);
+        let saga_on = srcs.len() > 1;
 
         egui::TopBottomPanel::top(ui.id().with("en-bar")).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 20, right: 16, top: 12, bottom: 10 })).show_separator_line(true).show_inside(ui, |ui| {
-            self.bar(ui, p, &b, &cols);
+            self.bar(ui, p, &b, &cols, &saga);
         });
         if self.sel.is_some() {
             let r = egui::SidePanel::right(ui.id().with("en-drawer")).resizable(false).exact_width(372.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 22, right: 10, top: 16, bottom: 12 })).show_inside(ui, |ui| {
@@ -279,11 +296,12 @@ impl EnredoView {
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show_inside(ui, |ui| match self.mode {
             Mode::Mural => self.board(ui, p, cx, &b, "mural", &chars, &mut acts),
             Mode::Relacoes => self.board(ui, p, cx, &b, "relacoes", &chars, &mut acts),
+            Mode::Grade if saga_on => self.grade_saga(ui, p, &srcs),
             Mode::Grade => self.grade(ui, p, &b, &cols, &chars, &mut acts),
             Mode::Escaleta => self.escaleta(ui, p, &b, &cols, &root, &ix, &mut acts),
-            Mode::Cronologia => self.cronologia(ui, p, &b, &cols),
-            Mode::Pistas => self.pistas(ui, p, &b, &cols),
-            Mode::Arcos => self.arcos(ui, p, &b, &cols, &ix),
+            Mode::Cronologia => self.cronologia(ui, p, &srcs),
+            Mode::Pistas => self.pistas(ui, p, &srcs),
+            Mode::Arcos => self.arcos(ui, p, &srcs, &ix),
         });
         self.trama_dialog(ui.ctx(), p);
         self.era_dialog(ui.ctx(), p);
@@ -292,6 +310,22 @@ impl EnredoView {
         self.structure_editor(ui.ctx(), p, &ix, &root, &author, &mut acts);
         if let Some(t) = self.pending_open.take() {
             acts.push(Action::OpenLink(t, b.path.clone(), true));
+        }
+        // something of another book of the series was clicked: open its Enredo
+        if let Some((path, sel)) = self.pending_book.take() {
+            if path != self.book {
+                if let Some(saved) = self.save(&root, &ix, &author) {
+                    acts.push(Action::Saved(saved));
+                }
+                self.book = path;
+                self.loaded = false;
+                self.dirty = false;
+                self.saga = false;
+                self.apps.clear();
+                self.arco = None;
+            }
+            self.sel = sel;
+            self.confirm = None;
         }
         acts
     }
@@ -328,7 +362,7 @@ impl EnredoView {
 
     // ── bar ───────────────────────────────────────────────────────────────
 
-    fn bar(&mut self, ui: &mut egui::Ui, p: Palette, b: &Book, cols: &[Col]) {
+    fn bar(&mut self, ui: &mut egui::Ui, p: Palette, b: &Book, cols: &[Col], saga: &[Book]) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.vertical(|ui| {
@@ -357,6 +391,7 @@ impl EnredoView {
                 if !lab.is_empty() && kit::primary_icon(ui, icons::PLUS, lab, p).on_hover_text(format!("Nova {} (N)", lab.to_lowercase())).clicked() {
                     self.primary();
                 }
+                self.scope_switch(ui, p, b, saga);
                 if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Arcos) {
                     let lab = match self.apps.len() {
                         0 => "Sem estrutura".to_string(),

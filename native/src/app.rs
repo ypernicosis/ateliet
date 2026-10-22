@@ -946,6 +946,13 @@ impl App {
                         t.path = m.path.clone();
                     }
                 }
+                // the Enredo can move to another book of the series
+                if let Some(crate::sc::View::Enredo(e)) = t.view.as_ref() {
+                    let want = format!("scriptorium:enredo:{}", e.book);
+                    if t.path != want {
+                        t.path = want;
+                    }
+                }
                 sc_actions = acts;
                 return;
             }

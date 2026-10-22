@@ -136,6 +136,7 @@ impl MundoView {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new_map_dialog(&mut self, ctx: &egui::Context, p: Palette, root: &Path, ix: &Index, b: &Book, author: &str, acts: &mut Vec<Action>) {
         let Some(nm) = self.new_map.as_mut() else { return };
         let mut done = None;

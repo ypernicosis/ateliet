@@ -834,7 +834,7 @@ impl MapaView {
     fn open_edit(&mut self, id: &str) {
         let Some(l) = self.layers().into_iter().find(|l| l["id"] == id) else { return };
         let cal = self.cal();
-        let g = |k: &str, d: &str| l[k].as_str().map(String::from).or_else(|| l[k].as_f64().map(|v| fmt_f(v))).unwrap_or_else(|| d.to_string());
+        let g = |k: &str, d: &str| l[k].as_str().map(String::from).or_else(|| l[k].as_f64().map(fmt_f)).unwrap_or_else(|| d.to_string());
         let mut f: Vec<(&'static str, String, String, String)> = match str_of(&l, "t") {
             "pino" => vec![("rotulo", "Nome".into(), g("rotulo", ""), String::new()), ("link", "Nota ligada (nome ou [[link]])".into(), link_text(str_of(&l, "link")), "Ex.: Elevenlore".into()), ("cor", "Cor".into(), g("cor", ma::PIN), String::new())],
             "rotulo" => vec![("texto", "Texto".into(), g("texto", ""), String::new()), ("tam", "Tamanho (% da largura)".into(), g("tam", "1.6"), String::new()), ("rot", "Rotação (°)".into(), g("rot", "0"), String::new()), ("cor", "Cor".into(), g("cor", "#3b2a1a"), String::new())],

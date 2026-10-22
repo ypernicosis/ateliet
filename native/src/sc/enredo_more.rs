@@ -1,6 +1,7 @@
 //! Enredo, native (continued): the side drawer for whatever is selected,
 //! and the Cronologia, Pistas and Arcos views.
 
+use super::enredo_saga::Src;
 use super::enredo_ui::{note_name, str_field, truncated, EnredoView, Sel};
 use super::Action;
 use crate::icons;
@@ -898,9 +899,11 @@ impl EnredoView {
 
     // ── Cronologia ────────────────────────────────────────────────────────
 
-    pub(super) fn cronologia(&mut self, ui: &mut egui::Ui, p: Palette, _b: &Book, cols: &[Col]) {
+    pub(super) fn cronologia(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
         struct Item {
             scene: bool,
+            book: String,
+            bi: usize,
             id: String,
             title: String,
             quando: String,
@@ -911,26 +914,34 @@ impl EnredoView {
             row: usize,
         }
         let mut items: Vec<Item> = Vec::new();
-        let mut undated: Vec<usize> = Vec::new();
+        let mut undated: Vec<(String, Json)> = Vec::new();
+        let mut eras: Vec<Json> = Vec::new();
+        let saga = srcs.len() > 1;
         let tname = |d: &Json, id: Option<&str>| id.and_then(|i| en::trama(d, i)).map(|t| (en::str_of(t, "nome").to_string(), super::color(en::str_of(t, "cor"))));
-        for (read, i) in en::ordered(cols, &self.data).into_iter().enumerate() {
-            let s = &self.data["cenas"][i];
-            if !self.passes(s) {
-                continue;
+        let mut read = 0;
+        for (bi, src) in srcs.iter().enumerate() {
+            let d = src.d(&self.data);
+            for i in en::ordered(&src.cols, d) {
+                let s = &d["cenas"][i];
+                read += 1;
+                if src.current() && !self.passes(s) {
+                    continue;
+                }
+                let (lane, color) = tname(d, en::tramas_of(s).first().copied()).unwrap_or(("Sem trama".into(), p.faint));
+                match en::parse_quando(en::str_of(s, "quando")) {
+                    Some(qk) => items.push(Item { scene: true, book: src.book.path.clone(), bi, id: en::str_of(s, "id").into(), title: en::str_of(s, "titulo").into(), quando: en::str_of(s, "quando").into(), qk, lane, color, read, row: 0 }),
+                    None => undated.push((src.book.path.clone(), s.clone())),
+                }
             }
-            let (lane, color) = tname(&self.data, en::tramas_of(s).first().copied()).unwrap_or(("Sem trama".into(), p.faint));
-            match en::parse_quando(en::str_of(s, "quando")) {
-                Some(qk) => items.push(Item { scene: true, id: en::str_of(s, "id").into(), title: en::str_of(s, "titulo").into(), quando: en::str_of(s, "quando").into(), qk, lane, color, read: read + 1, row: 0 }),
-                None => undated.push(i),
+            for ev in d["eventos"].as_array().into_iter().flatten() {
+                if let Some(qk) = en::parse_quando(en::str_of(ev, "quando")) {
+                    let (lane, color) = tname(d, ev["tramas"].get(0).and_then(|x| x.as_str())).unwrap_or(("Mundo".into(), p.muted));
+                    items.push(Item { scene: false, book: src.book.path.clone(), bi, id: en::str_of(ev, "id").into(), title: en::str_of(ev, "titulo").into(), quando: en::str_of(ev, "quando").into(), qk, lane, color, read: 0, row: 0 });
+                }
             }
+            eras.extend(d["eras"].as_array().cloned().unwrap_or_default());
         }
-        for ev in self.data["eventos"].as_array().into_iter().flatten() {
-            if let Some(qk) = en::parse_quando(en::str_of(ev, "quando")) {
-                let (lane, color) = tname(&self.data, ev["tramas"].get(0).and_then(|x| x.as_str())).unwrap_or(("Mundo".into(), p.muted));
-                items.push(Item { scene: false, id: en::str_of(ev, "id").into(), title: en::str_of(ev, "titulo").into(), quando: en::str_of(ev, "quando").into(), qk, lane, color, read: 0, row: 0 });
-            }
-        }
-        let eras: Vec<Json> = self.data["eras"].as_array().cloned().unwrap_or_default();
+        let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
         // tools
         ui.add_space(12.0);
         ui.horizontal(|ui| {
@@ -971,7 +982,7 @@ impl EnredoView {
                     });
                     ui.add_space(14.0);
                     if kit::primary_icon(ui, icons::PLUS, "Novo evento", p).clicked() {
-                        select = Some(Sel::Evento(String::new()));
+                        select = Some((current.clone(), Sel::Evento(String::new())));
                     }
                 });
             } else {
@@ -999,7 +1010,13 @@ impl EnredoView {
                 let auto = ((w - LAB - CW - 30.0) as f64 / (max - min)).max(1e-4) as f32;
                 ui.data_mut(|d| d.insert_temp(egui::Id::new("crono-auto"), auto));
                 let ppu = self.crono_zoom.unwrap_or(auto) as f64;
-                let mut lanes: Vec<String> = self.data["tramas"].as_array().into_iter().flatten().map(|t| en::str_of(t, "nome").to_string()).collect();
+                let mut lanes: Vec<String> = Vec::new();
+                for t in srcs.iter().flat_map(|s| s.d(&self.data)["tramas"].as_array().into_iter().flatten()) {
+                    let n = en::str_of(t, "nome").to_string();
+                    if !lanes.contains(&n) {
+                        lanes.push(n);
+                    }
+                }
                 for it in &items {
                     if !lanes.contains(&it.lane) {
                         lanes.push(it.lane.clone());
@@ -1074,16 +1091,17 @@ impl EnredoView {
                     if !r.intersects(clip) {
                         continue;
                     }
-                    let resp = ui.interact(r, ui.id().with(("crono", &it.id)), Sense::click()).on_hover_text(&it.quando);
-                    let sel = match &self.sel {
-                        Some(Sel::Cena(id)) | Some(Sel::Evento(id)) => id == &it.id,
-                        _ => false,
-                    };
+                    let resp = ui.interact(r, ui.id().with(("crono", &it.book, &it.id)), Sense::click()).on_hover_text(if saga { format!("{} · {}", it.quando, srcs[it.bi].book.title) } else { it.quando.clone() });
+                    let sel = it.book == current
+                        && match &self.sel {
+                            Some(Sel::Cena(id)) | Some(Sel::Evento(id)) => id == &it.id,
+                            _ => false,
+                        };
                     painter.rect(r, 7.0, if it.scene { p.bg } else { p.bg_secondary }, Stroke::new(if sel { 1.5_f32 } else { 1.0 }, if sel { p.accent_strong } else if resp.hovered() { p.border_strong } else { p.border }), egui::StrokeKind::Inside);
                     painter.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), egui::CornerRadius { nw: 7, sw: 7, ne: 0, se: 0 }, it.color);
                     let mut x = r.left() + 10.0;
                     if it.scene {
-                        let g = painter.layout_no_wrap(format!("#{}", it.read), egui::FontId::proportional(10.5), p.faint);
+                        let g = painter.layout_no_wrap(if saga { format!("{}·{}", it.bi + 1, it.read) } else { format!("#{}", it.read) }, egui::FontId::proportional(10.5), p.faint);
                         let gw = g.size().x;
                         painter.galley(pos2(x, r.center().y - g.size().y / 2.0), g, p.faint);
                         x += gw + 6.0;
@@ -1095,7 +1113,7 @@ impl EnredoView {
                     let g = truncated(ui, t, kit::medium(12.0), p.text, r.right() - x - 6.0);
                     painter.galley(pos2(x, r.center().y - g.size().y / 2.0), g, p.text);
                     if resp.clicked() {
-                        select = Some(if it.scene { Sel::Cena(it.id.clone()) } else { Sel::Evento(it.id.clone()) });
+                        select = Some((it.book.clone(), if it.scene { Sel::Cena(it.id.clone()) } else { Sel::Evento(it.id.clone()) }));
                     }
                 }
                 if self.reading_order && centers.len() > 1 {
@@ -1132,12 +1150,11 @@ impl EnredoView {
                 egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 0)).show(ui, |ui| ui.horizontal_wrapped(|ui| {
                     ui.set_max_width(ui.clip_rect().width() - 40.0);
                     ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                    for &i in undated.iter().take(80) {
-                        let s = self.data["cenas"][i].clone();
+                    for (bk, s) in undated.iter().take(80) {
                         let (r, resp) = ui.allocate_exact_size(vec2(180.0, 50.0), Sense::click());
-                        self.paint_card(ui, r, &s, p, resp.hovered(), false);
+                        self.paint_card(ui, r, s, p, resp.hovered(), false);
                         if resp.clicked() {
-                            select = Some(Sel::Cena(en::str_of(&s, "id").into()));
+                            select = Some((bk.clone(), Sel::Cena(en::str_of(s, "id").into())));
                         }
                     }
                 }));
@@ -1149,8 +1166,9 @@ impl EnredoView {
             self.era = Some(EraEdit { id: Some(en::str_of(&e, "id").into()), nome: en::str_of(&e, "nome").into(), de: f(&e["de"]), ate: f(&e["ate"]), cor: e["cor"].as_str().unwrap_or(ERA_CORES[0]).into() });
         }
         match select {
-            Some(Sel::Evento(id)) if id.is_empty() => self.new_event(),
-            Some(s) => {
+            Some((_, Sel::Evento(id))) if id.is_empty() => self.new_event(),
+            Some((bk, s)) if bk != current => self.go_book(&bk, Some(s)),
+            Some((_, s)) => {
                 self.sel = Some(s);
                 self.confirm = None;
             }
@@ -1160,11 +1178,14 @@ impl EnredoView {
 
     // ── Pistas ────────────────────────────────────────────────────────────
 
-    pub(super) fn pistas(&mut self, ui: &mut egui::Ui, p: Palette, _b: &Book, cols: &[Col]) {
-        let all: Vec<Json> = self.data["pistas"].as_array().cloned().unwrap_or_default();
-        let abertas = all.iter().filter(|x| x["estado"] == "aberta").count();
-        let pagas = all.iter().filter(|x| x["estado"] == "paga").count();
-        let sem: Vec<String> = all.iter().filter(|x| x["estado"] == "aberta" && x["plantios"].as_array().is_some_and(|l| !l.is_empty()) && x["colheitas"].as_array().is_none_or(|l| l.is_empty())).map(|x| en::str_of(x, "nome").to_string()).collect();
+    pub(super) fn pistas(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
+        let saga = srcs.len() > 1;
+        let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
+        // every pista of the books shown, with its book
+        let all: Vec<(String, Json)> = srcs.iter().flat_map(|s| s.d(&self.data)["pistas"].as_array().cloned().unwrap_or_default().into_iter().map(move |x| (s.book.path.clone(), x))).collect();
+        let abertas = all.iter().filter(|x| x.1["estado"] == "aberta").count();
+        let pagas = all.iter().filter(|x| x.1["estado"] == "paga").count();
+        let sem: Vec<String> = all.iter().map(|x| &x.1).filter(|x| x["estado"] == "aberta" && x["plantios"].as_array().is_some_and(|l| !l.is_empty()) && x["colheitas"].as_array().is_none_or(|l| l.is_empty())).map(|x| en::str_of(x, "nome").to_string()).collect();
         let mut select = None;
         if all.is_empty() {
             ui.add_space(90.0);
@@ -1174,7 +1195,7 @@ impl EnredoView {
                 ui.label(RichText::new("Plantar e colher").font(kit::medium(17.0)).color(p.text));
                 ui.add_space(6.0);
                 ui.allocate_ui(vec2(460.0, 80.0), |ui| {
-                    ui.label(RichText::new("Registre cada pista, mistério, promessa ou objeto que precisa voltar depois. Marque a cena onde é plantado e a cena onde é pago: o que ficou sem resposta aparece aqui.").color(p.muted));
+                    ui.label(RichText::new("Registre cada pista, mistério, promessa ou objeto que precisa voltar depois. Marque a cena onde é plantado e a cena onde é pago: o que ficou sem resposta aparece aqui, inclusive entre livros da saga.").color(p.muted));
                 });
                 ui.add_space(14.0);
                 if kit::primary_icon(ui, icons::PLUS, "Nova pista", p).clicked() {
@@ -1186,9 +1207,26 @@ impl EnredoView {
             }
             return;
         }
-        // columns: ideas, then each chapter
-        let col_keys: Vec<Option<&str>> = std::iter::once(None).chain(cols.iter().map(|c| Some(c.path.as_str()))).collect();
-        let col_of = |sid: &str| en::scene_index(&self.data, sid).map(|i| en::cap_of(&self.data["cenas"][i])).and_then(|cap| col_keys.iter().position(|k| *k == cap));
+        // columns: each book's ideas, then its chapters
+        struct ColK {
+            book: usize,
+            cap: Option<String>,
+            label: String,
+            tip: String,
+        }
+        let mut col_keys: Vec<ColK> = Vec::new();
+        for (bi, src) in srcs.iter().enumerate() {
+            col_keys.push(ColK { book: bi, cap: None, label: if saga { format!("{}", bi + 1) } else { "·".into() }, tip: format!("{} — ideias", src.book.title) });
+            for c in &src.cols {
+                col_keys.push(ColK { book: bi, cap: Some(c.path.clone()), label: c.label.clone(), tip: format!("{} — {}", src.book.title, c.title) });
+            }
+        }
+        let col_of = |book: &str, sid: &str| -> Option<usize> {
+            let bi = srcs.iter().position(|s| s.book.path == book)?;
+            let d = srcs[bi].d(&self.data);
+            let cap = en::scene_index(d, sid).map(|i| en::cap_of(&d["cenas"][i]))?;
+            col_keys.iter().position(|k| k.book == bi && k.cap.as_deref() == cap)
+        };
         let mut sel = None;
         egui::ScrollArea::both().id_salt("en-pistas").auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(16.0);
@@ -1208,25 +1246,26 @@ impl EnredoView {
             const RH: f32 = 48.0;
             let n = col_keys.len();
             let w = 20.0 + NAME + CW * n as f32 + 20.0;
-            let mut order: Vec<&Json> = all.iter().collect();
-            order.sort_by_key(|x| if x["estado"] == "aberta" { 0 } else { 1 });
+            let mut order: Vec<&(String, Json)> = all.iter().collect();
+            order.sort_by_key(|x| if x.1["estado"] == "aberta" { 0 } else { 1 });
             let (rect, _) = ui.allocate_exact_size(vec2(w.max(ui.available_width()), 30.0 + RH * order.len() as f32), Sense::hover());
             let o = rect.min + vec2(20.0, 0.0);
             let painter = ui.painter().clone();
             for (i, k) in col_keys.iter().enumerate() {
                 let x = o.x + NAME + CW * i as f32 + CW / 2.0;
-                let lab = match k {
-                    None => "·".to_string(),
-                    Some(path) => cols.iter().find(|c| c.path == *path).map(|c| c.label.clone()).unwrap_or_default(),
-                };
-                painter.text(pos2(x, o.y + 12.0), egui::Align2::CENTER_CENTER, lab, egui::FontId::proportional(11.0), p.faint);
+                let first = k.cap.is_none();
+                if saga && first && i > 0 {
+                    painter.line_segment([pos2(x - CW / 2.0, o.y + 2.0), pos2(x - CW / 2.0, o.y + 30.0 + RH * order.len() as f32)], Stroke::new(1.0_f32, p.border));
+                }
+                let r = painter.text(pos2(x, o.y + 12.0), egui::Align2::CENTER_CENTER, &k.label, if saga && first { kit::medium(11.0) } else { egui::FontId::proportional(11.0) }, if saga && first { p.accent_strong } else { p.faint });
+                ui.interact(r.expand(4.0), ui.id().with(("pista-col", i)), Sense::hover()).on_hover_text(&k.tip);
             }
-            for (ri, pi) in order.iter().enumerate() {
+            for (ri, (pbook, pi)) in order.iter().enumerate() {
                 let y = o.y + 30.0 + RH * ri as f32;
                 let row = Rect::from_min_size(pos2(o.x - 8.0, y), vec2(NAME + CW * n as f32 + 16.0, RH - 4.0));
                 let pid = en::str_of(pi, "id").to_string();
-                let resp = ui.interact(row, ui.id().with(("pista", &pid)), Sense::click());
-                let is_sel = matches!(&self.sel, Some(Sel::Pista(id)) if id == &pid);
+                let resp = ui.interact(row, ui.id().with(("pista", pbook, &pid)), Sense::click());
+                let is_sel = *pbook == current && matches!(&self.sel, Some(Sel::Pista(id)) if id == &pid);
                 if is_sel || resp.hovered() {
                     painter.rect_filled(row, 8.0, if is_sel { p.accent_soft } else { p.bg_hover });
                 }
@@ -1242,8 +1281,9 @@ impl EnredoView {
                 let g = truncated(ui, if nome.is_empty() { "Pista sem nome" } else { nome }, kit::medium(13.0), if estado == "abandonada" { p.faint } else { p.text }, NAME - 40.0);
                 painter.galley(pos2(o.x + 22.0, row.top() + 6.0), g, p.text);
                 painter.text(pos2(o.x + 22.0, row.top() + 26.0), egui::Align2::LEFT_TOP, tipo, egui::FontId::proportional(11.0), p.faint);
-                let pl: Vec<usize> = pi["plantios"].as_array().into_iter().flatten().filter_map(|x| col_of(en::str_of(x, "cena"))).collect();
-                let co: Vec<usize> = pi["colheitas"].as_array().into_iter().flatten().filter_map(|x| col_of(en::str_of(x, "cena"))).collect();
+                let at = |x: &Json| col_of(x["livro"].as_str().filter(|l| !l.is_empty()).unwrap_or(pbook), en::str_of(x, "cena"));
+                let pl: Vec<usize> = pi["plantios"].as_array().into_iter().flatten().filter_map(at).collect();
+                let co: Vec<usize> = pi["colheitas"].as_array().into_iter().flatten().filter_map(at).collect();
                 let cx = |i: usize| o.x + NAME + CW * i as f32 + CW / 2.0;
                 let cy = row.center().y;
                 for i in 0..n {
@@ -1266,7 +1306,7 @@ impl EnredoView {
                     painter.circle_filled(pos2(cx(i), cy), 6.0, p.accent_strong);
                 }
                 if resp.clicked() {
-                    sel = Some(Sel::Pista(pid));
+                    sel = Some((pbook.clone(), Sel::Pista(pid)));
                 }
             }
             ui.add_space(10.0);
@@ -1275,16 +1315,32 @@ impl EnredoView {
                 ui.label(RichText::new("○ plantada  ● paga  ┄ ainda sem colheita").size(11.5).color(p.faint));
             });
         });
-        if sel.is_some() {
-            self.sel = sel;
-            self.confirm = None;
+        match sel {
+            Some((bk, s)) if bk != current => self.go_book(&bk, Some(s)),
+            Some((_, s)) => {
+                self.sel = Some(s);
+                self.confirm = None;
+            }
+            None => {}
         }
     }
 
     // ── Arcos ─────────────────────────────────────────────────────────────
 
-    pub(super) fn arcos(&mut self, ui: &mut egui::Ui, p: Palette, _b: &Book, cols: &[Col], ix: &Index) {
-        let arcs: Vec<Json> = self.data["arcos"].as_array().cloned().unwrap_or_default();
+    pub(super) fn arcos(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src], ix: &Index) {
+        let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
+        // one card per character: in the saga, the parts of their arc in every book
+        type Arc = (String, Json, Vec<(String, Json)>);
+        let mut arcs: Vec<Arc> = Vec::new();
+        for src in srcs {
+            for a in src.d(&self.data)["arcos"].as_array().into_iter().flatten() {
+                let who = en::str_of(a, "personagem").to_string();
+                match arcs.iter_mut().find(|x| en::str_of(&x.1, "personagem") == who) {
+                    Some(x) => x.2.push((src.book.path.clone(), a.clone())),
+                    None => arcs.push((src.book.path.clone(), a.clone(), vec![(src.book.path.clone(), a.clone())])),
+                }
+            }
+        }
         if arcs.is_empty() {
             let mut go = false;
             ui.add_space(90.0);
@@ -1304,7 +1360,10 @@ impl EnredoView {
             }
             return;
         }
-        let seq: Vec<String> = en::ordered(cols, &self.data).into_iter().map(|i| en::str_of(&self.data["cenas"][i], "id").to_string()).collect();
+        let seq: Vec<(String, String)> = srcs.iter().flat_map(|s| {
+            let d = s.d(&self.data);
+            en::ordered(&s.cols, d).into_iter().map(|i| (s.book.path.clone(), en::str_of(&d["cenas"][i], "id").to_string())).collect::<Vec<_>>()
+        }).collect();
         let nmax = (seq.len().max(2) - 1) as f32;
         let mut sel = None;
         egui::ScrollArea::vertical().id_salt("en-arcos").auto_shrink([false, false]).show(ui, |ui| {
@@ -1315,14 +1374,14 @@ impl EnredoView {
             egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 0)).show(ui, |ui| ui.horizontal_wrapped(|ui| {
                 ui.set_max_width(avail);
                 ui.spacing_mut().item_spacing = vec2(16.0, 16.0);
-                for a in &arcs {
+                for (abook, a, parts) in &arcs {
                     let who = en::str_of(a, "personagem");
                     let name = note_name(who);
                     let fm = ix.page(who).map(|pg| pg.yaml.clone()).unwrap_or(Json::Null);
                     let color = super::sheet_ui::parse_color(fm["cor"].as_str().unwrap_or("")).unwrap_or(p.accent_strong);
                     let aid = en::str_of(a, "id").to_string();
                     let (rect, resp) = ui.allocate_exact_size(vec2(card_w, 214.0), Sense::click());
-                    let is_sel = matches!(&self.sel, Some(Sel::Arco(id)) if id == &aid);
+                    let is_sel = *abook == current && matches!(&self.sel, Some(Sel::Arco(id)) if id == &aid);
                     let painter = ui.painter();
                     painter.rect(rect, 12.0, p.bg, Stroke::new(if is_sel { 1.5_f32 } else { 1.0 }, if is_sel { p.accent_strong } else if resp.hovered() { p.border_strong } else { p.border }), egui::StrokeKind::Inside);
                     let av = pos2(rect.left() + 32.0, rect.top() + 32.0);
@@ -1345,10 +1404,10 @@ impl EnredoView {
                     painter.rect_filled(chart, 8.0, p.bg_secondary);
                     let zero = chart.center().y;
                     painter.line_segment([pos2(chart.left() + 8.0, zero), pos2(chart.right() - 8.0, zero)], Stroke::new(1.0_f32, p.border_strong));
-                    let mut pts: Vec<(f32, f32)> = a["pontos"].as_array().into_iter().flatten().filter_map(|pt| {
-                        let i = seq.iter().position(|s| pt["cena"] == s.as_str())?;
+                    let mut pts: Vec<(f32, f32)> = parts.iter().flat_map(|(pb, pa)| pa["pontos"].as_array().into_iter().flatten().filter_map(|pt| {
+                        let i = seq.iter().position(|s| &s.0 == pb && pt["cena"] == s.1.as_str())?;
                         Some((i as f32, pt["nivel"].as_f64().unwrap_or(0.0).clamp(-3.0, 3.0) as f32))
-                    }).collect();
+                    }).collect::<Vec<_>>()).collect();
                     pts.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
                     let px = |i: f32| chart.left() + 14.0 + i / nmax * (chart.width() - 28.0);
                     let py = |n: f32| zero - n * (chart.height() / 2.0 - 12.0) / 3.0;
@@ -1368,15 +1427,19 @@ impl EnredoView {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                     if resp.clicked() {
-                        sel = Some(Sel::Arco(aid));
+                        sel = Some((abook.clone(), Sel::Arco(aid)));
                     }
                 }
             }));
             ui.add_space(30.0);
         });
-        if sel.is_some() {
-            self.sel = sel;
-            self.confirm = None;
+        match sel {
+            Some((bk, s)) if bk != current => self.go_book(&bk, Some(s)),
+            Some((_, s)) => {
+                self.sel = Some(s);
+                self.confirm = None;
+            }
+            None => {}
         }
     }
 }
