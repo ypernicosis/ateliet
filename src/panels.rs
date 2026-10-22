@@ -1275,6 +1275,14 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     let field = |ui: &mut egui::Ui, v: &mut String| ui.add(egui::TextEdit::singleline(v).desired_width(220.0).margin(egui::Margin::symmetric(8, 5))).changed();
                     match page {
+                        0 if app.theme_browser.open => {
+                            let cur = app.appearance.css_theme.clone();
+                            if let Some(t) = app.theme_browser.ui(ui, &cfg.dir.join("themes"), &cur, p) {
+                                app.appearance.css_theme = t;
+                                app.appearance.load_css(&cfg);
+                                retheme = true;
+                            }
+                        }
                         0 => {
                             if kit::setting(ui, "Tema escuro", "Interface e notas em fundo escuro.", p, |ui| kit::toggle(ui, &mut app.appearance.dark, p).changed()) {
                                 retheme = true;
@@ -1302,6 +1310,11 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                         }
                                     }
                                 });
+                            });
+                            kit::setting(ui, "Explorar temas", "O catálogo de temas da comunidade do Obsidian, com prévias.", p, |ui| {
+                                if kit::button(ui, Some(icons::PALETTE), "Explorar…", p).clicked() {
+                                    app.theme_browser.open = true;
+                                }
                             });
                             if let (Some(t), c) = (pick, &cfg) {
                                 app.appearance.css_theme = t;
