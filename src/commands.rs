@@ -285,6 +285,9 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Switcher => app.palette_ui = Some(Palette::files()),
         Cmd::InsertTemplate => app.palette_ui = Some(Palette::templates(app, app.tabs.is_empty())),
         Cmd::NewFromTemplate => app.palette_ui = Some(Palette::templates(app, true)),
+        // in image mode: the collections and the notes beside the library
+        Cmd::ToggleLeft if app.images_mode => app.images.panels[0] = !app.images.panels[0],
+        Cmd::ToggleRight if app.images_mode => app.images.panels[1] = !app.images.panels[1],
         Cmd::ToggleLeft => app.left_open = !app.left_open,
         Cmd::ToggleRight => app.right_open = !app.right_open,
         Cmd::Settings => app.settings_open = !app.settings_open,
