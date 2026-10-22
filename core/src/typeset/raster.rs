@@ -57,7 +57,9 @@ impl ttf_parser::OutlineBuilder for Builder {
     }
 }
 
-static OUTLINES: once_cell::sync::Lazy<Mutex<HashMap<(FontId, u16), std::sync::Arc<Outline>>>> = once_cell::sync::Lazy::new(Default::default);
+type Outlines = Mutex<HashMap<(FontId, u16), std::sync::Arc<Outline>>>;
+
+static OUTLINES: once_cell::sync::Lazy<Outlines> = once_cell::sync::Lazy::new(Default::default);
 
 fn outline(db: &FontDb, f: FontId, g: u16) -> std::sync::Arc<Outline> {
     if let Some(o) = OUTLINES.lock().unwrap().get(&(f, g)) {

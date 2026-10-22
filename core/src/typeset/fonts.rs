@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub type FontId = usize;
 
+type ShapeCache = HashMap<(FontId, u32, String), Arc<Vec<Shaped>>>;
+
 pub struct Face {
     pub family: String,
     pub italic: bool,
@@ -45,7 +47,7 @@ pub struct Shaped {
 #[derive(Default)]
 pub struct FontDb {
     pub faces: Vec<Face>,
-    cache: Mutex<HashMap<(FontId, u32, String), Arc<Vec<Shaped>>>>,
+    cache: Mutex<ShapeCache>,
 }
 
 fn name_of(f: &ttf_parser::Face, ids: &[u16]) -> Option<String> {
@@ -57,7 +59,10 @@ fn name_of(f: &ttf_parser::Face, ids: &[u16]) -> Option<String> {
     None
 }
 
-fn face_info(data: &[u8], index: u32) -> Option<(String, bool, u16, f32, f32, f32, f32, bool)> {
+/// family, italic, weight, units per em, ascender, descender, cap height, CFF outlines
+type Info = (String, bool, u16, f32, f32, f32, f32, bool);
+
+fn face_info(data: &[u8], index: u32) -> Option<Info> {
     let f = ttf_parser::Face::parse(data, index).ok()?;
     // typographic family first (16), then the legacy one (1)
     let family = name_of(&f, &[16, 1])?;

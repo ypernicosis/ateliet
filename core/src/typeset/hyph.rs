@@ -73,8 +73,8 @@ pub fn points(word: &str) -> Vec<usize> {
     let mut score = vec![0u8; w.len() + 1];
     for i in 0..w.len() {
         let mut s = String::new();
-        for j in i..(i + p.max).min(w.len()) {
-            s.push(w[j]);
+        for c in &w[i..(i + p.max).min(w.len())] {
+            s.push(*c);
             if let Some(d) = p.map.get(&s) {
                 for (k, v) in d.iter().enumerate() {
                     if score[i + k] < *v {

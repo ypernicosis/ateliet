@@ -6,6 +6,9 @@
 
 pub mod fonts;
 pub mod hyph;
+pub mod layout;
+pub mod lines;
+pub mod model;
 pub mod pdf;
 pub mod raster;
 
@@ -127,6 +130,39 @@ mod tests {
         if let Ok(dir) = std::env::var("TYPESET_OUT") {
             std::fs::write(format!("{dir}/t.pdf"), &bytes).unwrap();
             image::RgbaImage::from_raw(w, h, px).unwrap().save(format!("{dir}/t.png")).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+mod book_tests {
+    use super::*;
+
+    /// TYPESET_VAULT=<vault> TYPESET_BOOK=<book note> TYPESET_OUT=<dir> cargo test book_to_pdf -- --nocapture
+    #[test]
+    fn book_to_pdf() {
+        let (Ok(vault), Ok(book_path), Ok(out)) = (std::env::var("TYPESET_VAULT"), std::env::var("TYPESET_BOOK"), std::env::var("TYPESET_OUT")) else { return };
+        let root = std::path::Path::new(&vault);
+        let ix = crate::dataview::index::Index::build(root);
+        let b = crate::scriptorium::book::book_by_path(&ix, &book_path, "").expect("book");
+        let m = model::build(root, &ix, &b, &crate::scriptorium::export::Options::default());
+        let db = fonts::FontDb::new(&[
+            include_bytes!("../../../native/assets/fonts/EBGaramond-Medium.ttf"),
+            include_bytes!("../../../native/assets/fonts/EBGaramond-MediumItalic.ttf"),
+            include_bytes!("../../../native/assets/fonts/EBGaramond-Bold.ttf"),
+            include_bytes!("../../../native/assets/fonts/EBGaramond-BoldItalic.ttf"),
+            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
+            include_bytes!("../../../native/assets/fonts/CormorantGaramond-MediumItalic.ttf"),
+            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Bold.ttf"),
+        ]);
+        let t0 = std::time::Instant::now();
+        let laid = layout::typeset(&m, &db, &layout::Options { print: true });
+        eprintln!("{} pages in {:?}", laid.pages.len(), t0.elapsed());
+        let bytes = pdf::write(&laid.pages, &db, &m.pics, &pdf::Meta { title: m.meta.title.clone(), author: m.meta.author.clone(), lang: "pt-BR".into() }).unwrap();
+        std::fs::write(format!("{out}/book.pdf"), bytes).unwrap();
+        for (i, p) in laid.pages.iter().enumerate().take(40) {
+            let (w, h, px) = raster::render(p, &db, &m.pics, 4.0);
+            image::RgbaImage::from_raw(w, h, px).unwrap().save(format!("{out}/p{:02}.png", i + 1)).unwrap();
         }
     }
 }

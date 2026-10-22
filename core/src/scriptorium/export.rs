@@ -206,7 +206,7 @@ struct Host<'a> {
     ornament: String,
 }
 
-fn resolve_image(ix: &Index, link: &str, from: &str) -> Option<String> {
+pub fn resolve_image(ix: &Index, link: &str, from: &str) -> Option<String> {
     let link = link.split('#').next().unwrap_or(link).trim();
     let p = ix.resolve(link, from).or_else(|| {
         // pictures are not always in the index: look for the file itself
