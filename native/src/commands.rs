@@ -52,6 +52,7 @@ pub enum Cmd {
     ReplaceTemplates,
     InsertPicture,
     Pinterest,
+    SplitRight,
 }
 
 pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -95,6 +96,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Forward, "app:go-forward", "Avançar"),
     (Cmd::InsertPicture, "ateliet:insert-picture", "Inserir imagem…"),
     (Cmd::Pinterest, "ateliet:pinterest", "Imagens: Trazer do Pinterest…"),
+    (Cmd::SplitRight, "workspace:split-vertical", "Dividir à direita (ou juntar de novo)"),
     (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
@@ -187,6 +189,18 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
+        Cmd::SplitRight => {
+            if app.split.is_some() {
+                app.split = None;
+            } else if app.tabs.len() > 1 {
+                // the tab before (or after) the active one goes beside it
+                let j = if app.active > 0 { app.active - 1 } else { app.active + 1 };
+                app.split = Some(app.tabs[j].path.clone());
+                app.split_right = true;
+            } else {
+                app.toast("Abra outra nota para dividir a tela.");
+            }
+        }
         Cmd::Pinterest => {
             if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
                 app.images.open(&root, ctx);

@@ -136,6 +136,9 @@ pub struct App {
     pub ctx: Option<egui::Context>,
     /// The shared library being copied (Settings → Images).
     pub copy_job: Option<crate::settings_pages::CopyJob>,
+    /// A split: the path of the tab in the other pane, and whether that pane is on the right.
+    pub split: Option<String>,
+    pub split_right: bool,
     pub templater: Templater,
     pub search: panels::SearchState,
     pub calendar: panels::CalendarState,
@@ -200,6 +203,8 @@ impl App {
             templater_settings: TemplaterSettings::default(),
             ctx: None,
             copy_job: None,
+            split: None,
+            split_right: true,
             templater: Templater::default(),
             search: Default::default(),
             calendar: panels::CalendarState::new(),
@@ -1305,6 +1310,55 @@ impl App {
         self.toast(msg);
     }
 
+    /// One pane of the centre: the active tab (a Scriptorium screen, a
+    /// storyboard or a note).
+    fn pane_ui(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, sc_actions: &mut Vec<crate::sc::Action>, open_board: &mut Option<String>, centered: bool) {
+        let p = self.palette;
+        if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
+            let acts = {
+                let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };
+                let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p, dv: &self.dv_settings, music: &self.music };
+                match self.tabs[self.active].view.as_mut().unwrap() {
+                    crate::sc::View::Library(l) => l.ui(ui, &mut cx),
+                    crate::sc::View::Cast(c) => c.ui(ui, &mut cx),
+                    crate::sc::View::Sheet(s) => s.ui(ui, &mut cx),
+                    crate::sc::View::Enredo(e) => e.ui(ui, &mut cx),
+                    crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
+                    crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
+                    crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
+                    crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
+                    crate::sc::View::Capa(c) => c.ui(ui, &mut cx),
+                    crate::sc::View::Pagina(c) => c.ui(ui, &mut cx),
+                }
+            };
+            // a map can walk into its submaps: the tab follows
+            let t = &mut self.tabs[self.active];
+            if let Some(crate::sc::View::Mapa(m)) = t.view.as_ref() {
+                if t.path != m.path {
+                    t.path = m.path.clone();
+                }
+            }
+            // the Enredo can move to another book of the series
+            if let Some(crate::sc::View::Enredo(e)) = t.view.as_ref() {
+                let want = format!("scriptorium:enredo:{}", e.book);
+                if t.path != want {
+                    t.path = want;
+                }
+            }
+            *sc_actions = acts;
+            return;
+        }
+        if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
+            let msg = b.ui(ui, p);
+            *open_board = b.open.take();
+            if let Some(msg) = msg {
+                self.toast(msg);
+            }
+            return;
+        }
+        self.note_ui(ui, actions, centered);
+    }
+
     fn central(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         let frame = egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO);
@@ -1316,50 +1370,42 @@ impl App {
                 panels::empty_state(self, ui);
                 return;
             }
-            let p = self.palette;
-            if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
-                let acts = {
-                    let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };
-                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p, dv: &self.dv_settings, music: &self.music };
-                    match self.tabs[self.active].view.as_mut().unwrap() {
-                        crate::sc::View::Library(l) => l.ui(ui, &mut cx),
-                        crate::sc::View::Cast(c) => c.ui(ui, &mut cx),
-                        crate::sc::View::Sheet(s) => s.ui(ui, &mut cx),
-                        crate::sc::View::Enredo(e) => e.ui(ui, &mut cx),
-                        crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
-                        crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
-                        crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
-                        crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
-                        crate::sc::View::Capa(c) => c.ui(ui, &mut cx),
-                        crate::sc::View::Pagina(c) => c.ui(ui, &mut cx),
-                    }
-                };
-                // a map can walk into its submaps: the tab follows
-                let t = &mut self.tabs[self.active];
-                if let Some(crate::sc::View::Mapa(m)) = t.view.as_ref() {
-                    if t.path != m.path {
-                        t.path = m.path.clone();
-                    }
-                }
-                // the Enredo can move to another book of the series
-                if let Some(crate::sc::View::Enredo(e)) = t.view.as_ref() {
-                    let want = format!("scriptorium:enredo:{}", e.book);
-                    if t.path != want {
-                        t.path = want;
-                    }
-                }
-                sc_actions = acts;
+            // a split: the other pane shows the tab of `split`
+            let other = self.split.as_ref().and_then(|sp| self.tabs.iter().position(|t| &t.path == sp)).filter(|&i| i != self.active);
+            let Some(other) = other else {
+                self.pane_ui(ui, &mut actions, &mut sc_actions, &mut open_board, true);
                 return;
-            }
-            if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
-                let msg = b.ui(ui, p);
-                open_board = b.open.take();
-                if let Some(msg) = msg {
-                    self.toast(msg);
+            };
+            let full = ui.available_rect_before_wrap();
+            let mid = full.center().x.round();
+            let left = egui::Rect::from_min_max(full.min, egui::pos2(mid - 0.5, full.max.y));
+            let right = egui::Rect::from_min_max(egui::pos2(mid + 0.5, full.min.y), full.max);
+            let (li, ri) = if self.split_right { (self.active, other) } else { (other, self.active) };
+            let focused = self.active;
+            let mut focus_to = None;
+            for (rect, i) in [(left, li), (right, ri)] {
+                let pressed = ui.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|q| rect.contains(q)));
+                if pressed && i != focused {
+                    focus_to = Some(i);
                 }
-                return;
+                self.active = i;
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect).id_salt(("pane", i)), |ui| {
+                    ui.set_clip_rect(rect);
+                    self.pane_ui(ui, &mut actions, &mut sc_actions, &mut open_board, true);
+                });
+                self.active = focused;
+                // the pane in use is marked at the top
+                if i == focused {
+                    ui.painter().hline(rect.x_range(), rect.top() + 1.0, egui::Stroke::new(2.0_f32, p.accent_strong));
+                }
             }
-            self.note_ui(ui, &mut actions, true);
+            ui.painter().vline(mid, full.y_range(), egui::Stroke::new(1.0_f32, p.border));
+            if let Some(i) = focus_to {
+                // the other pane becomes the one in use; the sides stay where they are
+                self.split = Some(self.tabs[self.active].path.clone());
+                self.split_right = !self.split_right;
+                self.active = i;
+            }
         });
         // a storyboard the editor made (thumbnails turned into an animatic)
         if let Some(path) = open_board {

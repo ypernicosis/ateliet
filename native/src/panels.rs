@@ -33,6 +33,8 @@ struct Order<'a> {
 enum TabCmd {
     CloseOthers,
     CloseRight,
+    /// Show beside the active tab (a split).
+    Beside,
     Reveal,
     OpenExternal,
 }
@@ -904,6 +906,9 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             if kit::menu_entry(ui, "", "Fechar as da direita", "", i + 1 < n_tabs, false, p) {
                                 tab_cmd = Some((i, TabCmd::CloseRight));
                             }
+                            if i != app.active && kit::menu_entry(ui, icons::PANEL_RIGHT, "Abrir ao lado", "", true, false, p) {
+                                tab_cmd = Some((i, TabCmd::Beside));
+                            }
                             if is_file {
                                 kit::menu_sep(ui, p);
                                 if kit::menu_item(ui, icons::COPY, "Copiar caminho", p) {
@@ -984,6 +989,12 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 TabCmd::CloseRight => {
                     for j in (i + 1..app.tabs.len()).rev() {
                         app.close_tab(j);
+                    }
+                }
+                TabCmd::Beside => {
+                    if let Some(t) = app.tabs.get(i) {
+                        app.split = Some(t.path.clone());
+                        app.split_right = true;
                     }
                 }
                 TabCmd::Reveal | TabCmd::OpenExternal => {
