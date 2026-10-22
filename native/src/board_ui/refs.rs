@@ -55,19 +55,147 @@ impl BoardEditor {
 
     /// Pictures added to the storyboard (kept inside it).
     fn add_reference_bytes(&mut self, name: &str, ext: &str, bytes: Vec<u8>, from: &str) {
+        self.add_references(vec![(name.to_string(), ext.to_string(), bytes)], from);
+    }
+
+    /// Several pictures at once, as one step of undo.
+    fn add_references(&mut self, pics: Vec<(String, String, Vec<u8>)>, from: &str) {
+        if pics.is_empty() {
+            return;
+        }
         let before = self.doc.board.clone();
-        let path = format!("refs/{}.{ext}", doc::uid());
-        self.doc.refs.insert(path.clone(), bytes);
-        let r = json!({ "id": doc::uid(), "name": name, "path": path, "from": from });
         if !self.doc.board["references"].is_array() {
             self.doc.board["references"] = json!([]);
         }
-        self.doc.board["references"].as_array_mut().unwrap().push(r);
+        for (name, ext, bytes) in pics {
+            let path = format!("refs/{}.{ext}", doc::uid());
+            self.doc.refs.insert(path.clone(), bytes);
+            let r = json!({ "id": doc::uid(), "name": name, "path": path, "from": from });
+            self.doc.board["references"].as_array_mut().unwrap().push(r);
+        }
         self.rf.current = self.references().len() - 1;
         let after = self.doc.board.clone();
         self.undo.push(Edit::Structure { before, after, tiles: Vec::new() });
         self.redo.clear();
         self.changed();
+    }
+
+    /// The vault folder this storyboard lives in (its path is vault-relative).
+    fn vault_root(&self) -> PathBuf {
+        let mut root = self.abs.clone();
+        for _ in self.path.split('/') {
+            root.pop();
+        }
+        root
+    }
+
+    /// Image files read into (name, extension, bytes), at most `max`.
+    fn read_pictures(paths: &[PathBuf], max: usize) -> Vec<(String, String, Vec<u8>)> {
+        let mut out = Vec::new();
+        for f in paths {
+            let ext = f.extension().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+                continue;
+            }
+            if let Ok(b) = std::fs::read(f) {
+                let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                out.push((name, ext, b));
+            }
+            if out.len() >= max {
+                break;
+            }
+        }
+        out
+    }
+
+    fn add_folder(&mut self) {
+        let Some(dir) = rfd::FileDialog::new().set_directory(self.vault_root()).pick_folder() else { return };
+        let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.is_file()).collect()).unwrap_or_default();
+        files.sort();
+        let pics = Self::read_pictures(&files, 200);
+        if pics.is_empty() {
+            self.error = Some("Não há imagens nessa pasta.".into());
+            return;
+        }
+        let from = dir.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        self.add_references(pics, &format!("pasta {from}"));
+    }
+
+    /// The pictures a note shows (![[…]] and ![](…)), found in the vault.
+    fn add_note_images(&mut self) {
+        let root = self.vault_root();
+        let Some(note) = rfd::FileDialog::new().set_directory(&root).add_filter("Nota", &["md"]).pick_file() else { return };
+        let text = std::fs::read_to_string(&note).unwrap_or_default();
+        let mut names = Vec::new();
+        let mut rest = text.as_str();
+        while let Some(i) = rest.find("![") {
+            rest = &rest[i + 2..];
+            let target = if let Some(r) = rest.strip_prefix('[') {
+                r.split("]]").next().map(|t| t.split('|').next().unwrap_or(t).to_string())
+            } else {
+                rest.split_once("](").and_then(|(_, r)| r.split(')').next()).map(|t| t.split(' ').next().unwrap_or(t).replace("%20", " "))
+            };
+            if let Some(t) = target.filter(|t| !t.is_empty() && !t.starts_with("http")) {
+                names.push(t);
+            }
+        }
+        // resolve: next to the note, from the vault root, or anywhere by name
+        let mut index: Option<HashMap<String, PathBuf>> = None;
+        let mut paths = Vec::new();
+        for n in names {
+            let direct = [note.parent().map(|d| d.join(&n)), Some(root.join(&n))].into_iter().flatten().find(|p| p.is_file());
+            let found = direct.or_else(|| {
+                let ix = index.get_or_insert_with(|| {
+                    let mut m = HashMap::new();
+                    let mut stack = vec![root.clone()];
+                    while let Some(d) = stack.pop() {
+                        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                            let p = e.path();
+                            let hidden = p.file_name().is_some_and(|f| f.to_string_lossy().starts_with('.'));
+                            if p.is_dir() && !hidden {
+                                stack.push(p);
+                            } else if let Some(f) = p.file_name() {
+                                m.entry(f.to_string_lossy().to_lowercase()).or_insert(p);
+                            }
+                        }
+                    }
+                    m
+                });
+                let base = n.rsplit('/').next().unwrap_or(&n).to_lowercase();
+                ix.get(&base).cloned()
+            });
+            if let Some(p) = found {
+                paths.push(p);
+            }
+        }
+        let pics = Self::read_pictures(&paths, 200);
+        if pics.is_empty() {
+            self.error = Some("Essa nota não mostra imagens do vault.".into());
+            return;
+        }
+        let from = note.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        self.add_references(pics, &format!("nota {from}"));
+    }
+
+    /// The shared picture library (Pictogrep's), as the images settings say.
+    fn shared_home(&self) -> Option<ateliet_core::pictogrep::Home> {
+        let st = crate::images_ui::ImagesState::settings(&self.vault_root());
+        match st["shared"].as_str().unwrap_or("auto").trim() {
+            "" => None,
+            "auto" => ateliet_core::pictogrep::detect(),
+            path => Some(ateliet_core::pictogrep::Home::new(PathBuf::from(path))).filter(|h| h.root.is_dir()),
+        }
+    }
+
+    fn add_collection(&mut self, name: &str) {
+        let Some(home) = self.shared_home() else { return };
+        let paths = ateliet_core::pictogrep::collection_images(&home, name);
+        let pics = Self::read_pictures(&paths, 200);
+        if pics.is_empty() {
+            self.error = Some("A coleção está vazia.".into());
+            return;
+        }
+        self.add_references(pics, &format!("coleção {name}"));
     }
 
     fn add_files(&mut self) {
@@ -279,6 +407,22 @@ impl BoardEditor {
                     }
                     if kit::menu_item(ui, icons::COPY, "Da área de transferência", p) {
                         self.add_clipboard();
+                    }
+                    if kit::menu_item(ui, icons::FOLDER_OPEN, "Uma pasta inteira…", p) {
+                        self.add_folder();
+                    }
+                    if kit::menu_item(ui, icons::FILE_TEXT, "As imagens de uma nota…", p) {
+                        self.add_note_images();
+                    }
+                    let cols = self.shared_home().map(|h| ateliet_core::pictogrep::collection_names(&h)).unwrap_or_default();
+                    if !cols.is_empty() {
+                        ui.add_space(2.0);
+                        ui.label(RichText::new("Coleções da biblioteca").size(11.0).color(p.faint));
+                        for c in cols.iter().take(12) {
+                            if kit::menu_item(ui, icons::IMAGES, c, p) {
+                                self.add_collection(c);
+                            }
+                        }
                     }
                 });
                 if refs.len() > 1 && kit::icon_button_sized(ui, icons::SHUFFLE, "Embaralhar", false, p, 24.0, 13.0).clicked() {
