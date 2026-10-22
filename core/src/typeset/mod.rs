@@ -72,6 +72,22 @@ impl Page {
     }
 }
 
+/// The book as a PDF in `Exportações/` ("— impressão" with bleed and
+/// facing pages, or "— tela").
+pub fn book_pdf(root: &std::path::Path, ix: &crate::dataview::index::Index, b: &crate::scriptorium::book::Book, opts: &crate::scriptorium::export::Options, db: &fonts::FontDb, print: bool) -> Result<std::path::PathBuf, String> {
+    let m = model::build(root, ix, b, opts);
+    let laid = layout::typeset(&m, db, &layout::Options { print });
+    let lang = if m.meta.lang.is_empty() { "pt-BR".to_string() } else { m.meta.lang.clone() };
+    let bytes = pdf::write(&laid.pages, db, &m.pics, &pdf::Meta { title: m.meta.title.clone(), author: m.meta.author.clone(), lang })?;
+    let rel = crate::scriptorium::export::out_path(b, if print { "impressão" } else { "tela" }, "pdf");
+    let abs = root.join(&rel);
+    if let Some(d) = abs.parent() {
+        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&abs, bytes).map_err(|e| e.to_string())?;
+    Ok(abs)
+}
+
 pub fn hex(c: &str) -> Option<[u8; 3]> {
     let s = c.trim().trim_start_matches('#');
     let s: String = if s.len() == 3 { s.chars().flat_map(|c| [c, c]).collect() } else { s.to_string() };

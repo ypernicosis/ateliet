@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, RwLock};
 
-pub const FORMATS: [(&str, &str, &str, &str); 4] = [
+pub const FORMATS: [(&str, &str, &str, &str); 6] = [
+    ("pdf-impressao", "PDF para impressão", "Com sangria e páginas espelhadas, para a gráfica ou a KDP", icons::PRINTER),
+    ("pdf-tela", "PDF de tela", "Para ler no computador ou mandar a leitores beta", icons::MONITOR),
     ("epub", "EPUB", "Leitores de e-book, Kindle (via Send to Kindle), Apple Books", icons::TABLET),
     ("docx", "Word (DOCX)", "Para revisão, editoras e concursos", icons::FILE_TEXT),
     ("md", "Markdown", "Um arquivo portátil com as imagens ao lado", icons::HASH),
@@ -22,19 +24,19 @@ pub const FORMATS: [(&str, &str, &str, &str); 4] = [
 pub struct ExportDialog {
     pub book: String,
     pub title: String,
-    pub picked: [bool; 4],
+    pub picked: [bool; 6],
     running: Option<Receiver<Vec<(String, Result<PathBuf, String>)>>>,
     results: Vec<(String, Result<PathBuf, String>)>,
 }
 
 impl ExportDialog {
     pub fn new(book: &str, title: &str, last: &[String]) -> ExportDialog {
-        let mut picked = [false; 4];
+        let mut picked = [false; 6];
         for (i, f) in FORMATS.iter().enumerate() {
             picked[i] = last.iter().any(|l| l == f.0 || (f.0 == "epub" && l == "epub"));
         }
         if !picked.iter().any(|p| *p) {
-            picked[0] = true;
+            picked[2] = true;
         }
         ExportDialog { book: book.into(), title: title.into(), picked, running: None, results: Vec::new() }
     }
@@ -56,6 +58,7 @@ impl ExportDialog {
                     "epub" => export::epub(&root, &ix, &b, &opts),
                     "docx" => ateliet_core::scriptorium::docx::docx(&root, &ix, &b, &opts),
                     "md" => export::markdown(&root, &ix, &b, &opts),
+                    "pdf-impressao" | "pdf-tela" => ateliet_core::typeset::book_pdf(&root, &ix, &b, &opts, &crate::fonts::book_fonts(), f == "pdf-impressao"),
                     _ => export::web(&root, &ix, &b, &opts),
                 };
                 out.push((f.to_string(), r));

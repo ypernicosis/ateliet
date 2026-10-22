@@ -5,6 +5,7 @@
 pub mod actions;
 pub mod binder;
 pub mod cast_ui;
+pub mod diagramacao_ui;
 pub mod enredo_board;
 pub mod enredo_more;
 pub mod enredo_saga;
@@ -175,6 +176,7 @@ pub enum View {
     Mundo(Box<mundo_ui::MundoView>),
     Mapa(Box<mapa_ui::MapaView>),
     Trilha(Box<trilha_ui::TrilhaView>),
+    Diagramacao(Box<diagramacao_ui::DiagramacaoView>),
 }
 
 impl View {
@@ -187,6 +189,7 @@ impl View {
             View::Mundo(m) => m.title(),
             View::Mapa(m) => m.title(),
             View::Trilha(t) => t.title(),
+            View::Diagramacao(d) => d.title(),
         }
     }
 
@@ -196,6 +199,9 @@ impl View {
             _ => {
                 if let Some(b) = path.strip_prefix("scriptorium:mundo:") {
                     return Some(View::Mundo(Box::new(mundo_ui::MundoView::new(b))));
+                }
+                if let Some(b) = path.strip_prefix("scriptorium:layout:") {
+                    return Some(View::Diagramacao(Box::new(diagramacao_ui::DiagramacaoView::new(b))));
                 }
                 if let Some(b) = path.strip_prefix("scriptorium:trilha:") {
                     return Some(View::Trilha(Box::new(trilha_ui::TrilhaView::new(b))));

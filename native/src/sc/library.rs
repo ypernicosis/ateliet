@@ -194,6 +194,9 @@ impl Library {
                             if kit::button(ui, Some(icons::USER_PLUS), "Personagem", p).clicked() {
                                 acts.push(Action::NewCharacter(b.path.clone()));
                             }
+                            if kit::button(ui, Some(icons::LAYOUT_TEMPLATE), "Diagramação", p).clicked() {
+                                acts.push(Action::View("layout".into(), Some(b.path.clone())));
+                            }
                             if kit::button(ui, Some(icons::DOWNLOAD), "Exportar", p).clicked() {
                                 acts.push(Action::Export(b.path.clone()));
                             }

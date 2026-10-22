@@ -160,6 +160,7 @@ fn system_locale() -> String {
 impl App {
     pub fn new(cc: &eframe::CreationContext, vault: Option<PathBuf>) -> App {
         crate::fonts::install(&cc.egui_ctx);
+        crate::fonts::warm_book_fonts();
         let mut app = App {
             vault: None,
             cfg: None,
@@ -959,6 +960,7 @@ impl App {
                         crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
                         crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
                         crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
+                        crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
                     }
                 };
                 // a map can walk into its submaps: the tab follows

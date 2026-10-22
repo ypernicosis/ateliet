@@ -134,7 +134,11 @@ impl FontDb {
 
     /// The face of a family closest to a style and weight.
     pub fn find(&self, family: &str, italic: bool, weight: u16) -> Option<FontId> {
-        let fam = family.trim().trim_matches(|c| c == '"' || c == '\'').to_lowercase();
+        let mut fam = family.trim().trim_matches(|c| c == '"' || c == '\'').to_lowercase();
+        // the plugin's names for the bundled families
+        if fam == "cormorant" && !self.faces.iter().any(|f| f.family.eq_ignore_ascii_case("cormorant")) {
+            fam = "cormorant garamond".into();
+        }
         let cands: Vec<usize> = (0..self.faces.len()).filter(|&i| self.faces[i].family.to_lowercase() == fam).collect();
         if cands.is_empty() {
             return None;

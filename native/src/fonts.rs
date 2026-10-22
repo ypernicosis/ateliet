@@ -19,8 +19,29 @@ const LUCIDE: &[u8] = include_bytes!("../assets/fonts/Lucide.ttf");
 pub const CORMORANT: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-Medium.ttf");
 pub const CORMORANT_ITALIC: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-MediumItalic.ttf");
 pub const CORMORANT_BOLD: &[u8] = include_bytes!("../assets/fonts/CormorantGaramond-Bold.ttf");
-const GARAMOND: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Medium.ttf");
-const GARAMOND_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-MediumItalic.ttf");
+pub const GARAMOND: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Medium.ttf");
+pub const GARAMOND_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-MediumItalic.ttf");
+pub const GARAMOND_BOLD: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Bold.ttf");
+pub const GARAMOND_BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-BoldItalic.ttf");
+
+/// The fonts for typesetting books: the bundled serifs and the system's
+/// (read once, in the background).
+pub fn book_fonts() -> std::sync::Arc<ateliet_core::typeset::fonts::FontDb> {
+    static DB: std::sync::OnceLock<std::sync::Arc<ateliet_core::typeset::fonts::FontDb>> = std::sync::OnceLock::new();
+    DB.get_or_init(|| {
+        let mut db = ateliet_core::typeset::fonts::FontDb::new(&[GARAMOND, GARAMOND_ITALIC, GARAMOND_BOLD, GARAMOND_BOLD_ITALIC, CORMORANT, CORMORANT_ITALIC, CORMORANT_BOLD]);
+        db.scan_system();
+        std::sync::Arc::new(db)
+    })
+    .clone()
+}
+
+/// Start reading the system's fonts without waiting.
+pub fn warm_book_fonts() {
+    std::thread::spawn(|| {
+        let _ = book_fonts();
+    });
+}
 
 const SYSTEM_SANS: &[&str] = &[
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
