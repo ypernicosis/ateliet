@@ -971,6 +971,15 @@ impl App {
                             ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
                             ui.add_space(10.0);
                         }
+                        // writing tools ("/" menu, selection bar) in chapters
+                        if tab.mode == Mode::Edit {
+                            let author = self.sc.as_ref().map(|s| s.author()).unwrap_or_default();
+                            let ix = vault.index.read().unwrap();
+                            let chars = ateliet_core::scriptorium::book::is_chapter(&ix, &tab.path).then(|| ateliet_core::scriptorium::book::book_for(&ix, &tab.path, &author).map(|b| ateliet_core::scriptorium::book::characters(&ix, &b)).unwrap_or_default());
+                            crate::writing::set_chapter(chars);
+                        } else {
+                            crate::writing::set_chapter(None);
+                        }
                         match tab.mode {
                             Mode::Edit if self.live_preview => {
                                 let st = editor::Styles { size, p };

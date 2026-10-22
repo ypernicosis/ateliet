@@ -303,6 +303,9 @@ impl MundoView {
         let Some(w) = self.world().cloned() else { return };
         let wid = str_of(&w, "id").to_string();
         let trees: Vec<(usize, Json)> = self.data["arvores"].as_array().into_iter().flatten().enumerate().filter(|(_, t)| str_of(t, "mundo").is_empty() || t["mundo"] == wid.as_str()).map(|(i, t)| (i, t.clone())).collect();
+        // narrow, with a person open: the tree gets the room the list of trees had
+        let squeeze = self.person.is_some() && ui.available_width() < 820.0;
+        if !squeeze {
         egui::SidePanel::left(ui.id().with("mu-trees")).resizable(false).exact_width(210.0).show_separator_line(false).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 14, right: 8, top: 14, bottom: 8 })).show_inside(ui, |ui| {
             ui.label(RichText::new("ÁRVORES").font(kit::medium(10.5)).color(p.faint).extra_letter_spacing(1.0));
             ui.add_space(4.0);
@@ -335,6 +338,7 @@ impl MundoView {
                 self.new_tree = Some((String::new(), String::new()));
             }
         });
+        }
         let cur = trees.iter().find(|(_, t)| self.tree.as_deref() == Some(str_of(t, "id"))).or(trees.first()).map(|x| x.0);
         let Some(ti) = cur else {
             egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg)).show_inside(ui, |ui| {
@@ -369,10 +373,16 @@ impl MundoView {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
-                ui.label(RichText::new(str_of(&t, "nome")).font(kit::bold(20.0)).color(p.text));
+                // the button keeps its room; the title shortens (the person panel narrows this area)
+                let narrow = ui.available_width() < 300.0;
+                let title_w = (ui.available_width() - if narrow { 50.0 } else { 120.0 }).max(40.0);
+                ui.allocate_ui_with_layout(vec2(title_w, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(str_of(&t, "nome")).font(kit::bold(20.0)).color(p.text)).truncate());
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(14.0);
-                    if kit::button(ui, Some(icons::USER_PLUS), "Pessoa", p).clicked() {
+                    let add = if narrow { kit::icon_button(ui, icons::USER_PLUS, "Pessoa", false, p) } else { kit::button(ui, Some(icons::USER_PLUS), "Pessoa", p) };
+                    if add.clicked() {
                         self.add_person(ti, None, vec![], vec![]);
                     }
                 });

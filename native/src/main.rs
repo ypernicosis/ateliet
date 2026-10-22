@@ -23,6 +23,7 @@ mod theme;
 mod vault;
 #[cfg(feature = "clip")]
 mod vision;
+mod writing;
 
 use std::path::PathBuf;
 

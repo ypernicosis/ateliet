@@ -389,15 +389,17 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         };
         // a right click must not move the caret: the menu acts on the selection
         let prev = selection(ui.ctx(), id);
-        let resp = egui::TextEdit::multiline(text)
+        crate::writing::before(ui, id);
+        let out = egui::TextEdit::multiline(text)
             .id(id)
             .frame(false)
             .desired_width(f32::INFINITY)
             .desired_rows(rows)
             .lock_focus(true)
             .layouter(&mut layouter)
-            .show(ui)
-            .response;
+            .show(ui);
+        let resp = out.response.clone();
+        let wrote = crate::writing::after(ui, id, text, &out, st.p);
         if resp.hovered() && ui.input(|i| i.pointer.secondary_pressed()) {
             if let Some((a, b)) = prev {
                 set_selection(ui.ctx(), id, a, b);
@@ -406,7 +408,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let before = text.len();
         editing_extras(text, &resp, ui, id, &st.p);
         let mut resp = resp;
-        if text.len() != before {
+        if text.len() != before || wrote {
             resp.mark_changed();
         }
         resp
