@@ -34,15 +34,38 @@ pub fn last_vault() -> Option<PathBuf> {
     load_app_config()["last"].as_str().map(PathBuf::from).filter(|p| p.is_dir())
 }
 
-/// Known vaults, most recent first.
+/// Obsidian's own list of vaults (`obsidian.json`), where the system keeps it.
+fn obsidian_vaults() -> Vec<(u64, PathBuf)> {
+    let mut files = Vec::new();
+    if let Some(c) = dirs::config_dir() {
+        files.push(c.join("obsidian").join("obsidian.json"));
+    }
+    if let Some(h) = dirs::home_dir() {
+        // the Flatpak and Snap builds keep their own
+        files.push(h.join(".var/app/md.obsidian.Obsidian/config/obsidian/obsidian.json"));
+        files.push(h.join("snap/obsidian/current/.config/obsidian/obsidian.json"));
+    }
+    let mut out = Vec::new();
+    for f in files {
+        let Some(v) = fs::read_to_string(&f).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
+        if let Some(o) = v["vaults"].as_object() {
+            out.extend(o.values().filter_map(|x| Some((x["ts"].as_u64().unwrap_or(0), PathBuf::from(x["path"].as_str()?)))));
+        }
+    }
+    out
+}
+
+/// Known vaults (Ateliet's and Obsidian's), most recent first.
 pub fn known_vaults() -> Vec<PathBuf> {
     let cfg = load_app_config();
     let mut v: Vec<(u64, PathBuf)> = cfg["vaults"]
         .as_object()
         .map(|o| o.values().filter_map(|x| Some((x["ts"].as_u64().unwrap_or(0), PathBuf::from(x["path"].as_str()?)))).collect())
         .unwrap_or_default();
+    v.extend(obsidian_vaults());
     v.sort_by_key(|x| std::cmp::Reverse(x.0));
-    v.into_iter().map(|x| x.1).filter(|p| p.is_dir()).collect()
+    let mut seen = std::collections::HashSet::new();
+    v.into_iter().map(|x| x.1).filter(|p| p.is_dir() && seen.insert(p.clone())).collect()
 }
 
 /// One `.obsidian` folder.
