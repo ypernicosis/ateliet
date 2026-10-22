@@ -677,15 +677,15 @@ impl BoardEditor {
         let small = |s: &str| RichText::new(s).size(12.0).color(p.muted);
         match self.tool {
             Tool::Fill => {
-                ui.label(small("Tolerância"));
-                ui.spacing_mut().slider_width = 80.0;
-                ui.add(egui::Slider::new(&mut o.fill_tol, 0..=128).show_value(false));
-                ui.label(small("Expandir"));
-                ui.add(egui::DragValue::new(&mut o.fill_expand).range(0..=8).suffix(" px"));
-                kit::toggle(ui, &mut o.fill_all, p).on_hover_text("Ligado: os limites vêm de todas as camadas visíveis. Desligado: só desta camada.");
-                ui.label(small("Todas as camadas"));
-                kit::toggle(ui, &mut o.fill_behind, p);
-                ui.label(small("Por trás"));
+                ui.spacing_mut().slider_width = 70.0;
+                ui.add(egui::Slider::new(&mut o.fill_tol, 0..=128).show_value(false)).on_hover_text("Tolerância: quanto a cor pode variar");
+                ui.add(egui::DragValue::new(&mut o.fill_expand).range(0..=8).suffix(" px")).on_hover_text("Expandir: o preenchimento entra por baixo do traço");
+                if kit::icon_button_sized(ui, icons::LAYERS, "Limites de todas as camadas visíveis (desligado: só desta)", o.fill_all, p, 26.0, 14.0).clicked() {
+                    o.fill_all = !o.fill_all;
+                }
+                if kit::icon_button_sized(ui, icons::ARROW_DOWN, "Pintar por trás do que já está na camada", o.fill_behind, p, 26.0, 14.0).clicked() {
+                    o.fill_behind = !o.fill_behind;
+                }
             }
             Tool::Lasso => {
                 ui.label(small("Opacidade"));
@@ -693,16 +693,16 @@ impl BoardEditor {
                 ui.add(egui::Slider::new(&mut o.lasso_opacity, 0.05..=1.0).show_value(false));
             }
             Tool::Shape => {
+                ui.spacing_mut().item_spacing.x = 2.0;
                 for (k, g, tip) in [(ShapeKind::Line, icons::SLASH, "Linha"), (ShapeKind::Rect, icons::SQUARE, "Retângulo"), (ShapeKind::Ellipse, icons::CIRCLE, "Elipse"), (ShapeKind::Arrow, icons::MOVE_UP_RIGHT, "Seta de câmera")] {
                     if kit::icon_button_sized(ui, g, tip, o.shape == k, p, 26.0, 14.0).clicked() {
                         o.shape = k;
                     }
                 }
-                ui.label(small("Espessura"));
-                ui.add(egui::DragValue::new(&mut o.shape_width).range(1.0..=80.0).speed(0.3));
-                if matches!(o.shape, ShapeKind::Rect | ShapeKind::Ellipse) {
-                    kit::toggle(ui, &mut o.shape_fill, p);
-                    ui.label(small("Preenchida"));
+                ui.add_space(4.0);
+                ui.add(egui::DragValue::new(&mut o.shape_width).range(1.0..=80.0).speed(0.3).suffix(" px")).on_hover_text("Espessura ([ e ])");
+                if matches!(o.shape, ShapeKind::Rect | ShapeKind::Ellipse) && kit::icon_button_sized(ui, icons::PAINT_BUCKET, "Preenchida", o.shape_fill, p, 26.0, 14.0).clicked() {
+                    o.shape_fill = !o.shape_fill;
                 }
             }
             Tool::Select | Tool::Move => {

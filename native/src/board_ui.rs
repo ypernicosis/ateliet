@@ -39,6 +39,8 @@ pub enum Tool {
 enum Edit {
     Tiles { layer: String, tiles: Vec<((i32, i32), Option<Tile>, Option<Tile>)> },
     Structure { before: Value, after: Value, tiles: Vec<(TileKey, Option<Tile>)> },
+    /// Several steps undone and redone as one.
+    Group(Vec<Edit>),
 }
 
 struct Active {
@@ -195,6 +197,32 @@ impl BoardEditor {
         self.changed();
     }
 
+    /// Lay a layer onto the drawing layer under it, and take it out of this frame.
+    fn merge_down(&mut self, id: &str) {
+        let f = self.frame;
+        let ids = self.doc.frame_layers(f);
+        let Some(pos) = ids.iter().position(|x| x == id).filter(|p| *p > 0) else { return };
+        let lower = ids[pos - 1].clone();
+        let tiles = ateliet_core::board::paint::merge_down(&mut self.doc, &mut self.pics, id, &lower);
+        let before = self.doc.board.clone();
+        let snapshot: Vec<(TileKey, Option<Tile>)> = self.doc.tiles.keys().filter(|k| k.0 == id).cloned().collect::<Vec<_>>().into_iter().map(|k| {
+            self.doc.ensure_decoded(&k);
+            let t = self.doc.tiles.get(&k).and_then(|s| s.tile.clone());
+            (k, t)
+        }).collect();
+        self.doc.remove_from_frame(f, id);
+        self.doc.board["frames"][f]["active"] = json!(lower);
+        self.doc.drop_unused();
+        let after = self.doc.board.clone();
+        let gone: Vec<(TileKey, Option<Tile>)> = snapshot.into_iter().filter(|(k, _)| !self.doc.tiles.contains_key(k)).collect();
+        self.doc.mark_layer(&lower);
+        self.doc.mark_frame(f);
+        self.undo.push(Edit::Group(vec![Edit::Tiles { layer: lower, tiles }, Edit::Structure { before, after, tiles: gone }]));
+        self.redo.clear();
+        self.invalidate();
+        self.changed();
+    }
+
     fn apply_edit(&mut self, e: &Edit, undo: bool) {
         match e {
             Edit::Tiles { layer, tiles } => {
@@ -214,6 +242,17 @@ impl BoardEditor {
                 self.frame = self.frame.min(self.doc.frame_count().saturating_sub(1));
                 for i in 0..self.doc.frame_count() {
                     self.doc.mark_frame(i);
+                }
+            }
+            Edit::Group(steps) => {
+                if undo {
+                    for s in steps.iter().rev() {
+                        self.apply_edit(s, true);
+                    }
+                } else {
+                    for s in steps {
+                        self.apply_edit(s, false);
+                    }
                 }
             }
         }
@@ -551,149 +590,168 @@ impl BoardEditor {
     // ── panels ─────────────────────────────────────────────────────────────
 
     fn toolbar(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        let full = ui.available_width();
+        let right_w = 290.0;
+        if full >= 1060.0 {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                ui.allocate_ui_with_layout(egui::vec2(full - right_w - 6.0, 28.0), egui::Layout::left_to_right(egui::Align::Center), |ui| self.toolbar_left(ui, p));
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| self.toolbar_right(ui, p));
+            });
+        } else {
+            // narrow: tools and settings wrap, the view and file buttons get their own row
+            ui.horizontal_wrapped(|ui| self.toolbar_left(ui, p));
+            ui.add_space(4.0);
+            ui.allocate_ui_with_layout(egui::vec2(full, 28.0), egui::Layout::right_to_left(egui::Align::Center), |ui| self.toolbar_right(ui, p));
+        }
+    }
+
+    /// Tools, colour and the settings of the tool in hand.
+    fn toolbar_left(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let pages_kind = self.is_pages();
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-            // tools: a segmented group
-            egui::Frame::new().fill(p.bg_secondary).corner_radius(9.0).inner_margin(3.0).show(ui, |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                for (t, glyph, tip) in [
-                    (Tool::Brush(BrushKind::Pencil), icons::PENCIL, "Lápis (B)"),
-                    (Tool::Brush(BrushKind::Pen), icons::PEN_TOOL, "Caneta (P)"),
-                    (Tool::Brush(BrushKind::Brush), icons::PAINTBRUSH, "Pincel"),
-                    (Tool::Brush(BrushKind::Marker), icons::HIGHLIGHTER, "Marcador"),
-                    (Tool::Brush(BrushKind::Eraser), icons::ERASER, "Borracha (E)"),
-                    (Tool::Fill, icons::PAINT_BUCKET, "Balde (G)"),
-                    (Tool::Lasso, icons::LASSO, "Laço de preenchimento (L) · Alt apaga"),
-                    (Tool::Shape, icons::SHAPES, "Formas e setas de câmera (U) · Shift alinha, Alt desenha do centro"),
-                    (Tool::Select, icons::SQUARE_DASHED, "Seleção (M) · Shift: quadrado ou círculo · Delete apaga · Ctrl+D tira"),
-                    (Tool::Move, icons::MOVE, "Mover e escalar (V): arraste a seleção; os cantos escalam (Shift mantém a proporção); Enter aplica, Esc desfaz. Sem seleção, move a camada"),
-                    (Tool::Hand, icons::HAND, "Mão (H, ou segure Espaço)"),
-                    (Tool::Picker, icons::PIPETTE, "Conta-gotas (I)"),
-                    (Tool::Panel, icons::SQUARE_SPLIT_HORIZONTAL, "Quadros (J): arraste através de um quadro para cortá-lo; num espaço vazio, um quadro novo"),
-                    (Tool::Balloon, icons::MESSAGE_CIRCLE, "Balões (W): arraste ou clique e digite"),
-                ] {
-                    if matches!(t, Tool::Panel | Tool::Balloon) && !pages_kind {
-                        continue;
-                    }
-                    let sel = self.tool == t;
-                    let (rect, r) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), Sense::click());
-                    if sel {
-                        ui.painter().rect(rect, 7.0, p.bg, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
-                    } else if r.hovered() {
-                        ui.painter().rect_filled(rect, 7.0, p.bg_hover);
-                    }
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(15.0), if sel { p.text } else { p.muted });
-                    if r.on_hover_text(tip).clicked() {
-                        self.tool = t;
-                    }
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        // tools: a segmented group
+        egui::Frame::new().fill(p.bg_secondary).corner_radius(9.0).inner_margin(3.0).show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (t, glyph, tip) in [
+                (Tool::Brush(BrushKind::Pencil), icons::PENCIL, "Lápis (B)"),
+                (Tool::Brush(BrushKind::Pen), icons::PEN_TOOL, "Caneta (P)"),
+                (Tool::Brush(BrushKind::Brush), icons::PAINTBRUSH, "Pincel"),
+                (Tool::Brush(BrushKind::Marker), icons::HIGHLIGHTER, "Marcador"),
+                (Tool::Brush(BrushKind::Eraser), icons::ERASER, "Borracha (E)"),
+                (Tool::Fill, icons::PAINT_BUCKET, "Balde (G)"),
+                (Tool::Lasso, icons::LASSO, "Laço de preenchimento (L) · Alt apaga"),
+                (Tool::Shape, icons::SHAPES, "Formas e setas de câmera (U) · Shift alinha, Alt desenha do centro"),
+                (Tool::Select, icons::SQUARE_DASHED, "Seleção (M) · Shift: quadrado ou círculo · Delete apaga · Ctrl+D tira"),
+                (Tool::Move, icons::MOVE, "Mover e escalar (V): arraste a seleção; os cantos escalam (Shift mantém a proporção); Enter aplica, Esc desfaz. Sem seleção, move a camada"),
+                (Tool::Hand, icons::HAND, "Mão (H, ou segure Espaço)"),
+                (Tool::Picker, icons::PIPETTE, "Conta-gotas (I)"),
+                (Tool::Panel, icons::SQUARE_SPLIT_HORIZONTAL, "Quadros (J): arraste através de um quadro para cortá-lo; num espaço vazio, um quadro novo"),
+                (Tool::Balloon, icons::MESSAGE_CIRCLE, "Balões (W): arraste ou clique e digite"),
+            ] {
+                if matches!(t, Tool::Panel | Tool::Balloon) && !pages_kind {
+                    continue;
                 }
-            });
-            ui.add_space(6.0);
-            // colour: the current one as a disc that opens a picker, then the palette
-            let c = Color32::from_rgb(self.color[0], self.color[1], self.color[2]);
-            let (rect, r) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
-            ui.painter().circle_filled(rect.center(), 11.0, c);
-            ui.painter().circle_stroke(rect.center(), 13.0, egui::Stroke::new(1.0_f32, p.border_strong));
-            let popup = ui.make_persistent_id("board-colour");
-            if r.on_hover_text("Cor").clicked() {
-                ui.memory_mut(|m| m.toggle_popup(popup));
-            }
-            egui::popup_below_widget(ui, popup, &ui.interact(rect, popup.with("anchor"), Sense::hover()), egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                let mut cc = c;
-                if egui::color_picker::color_picker_color32(ui, &mut cc, egui::color_picker::Alpha::Opaque) {
-                    self.color = [cc.r(), cc.g(), cc.b()];
+                let sel = self.tool == t;
+                let (rect, r) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), Sense::click());
+                if sel {
+                    ui.painter().rect(rect, 7.0, p.bg, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                } else if r.hovered() {
+                    ui.painter().rect_filled(rect, 7.0, p.bg_hover);
                 }
-            });
-            for sw in self.doc.palette().into_iter().take(10) {
-                let col = ateliet_core::board::tile::parse_color(&sw);
-                let (rect, r) = ui.allocate_exact_size(egui::vec2(18.0, 28.0), Sense::click());
-                let cc = Color32::from_rgb(col[0], col[1], col[2]);
-                ui.painter().circle_filled(rect.center(), if r.hovered() { 7.5 } else { 6.5 }, cc);
-                if col == self.color {
-                    ui.painter().circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5_f32, p.text));
-                }
-                if r.on_hover_text(&sw).clicked() {
-                    self.color = col;
-                    if matches!(self.tool, Tool::Brush(BrushKind::Eraser) | Tool::Hand | Tool::Picker) {
-                        self.tool = Tool::Brush(BrushKind::Pen);
-                    }
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(15.0), if sel { p.text } else { p.muted });
+                if r.on_hover_text(tip).clicked() {
+                    self.tool = t;
                 }
             }
-            ui.add_space(8.0);
-            if let Some(k) = self.brush() {
-                let s = self.settings.get_mut(&k).unwrap();
-                ui.label(kit::icon(icons::CIRCLE, 12.0).color(p.faint)).on_hover_text("Tamanho");
-                ui.spacing_mut().slider_width = 90.0;
-                ui.add(egui::Slider::new(&mut s.size, 1.0..=300.0).logarithmic(true).show_value(false));
-                ui.label(RichText::new(format!("{:.0}", s.size)).size(12.0).color(p.muted));
-                let more = ui.make_persistent_id("brush-more");
-                let r = kit::icon_button(ui, icons::SLIDERS_HORIZONTAL, "Opacidade e estabilização", false, p);
-                if r.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(more));
-                }
-                egui::popup_below_widget(ui, more, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-                    ui.set_min_width(220.0);
-                    ui.spacing_mut().slider_width = 150.0;
-                    ui.label(RichText::new("Opacidade").size(12.0).color(p.muted));
-                    ui.add(egui::Slider::new(&mut s.opacity, 0.05..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Estabilização").size(12.0).color(p.muted));
-                    ui.add(egui::Slider::new(&mut s.smoothing, 0.0..=0.95).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
-                    ui.add_space(6.0);
-                    ui.label(RichText::new("Dureza").size(12.0).color(p.muted));
-                    ui.add(egui::Slider::new(&mut s.hardness, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
-                });
-            } else {
-                self.tool_options(ui, p);
+        });
+        ui.add_space(6.0);
+        // colour: the current one as a disc that opens a picker, then the palette
+        let c = Color32::from_rgb(self.color[0], self.color[1], self.color[2]);
+        let (rect, r) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::click());
+        ui.painter().circle_filled(rect.center(), 11.0, c);
+        ui.painter().circle_stroke(rect.center(), 13.0, egui::Stroke::new(1.0_f32, p.border_strong));
+        let popup = ui.make_persistent_id("board-colour");
+        if r.on_hover_text("Cor").clicked() {
+            ui.memory_mut(|m| m.toggle_popup(popup));
+        }
+        egui::popup_below_widget(ui, popup, &ui.interact(rect, popup.with("anchor"), Sense::hover()), egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            let mut cc = c;
+            if egui::color_picker::color_picker_color32(ui, &mut cc, egui::color_picker::Alpha::Opaque) {
+                self.color = [cc.r(), cc.g(), cc.b()];
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.spacing_mut().item_spacing.x = 2.0;
-                let kind = self.doc.kind().to_string();
-                if kind == "webtoon" && kit::icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, "Exportar em fatias para envio (PNG)", false, p).clicked() {
-                    self.export_webtoon_slices();
+        });
+        for sw in self.doc.palette().into_iter().take(10) {
+            let col = ateliet_core::board::tile::parse_color(&sw);
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(18.0, 28.0), Sense::click());
+            let cc = Color32::from_rgb(col[0], col[1], col[2]);
+            ui.painter().circle_filled(rect.center(), if r.hovered() { 7.5 } else { 6.5 }, cc);
+            if col == self.color {
+                ui.painter().circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5_f32, p.text));
+            }
+            if r.on_hover_text(&sw).clicked() {
+                self.color = col;
+                if matches!(self.tool, Tool::Brush(BrushKind::Eraser) | Tool::Hand | Tool::Picker) {
+                    self.tool = Tool::Brush(BrushKind::Pen);
                 }
-                if pages_kind && kit::icon_button(ui, icons::FILE_DOWN, "Exportar as páginas em PDF (tamanho de impressão, com sangria)", false, p).clicked() {
-                    self.export_pages_pdf();
-                } else if !pages_kind && kind != "canvas" && kit::icon_button(ui, icons::FILE_DOWN, "Prancha em PDF (A4 deitado, seis planos por página, com as notas)", false, p).clicked() {
-                    self.export_presentation_pdf();
-                }
-                if pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar esta página como PNG", false, p).clicked() {
-                    self.export_page_png();
-                } else if !pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
-                    let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
-                    let png = ateliet_core::board::tile::encode_png(&px, w, h);
-                    let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                    let out = self.abs.with_file_name(format!("{stem} - {}.png", self.frame + 1));
-                    match std::fs::write(&out, png) {
-                        Ok(()) => self.error = Some(format!("Exportado: {}", out.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
-                        Err(e) => self.error = Some(e.to_string()),
-                    }
-                }
+            }
+        }
+        ui.add_space(8.0);
+        if let Some(k) = self.brush() {
+            let s = self.settings.get_mut(&k).unwrap();
+            ui.label(kit::icon(icons::CIRCLE, 12.0).color(p.faint)).on_hover_text("Tamanho");
+            ui.spacing_mut().slider_width = 90.0;
+            ui.add(egui::Slider::new(&mut s.size, 1.0..=300.0).logarithmic(true).show_value(false));
+            ui.label(RichText::new(format!("{:.0}", s.size)).size(12.0).color(p.muted));
+            let more = ui.make_persistent_id("brush-more");
+            let r = kit::icon_button(ui, icons::SLIDERS_HORIZONTAL, "Opacidade e estabilização", false, p);
+            if r.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(more));
+            }
+            egui::popup_below_widget(ui, more, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                ui.set_min_width(220.0);
+                ui.spacing_mut().slider_width = 150.0;
+                ui.label(RichText::new("Opacidade").size(12.0).color(p.muted));
+                ui.add(egui::Slider::new(&mut s.opacity, 0.05..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
                 ui.add_space(6.0);
-                ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(12.0).color(p.faint));
-                if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {
-                    self.fit = true;
-                }
-                self.guide_menu(ui, p);
-                let onion = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
-                if kit::icon_button(ui, icons::LAYERS_2, "Papel de cebola (O)", onion, p).clicked() {
-                    self.doc.board["onion"]["enabled"] = json!(!onion);
-                    self.invalidate();
-                    self.dirty = true;
-                }
+                ui.label(RichText::new("Estabilização").size(12.0).color(p.muted));
+                ui.add(egui::Slider::new(&mut s.smoothing, 0.0..=0.95).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
                 ui.add_space(6.0);
-                ui.add_enabled_ui(!self.redo.is_empty(), |ui| {
-                    if kit::icon_button(ui, icons::REDO_2, "Refazer (Ctrl+Shift+Z)", false, p).clicked() {
-                        self.redo();
-                    }
-                });
-                ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
-                    if kit::icon_button(ui, icons::UNDO_2, "Desfazer (Ctrl+Z)", false, p).clicked() {
-                        self.undo();
-                    }
-                });
+                ui.label(RichText::new("Dureza").size(12.0).color(p.muted));
+                ui.add(egui::Slider::new(&mut s.hardness, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             });
+        } else {
+            self.tool_options(ui, p);
+        }
+    }
+
+    /// Undo, view and export.
+    fn toolbar_right(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        let pages_kind = self.is_pages();
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let kind = self.doc.kind().to_string();
+        if kind == "webtoon" && kit::icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, "Exportar em fatias para envio (PNG)", false, p).clicked() {
+            self.export_webtoon_slices();
+        }
+        if pages_kind && kit::icon_button(ui, icons::FILE_DOWN, "Exportar as páginas em PDF (tamanho de impressão, com sangria)", false, p).clicked() {
+            self.export_pages_pdf();
+        } else if !pages_kind && kind != "canvas" && kit::icon_button(ui, icons::FILE_DOWN, "Prancha em PDF (A4 deitado, seis planos por página, com as notas)", false, p).clicked() {
+            self.export_presentation_pdf();
+        }
+        if pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar esta página como PNG", false, p).clicked() {
+            self.export_page_png();
+        } else if !pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
+            let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
+            let png = ateliet_core::board::tile::encode_png(&px, w, h);
+            let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let out = self.abs.with_file_name(format!("{stem} - {}.png", self.frame + 1));
+            match std::fs::write(&out, png) {
+                Ok(()) => self.error = Some(format!("Exportado: {}", out.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
+                Err(e) => self.error = Some(e.to_string()),
+            }
+        }
+        ui.add_space(6.0);
+        ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(12.0).color(p.faint));
+        if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {
+            self.fit = true;
+        }
+        self.guide_menu(ui, p);
+        let onion = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
+        if kit::icon_button(ui, icons::LAYERS_2, "Papel de cebola (O)", onion, p).clicked() {
+            self.doc.board["onion"]["enabled"] = json!(!onion);
+            self.invalidate();
+            self.dirty = true;
+        }
+        ui.add_space(6.0);
+        ui.add_enabled_ui(!self.redo.is_empty(), |ui| {
+            if kit::icon_button(ui, icons::REDO_2, "Refazer (Ctrl+Shift+Z)", false, p).clicked() {
+                self.redo();
+            }
+        });
+        ui.add_enabled_ui(!self.undo.is_empty(), |ui| {
+            if kit::icon_button(ui, icons::UNDO_2, "Desfazer (Ctrl+Z)", false, p).clicked() {
+                self.undo();
+            }
         });
     }
 
@@ -860,7 +918,7 @@ impl BoardEditor {
             }
             ui.painter().text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, &name, if sel { kit::medium(13.0) } else { egui::FontId::proportional(13.0) }, if vis { p.text } else { p.faint });
             let mut rx = rect.right() - 12.0;
-            for (on, g) in [(l["locked"].as_bool() == Some(true), icons::LOCK), (l["clip"].as_bool() == Some(true), icons::CORNER_DOWN_RIGHT)] {
+            for (on, g) in [(l["locked"].as_bool() == Some(true), icons::LOCK), (l["clip"].as_bool() == Some(true), icons::CORNER_DOWN_RIGHT), (l["shared"].as_bool() == Some(true), icons::LAYERS)] {
                 if on {
                     ui.painter().text(egui::pos2(rx, rect.center().y), egui::Align2::RIGHT_CENTER, g, kit::icon_font(12.0), p.faint);
                     rx -= 18.0;
@@ -910,7 +968,7 @@ impl BoardEditor {
                             self.dirty = true;
                         }
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        if kit::icon_button_sized(ui, icons::TRASH_2, "Excluir camada", false, p, 26.0, 13.0).clicked() {
+                        if kit::icon_button_sized(ui, icons::TRASH_2, if l["shared"].as_bool() == Some(true) { "Excluir camada (de todos os quadros)" } else { "Excluir camada" }, false, p, 26.0, 13.0).clicked() {
                             op = Some((id.clone(), "delete"));
                         }
                         if kit::icon_button_sized(ui, icons::ARROW_DOWN, "Descer", false, p, 26.0, 13.0).clicked() {
@@ -919,6 +977,26 @@ impl BoardEditor {
                         if kit::icon_button_sized(ui, icons::ARROW_UP, "Subir", false, p, 26.0, 13.0).clicked() {
                             op = Some((id.clone(), "up"));
                         }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let shared = l["shared"].as_bool() == Some(true);
+                        if kit::icon_button_sized(ui, icons::LAYERS, if shared { "Em todos os quadros (clique: só neste)" } else { "Mostrar em todos os quadros (fundo, cenário, personagem parado)" }, shared, p, 26.0, 13.0).clicked() {
+                            op = Some((id.clone(), "share"));
+                        }
+                        if kit::icon_button_sized(ui, icons::COPY, "Duplicar camada", false, p, 26.0, 13.0).clicked() {
+                            op = Some((id.clone(), "dup"));
+                        }
+                        let pos = ids.iter().position(|x| x == id).unwrap_or(0);
+                        let below_ok = pos > 0 && {
+                            let b = self.doc.layer(&ids[pos - 1]);
+                            b["kind"].as_str().unwrap_or("raster") == "raster" && b["locked"].as_bool() != Some(true)
+                        };
+                        ui.add_enabled_ui(below_ok, |ui| {
+                            if kit::icon_button_sized(ui, icons::MERGE, "Mesclar com a de baixo", false, p, 26.0, 13.0).clicked() {
+                                op = Some((id.clone(), "merge"));
+                            }
+                        });
                     });
                 });
             }
@@ -936,6 +1014,11 @@ impl BoardEditor {
             match what {
                 "up" => self.structure(|d| d.move_layer(f, &id, 1)),
                 "down" => self.structure(|d| d.move_layer(f, &id, -1)),
+                "share" => self.structure(|d| d.toggle_shared(f, &id)),
+                "dup" => self.structure(|d| {
+                    d.duplicate_layer(f, &id);
+                }),
+                "merge" => self.merge_down(&id),
                 _ => self.structure(|d| d.delete_layer(f, &id)),
             }
         }

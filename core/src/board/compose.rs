@@ -324,6 +324,35 @@ fn layers_into(doc: &mut BoardDoc, pics: &mut Pictures, frame: usize, x0: i32, y
     }
 }
 
+/// One layer's own pixels in a box (canvas coordinates), premultiplied,
+/// before opacity and blending; `None` when it has none to show.
+pub fn layer_region(doc: &mut BoardDoc, pics: &mut Pictures, id: &str, x0: i32, y0: i32, w: usize, h: usize) -> Option<Vec<u8>> {
+    let l = doc.layer(id).clone();
+    let mut buf = vec![0u8; w * h * 4];
+    let drew = match l["kind"].as_str().unwrap_or("raster") {
+        "raster" => raster_region(doc, id, x0, y0, w, h, &mut buf),
+        "image" | "trace" => {
+            let rid = l["src"].as_str().unwrap_or_default().to_string();
+            let trace = if l["kind"] == "trace" { Some(&l["trace"]) } else { None };
+            match pics.get(doc, &rid, trace) {
+                Some(p) => {
+                    let p = p.clone();
+                    picture_region(&p, &l["transform"], x0, y0, w, h, &mut buf);
+                    true
+                }
+                None => false,
+            }
+        }
+        _ => false,
+    };
+    drew.then_some(buf)
+}
+
+/// `src` laid over `dst` at an opacity, with a layer blend mode.
+pub fn blend(dst: &mut [u8], src: &[u8], opacity: f32, mode: &str) {
+    blend_into(dst, src, opacity, mode);
+}
+
 /// Draw `w`×`h` canvas pixels from (`x0`, `y0`) of a frame; premultiplied RGBA.
 pub fn region(doc: &mut BoardDoc, pics: &mut Pictures, frame: usize, x0: i32, y0: i32, w: usize, h: usize, opts: &Options) -> Vec<u8> {
     let mut out = vec![0u8; w * h * 4];

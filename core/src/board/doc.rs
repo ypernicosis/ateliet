@@ -319,17 +319,86 @@ impl BoardDoc {
     }
 
     pub fn delete_layer(&mut self, frame: usize, id: &str) {
-        let mut layers = self.frame_layers(frame);
-        if layers.len() <= 1 {
+        if self.frame_layers(frame).len() <= 1 {
             return;
         }
-        layers.retain(|x| x != id);
-        self.board["frames"][frame]["layers"] = json!(layers);
-        if self.active_layer(frame) == id {
-            self.board["frames"][frame]["active"] = json!(layers.last());
+        // a shared layer leaves every frame
+        let frames: Vec<usize> = if self.layer(id)["shared"].as_bool() == Some(true) { (0..self.frame_count()).collect() } else { vec![frame] };
+        for f in frames {
+            self.remove_from_frame(f, id);
         }
         self.drop_unused_layers();
         self.mark_frame(frame);
+        self.touch();
+    }
+
+    /// Take a layer out of one frame (a frame left empty gets a new drawing layer).
+    pub fn remove_from_frame(&mut self, frame: usize, id: &str) {
+        let mut layers = self.frame_layers(frame);
+        if !layers.iter().any(|x| x == id) {
+            return;
+        }
+        layers.retain(|x| x != id);
+        if layers.is_empty() {
+            let l = new_layer("Drawing", "raster");
+            let nid = l["id"].as_str().unwrap().to_string();
+            self.board["layers"][&nid] = l;
+            layers.push(nid);
+        }
+        self.board["frames"][frame]["layers"] = json!(layers);
+        if !layers.iter().any(|x| *x == self.active_layer(frame)) {
+            self.board["frames"][frame]["active"] = json!(layers.last());
+        }
+        self.mark_frame(frame);
+    }
+
+    /// A copy of a layer (and its pixels) right above it, in this frame only.
+    pub fn duplicate_layer(&mut self, frame: usize, id: &str) -> String {
+        let mut l = self.layer(id).clone();
+        let nid = uid();
+        l["id"] = json!(nid);
+        l["shared"] = json!(false);
+        l["name"] = json!(format!("{} (cópia)", l["name"].as_str().unwrap_or("Camada")));
+        self.board["layers"][&nid] = l;
+        let keys: Vec<TileKey> = self.tiles.keys().filter(|k| k.0 == id).cloned().collect();
+        for k in keys {
+            self.ensure_decoded(&k);
+            let tile = self.tiles.get(&k).and_then(|s| s.tile.clone());
+            self.tiles.insert((nid.clone(), k.1, k.2), Slot { png: None, tile, dirty: true });
+        }
+        let mut layers = self.frame_layers(frame);
+        let at = layers.iter().position(|x| x == id).map(|p| p + 1).unwrap_or(layers.len());
+        layers.insert(at, nid.clone());
+        self.board["frames"][frame]["layers"] = json!(layers);
+        self.board["frames"][frame]["active"] = json!(nid);
+        self.mark_frame(frame);
+        self.touch();
+        nid
+    }
+
+    /// Show a layer in every frame (at the same height), or keep it only in this one.
+    pub fn toggle_shared(&mut self, frame: usize, id: &str) {
+        let shared = self.layer(id)["shared"].as_bool() == Some(true);
+        if shared {
+            self.layer_mut(id)["shared"] = json!(false);
+            for f in 0..self.frame_count() {
+                if f != frame {
+                    self.remove_from_frame(f, id);
+                }
+            }
+        } else {
+            self.layer_mut(id)["shared"] = json!(true);
+            let at = self.frame_layers(frame).iter().position(|x| x == id).unwrap_or(0);
+            for f in 0..self.frame_count() {
+                let mut layers = self.frame_layers(f);
+                if !layers.iter().any(|x| x == id) {
+                    layers.insert(at.min(layers.len()), id.to_string());
+                    self.board["frames"][f]["layers"] = json!(layers);
+                    self.mark_frame(f);
+                }
+            }
+        }
+        self.drop_unused_layers();
         self.touch();
     }
 
@@ -345,6 +414,11 @@ impl BoardDoc {
         self.board["frames"][frame]["layers"] = json!(layers);
         self.mark_frame(frame);
         self.touch();
+    }
+
+    /// Forget layers no frame shows any more (and their pixels).
+    pub fn drop_unused(&mut self) {
+        self.drop_unused_layers();
     }
 
     fn drop_unused_layers(&mut self) {

@@ -245,3 +245,4 @@ pub const SQUARE_DASHED: &str = "\u{e1ca}";
 pub const SLASH: &str = "\u{e521}";
 pub const MOVE_UP_RIGHT: &str = "\u{e497}";
 pub const FLIP_HORIZONTAL_2: &str = "\u{e361}";
+pub const MERGE: &str = "\u{e443}";

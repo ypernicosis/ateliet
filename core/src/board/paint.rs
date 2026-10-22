@@ -278,6 +278,85 @@ pub fn apply_mask(doc: &mut BoardDoc, layer: &str, x0: i32, y0: i32, w: usize, h
     apply_image(doc, layer, x0, y0, w, h, &px, alpha, mode)
 }
 
+/// Replace a layer's pixels in a box (layer coordinates).
+pub fn write_layer(doc: &mut BoardDoc, layer: &str, x0: i32, y0: i32, w: usize, h: usize, px: &[u8]) -> Vec<TileChange> {
+    let mut changes = Vec::new();
+    let t = TILE as i32;
+    for ty in y0.div_euclid(t)..=(y0 + h as i32 - 1).div_euclid(t) {
+        for tx in x0.div_euclid(t)..=(x0 + w as i32 - 1).div_euclid(t) {
+            let (bx, by) = (tx * t, ty * t);
+            let (sx0, sy0) = ((x0 - bx).max(0), (y0 - by).max(0));
+            let (sx1, sy1) = ((x0 + w as i32 - bx).min(t), (y0 + h as i32 - by).min(t));
+            let before = doc.tile(layer, tx, ty).cloned();
+            let mut tile = before.clone().unwrap_or_default();
+            for y in sy0..sy1 {
+                let d = (y as usize * TILE + sx0 as usize) * 4;
+                let s = (((by + y - y0) as usize) * w + (bx + sx0 - x0) as usize) * 4;
+                let n = (sx1 - sx0) as usize * 4;
+                tile.px[d..d + n].copy_from_slice(&px[s..s + n]);
+            }
+            let after = if tile.is_empty() { None } else { Some(tile) };
+            if before.as_ref().map(|b| &b.px) == after.as_ref().map(|a| &a.px) {
+                continue;
+            }
+            doc.set_tile(layer, tx, ty, after.clone());
+            changes.push(((tx, ty), before, after));
+        }
+    }
+    changes
+}
+
+/// The canvas box a layer's pixels cover (raster layers: its tiles).
+pub fn layer_bounds(doc: &BoardDoc, id: &str) -> Option<(i32, i32, usize, usize)> {
+    let l = doc.layer(id);
+    if l["kind"].as_str().unwrap_or("raster") != "raster" {
+        if doc.infinite() {
+            let (x, y) = (l["transform"]["x"].as_f64().unwrap_or(0.0) as i32, l["transform"]["y"].as_f64().unwrap_or(0.0) as i32);
+            return Some((x - 4096, y - 4096, 8192, 8192));
+        }
+        return Some((0, 0, doc.width() as usize, doc.height() as usize));
+    }
+    let tiles = doc.layer_tiles(id);
+    if tiles.is_empty() {
+        return None;
+    }
+    let (lx, ly) = (l["x"].as_f64().unwrap_or(0.0).round() as i32, l["y"].as_f64().unwrap_or(0.0).round() as i32);
+    let t = TILE as i32;
+    let x0 = tiles.iter().map(|k| k.0).min().unwrap() * t + lx;
+    let y0 = tiles.iter().map(|k| k.1).min().unwrap() * t + ly;
+    let x1 = (tiles.iter().map(|k| k.0).max().unwrap() + 1) * t + lx;
+    let y1 = (tiles.iter().map(|k| k.1).max().unwrap() + 1) * t + ly;
+    let (mut x0, mut y0, mut x1, mut y1) = (x0, y0, x1, y1);
+    if !doc.infinite() {
+        x0 = x0.max(0);
+        y0 = y0.max(0);
+        x1 = x1.min(doc.width() as i32);
+        y1 = y1.min(doc.height() as i32);
+    }
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, (x1 - x0) as usize, (y1 - y0) as usize))
+}
+
+/// Lay `upper` (any kind) onto the drawing layer `lower` with its opacity,
+/// blend mode and clipping; the tiles of `lower` that changed.
+pub fn merge_down(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, upper: &str, lower: &str) -> Vec<TileChange> {
+    let Some((x0, y0, w, h)) = layer_bounds(doc, upper) else { return Vec::new() };
+    let Some(mut up) = super::compose::layer_region(doc, pics, upper, x0, y0, w, h) else { return Vec::new() };
+    let u = doc.layer(upper).clone();
+    let lo = doc.layer(lower).clone();
+    let (lx, ly) = (lo["x"].as_f64().unwrap_or(0.0).round() as i32, lo["y"].as_f64().unwrap_or(0.0).round() as i32);
+    let mut low = read_layer(doc, lower, x0 - lx, y0 - ly, w, h);
+    if u["clip"].as_bool() == Some(true) {
+        for (s, d) in up.chunks_exact_mut(4).zip(low.chunks_exact(4)) {
+            for c in s.iter_mut() {
+                *c = mul255(*c as u32, d[3] as u32) as u8;
+            }
+        }
+    }
+    let opacity = u["opacity"].as_f64().unwrap_or(1.0) as f32;
+    super::compose::blend(&mut low, &up, opacity, u["blend"].as_str().unwrap_or("source-over"));
+    write_layer(doc, lower, x0 - lx, y0 - ly, w, h, &low)
+}
+
 /// A premultiplied picture `sw`×`sh` drawn `size` big around `center`,
 /// turned by `angle` (radians) and maybe mirrored, into the box `w`×`h` at
 /// (`x0`, `y0`).
