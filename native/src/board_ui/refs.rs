@@ -178,7 +178,7 @@ impl BoardEditor {
     }
 
     /// The shared picture library (Pictogrep's), as the images settings say.
-    fn shared_home(&self) -> Option<ateliet_core::pictogrep::Home> {
+    pub(super) fn shared_home(&self) -> Option<ateliet_core::pictogrep::Home> {
         let st = crate::images_ui::ImagesState::settings(&self.vault_root());
         match st["shared"].as_str().unwrap_or("auto").trim() {
             "" => None,

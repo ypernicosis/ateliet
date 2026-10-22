@@ -226,6 +226,79 @@ pub fn animated_png(doc: &mut BoardDoc, pics: &mut Pictures, max: u32) -> Vec<u8
     apng(&frames, &delays)
 }
 
+/// A proportion written the way Pictogrep names it ("16:9"), or the ratio.
+pub fn aspect_of(w: u32, h: u32) -> String {
+    fn g(a: u32, b: u32) -> u32 {
+        if b == 0 { a } else { g(b, a % b) }
+    }
+    let d = g(w, h).max(1);
+    let (a, b) = (w / d, h / d);
+    if a <= 32 && b <= 32 {
+        return format!("{a}:{b}");
+    }
+    let r = w as f64 / h.max(1) as f64;
+    for (name, v) in [("16:9", 16.0 / 9.0), ("4:3", 4.0 / 3.0), ("2:1", 2.0), ("3:4", 0.75), ("1:1", 1.0), ("9:16", 9.0 / 16.0)] {
+        if (r - v).abs() < 0.01 {
+            return name.into();
+        }
+    }
+    format!("{w}:{h}")
+}
+
+/// Pictogrep's file-name stem: lowercase ASCII letters and digits, runs of
+/// anything else as one dash, at most 60 characters.
+pub fn clean_stem(value: &str) -> String {
+    let mut out = String::new();
+    let mut dash = false;
+    for c in value.to_lowercase().chars() {
+        if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+            dash = false;
+        } else if !dash && !out.is_empty() {
+            out.push('-');
+            dash = true;
+        }
+    }
+    let out: String = out.trim_matches('-').chars().take(60).collect();
+    if out.is_empty() { "image".into() } else { out }
+}
+
+/// Every frame into Pictogrep's storyboards folder, named the way
+/// Pictogrep names its own (`0001_16x9_<stem>_<id>.png` and a JSON beside
+/// it). The id comes from the storyboard and the frame, so exporting again
+/// replaces the earlier copy. Returns how many were written.
+pub fn to_pictogrep(doc: &mut BoardDoc, pics: &mut Pictures, dir: &std::path::Path, abs: &str, name: &str) -> Result<usize, String> {
+    use sha2::{Digest, Sha256};
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for i in 0..doc.frame_count() {
+        let (w, h, px) = frame_rgba(doc, pics, i, 1.0, false, false);
+        let png = super::tile::encode_png(&px, w, h);
+        let f = doc.frame(i).clone();
+        let aspect = aspect_of(w, h);
+        let aspect_file = if aspect.chars().all(|c| c.is_ascii_digit() || c == ':') && aspect.contains(':') { aspect.replace(':', "x") } else { "free".into() };
+        let key = format!("{abs}#{}", f["id"].as_str().unwrap_or(""));
+        let id: String = Sha256::digest(key.as_bytes())[..8].iter().map(|b| format!("{b:02x}")).collect();
+        // an earlier export of the same frame, maybe at another position
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            if e.file_name().to_string_lossy().ends_with(&format!("_{id}.png")) {
+                let _ = std::fs::remove_file(e.path());
+                let _ = std::fs::remove_file(e.path().with_extension("json"));
+            }
+        }
+        let fname = f["name"].as_str().filter(|s| !s.trim().is_empty()).map(String::from).unwrap_or_else(|| (i + 1).to_string());
+        let file = format!("{:04}_{aspect_file}_{}_{id}.png", (i + 1).min(9999), clean_stem(&format!("{name} {fname}")));
+        let target = dir.join(&file);
+        std::fs::write(&target, png).map_err(|e| e.to_string())?;
+        // the reference the frame was drawn from, when it is a file of its own
+        let source = f["reference"].as_str().and_then(|rid| doc.board["references"].as_array().and_then(|a| a.iter().find(|r| r["id"].as_str() == Some(rid))).and_then(|r| r["path"].as_str()).filter(|p| !p.starts_with("refs/")).map(String::from)).unwrap_or_default();
+        let meta = json!({ "file": file, "source": source, "aspect": aspect, "tags": [], "query": name });
+        std::fs::write(target.with_extension("json"), format!("{}\n", serde_json::to_string_pretty(&meta).unwrap_or_default())).map_err(|e| e.to_string())?;
+        n += 1;
+    }
+    Ok(n)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +314,7 @@ mod tests {
         assert_eq!(names.iter().filter(|n| **n == b"fcTL").count(), 2);
         assert!(image::load_from_memory(&a).is_ok());
         assert_eq!(frame_file_name("A/B", 0, " cena "), "A-B 001 cena.png");
+        assert_eq!(aspect_of(1920, 1080), "16:9");
+        assert_eq!(clean_stem("My Board — shot 1"), "my-board-shot-1");
     }
 }

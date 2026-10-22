@@ -133,6 +133,21 @@ impl BoardEditor {
         }
     }
 
+    /// Every frame into the shared library's storyboards folder, as Pictogrep names them.
+    fn export_to_pictogrep(&mut self) {
+        let Some(home) = self.shared_home() else {
+            self.error = Some("Não há biblioteca compartilhada (Ajustes → Imagens).".into());
+            return;
+        };
+        let dir = home.root.join("storyboards");
+        let stem = self.stem();
+        let abs = self.abs.to_string_lossy().into_owned();
+        self.error = Some(match bx::to_pictogrep(&mut self.doc, &mut self.pics, &dir, &abs, &stem) {
+            Ok(n) => format!("{n} {} na pasta de storyboards do Pictogrep (exportar de novo substitui)", if n == 1 { "quadro" } else { "quadros" }),
+            Err(e) => format!("Não foi possível exportar: {e}"),
+        });
+    }
+
     /// The export button and its menu.
     pub(super) fn export_menu(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let r = kit::icon_button(ui, icons::DOWNLOAD, "Exportar imagens", false, p);
@@ -156,6 +171,9 @@ impl BoardEditor {
             }
             if timeline && kit::menu_item(ui, icons::PLAY, "PNG animado da linha do tempo", p) {
                 act = Some(3);
+            }
+            if !pages && kit::menu_item(ui, icons::IMAGES, "Pasta de storyboards do Pictogrep", p) {
+                act = Some(4);
             }
             ui.add_space(4.0);
             kit::hairline(ui, p);
@@ -189,7 +207,8 @@ impl BoardEditor {
                 0 => self.export_frame_png(),
                 1 => self.export_all_frames(),
                 2 => self.export_contact_sheet(),
-                _ => self.export_animated_png(),
+                3 => self.export_animated_png(),
+                _ => self.export_to_pictogrep(),
             }
         }
     }
