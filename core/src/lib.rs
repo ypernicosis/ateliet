@@ -29,4 +29,5 @@ pub mod dataview;
 pub mod script;
 pub mod calendar;
 pub mod scriptorium;
+pub mod typeset;
 pub mod board;
