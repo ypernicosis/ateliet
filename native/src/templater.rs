@@ -14,6 +14,9 @@ use std::sync::Arc;
 pub struct TemplaterSettings {
     pub folder: String,
     pub hotkey_templates: Vec<String>,
+    /// Run the template of the deepest matching folder on new notes.
+    pub folder_templates: Vec<(String, String)>,
+    pub trigger_on_create: bool,
 }
 
 impl TemplaterSettings {
@@ -22,6 +25,8 @@ impl TemplaterSettings {
         TemplaterSettings {
             folder: v["templates_folder"].as_str().unwrap_or_default().to_string(),
             hotkey_templates: v["enabled_templates_hotkeys"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
+            folder_templates: v["folder_templates"].as_array().map(|a| a.iter().filter_map(|x| Some((x["folder"].as_str()?.to_string(), x["template"].as_str()?.to_string()))).filter(|(f, t)| !f.is_empty() && !t.is_empty()).collect()).unwrap_or_default(),
+            trigger_on_create: v["trigger_on_file_creation"].as_bool().unwrap_or(false),
         }
     }
 
@@ -32,6 +37,8 @@ impl TemplaterSettings {
         }
         v["templates_folder"] = json!(self.folder);
         v["enabled_templates_hotkeys"] = json!(self.hotkey_templates);
+        v["folder_templates"] = json!(self.folder_templates.iter().map(|(f, t)| json!({ "folder": f, "template": t })).collect::<Vec<_>>());
+        v["trigger_on_file_creation"] = json!(self.trigger_on_create);
         cfg.merge("ateliet/templater.json", v);
     }
 }
@@ -43,6 +50,8 @@ pub enum Mode {
     Insert { path: String, at: usize },
     /// Fill a new note.
     NewNote { path: String },
+    /// The note's own `<% %>` commands replaced by their results.
+    Replace { path: String },
 }
 
 pub struct Prompt {
@@ -75,6 +84,21 @@ impl Default for Templater {
 }
 
 impl Templater {
+    /// The folder template for a new note at `path` (the deepest folder that matches).
+    pub fn folder_template(s: &TemplaterSettings, path: &str) -> Option<String> {
+        if !s.trigger_on_create {
+            return None;
+        }
+        s.folder_templates
+            .iter()
+            .filter(|(f, _)| {
+                let f = f.trim_matches('/');
+                f.is_empty() || f == "/" || path.starts_with(&format!("{f}/"))
+            })
+            .max_by_key(|(f, _)| f.trim_matches('/').len())
+            .map(|(_, t)| if t.to_lowercase().ends_with(".md") { t.clone() } else { format!("{t}.md") })
+    }
+
     pub fn templates(&self, vault: &Vault, s: &TemplaterSettings) -> Vec<String> {
         let folder = s.folder.trim().trim_matches('/');
         let mut v: Vec<String> = vault.markdown_files().map(|e| e.path.clone()).filter(|p| folder.is_empty() || p.starts_with(&format!("{folder}/"))).collect();

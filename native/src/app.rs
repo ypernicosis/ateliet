@@ -131,6 +131,8 @@ pub struct App {
     pub dv_settings: Settings,
     pub daily: DailySettings,
     pub templater_settings: TemplaterSettings,
+    /// The egui context (for work started outside a frame's UI code).
+    pub ctx: Option<egui::Context>,
     pub templater: Templater,
     pub search: panels::SearchState,
     pub calendar: panels::CalendarState,
@@ -193,6 +195,7 @@ impl App {
             dv_settings: Settings::default(),
             daily: DailySettings::default(),
             templater_settings: TemplaterSettings::default(),
+            ctx: None,
             templater: Templater::default(),
             search: Default::default(),
             calendar: panels::CalendarState::new(),
@@ -562,6 +565,15 @@ impl App {
         if let Some(t) = self.tabs.get_mut(self.active) {
             t.mode = Mode::Edit;
         }
+        // the folder's template fills the new note
+        if let (Some(template), Some(ctx)) = (templater::Templater::folder_template(&self.templater_settings, &path), self.ctx.clone()) {
+            if let Some(v) = &self.vault {
+                if v.abs(&template).exists() {
+                    v.index.write().unwrap().update(std::slice::from_ref(&path));
+                    self.templater.run(&ctx, v, self.dv_settings.clone(), &template, &path.clone(), String::new(), String::new(), templater::Mode::NewNote { path: path.clone() });
+                }
+            }
+        }
         self.ask = Some(Ask { title: "Nome da nova nota".into(), value: "Sem título".into(), kind: AskKind::Rename(path) });
     }
 
@@ -835,6 +847,16 @@ impl App {
         self.templater.run(ctx, v, self.dv_settings.clone(), template, &path.clone(), String::new(), String::new(), templater::Mode::NewNote { path });
     }
 
+    /// Templater's "replace templates in the active file".
+    pub fn replace_templates(&mut self, ctx: &egui::Context) {
+        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none()) else { return };
+        let path = t.path.clone();
+        let text = t.text.clone();
+        self.save_tab(self.active);
+        let Some(v) = &self.vault else { return };
+        self.templater.run(ctx, v, self.dv_settings.clone(), &path.clone(), &path.clone(), text, String::new(), templater::Mode::Replace { path });
+    }
+
     fn finish_templates(&mut self) {
         for f in self.templater.poll() {
             let out = match f.result {
@@ -862,6 +884,13 @@ impl App {
                     } else {
                         continue;
                     }
+                }
+                templater::Mode::Replace { path } => {
+                    if let Some(t) = self.tabs.iter_mut().find(|t| &t.path == path) {
+                        t.text = out.text.clone();
+                        t.last_edit = Some(Instant::now());
+                    }
+                    (path.clone(), 0)
                 }
                 templater::Mode::NewNote { path } => {
                     if let Some(v) = &self.vault {
@@ -936,6 +965,9 @@ impl eframe::App for App {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.ctx.is_none() {
+            self.ctx = Some(ctx.clone());
+        }
         if !self.themed {
             self.palette = theme::apply(ctx, &self.appearance);
             self.themed = true;

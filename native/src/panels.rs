@@ -1228,7 +1228,51 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                             }
                         }
                         3 => {
+                            let mut changed = false;
                             if kit::setting(ui, "Pasta de modelos", "Onde ficam os modelos do Templater.", p, |ui| field(ui, &mut app.templater_settings.folder)) {
+                                changed = true;
+                            }
+                            changed |= kit::setting(ui, "Rodar ao criar notas", "Uma nota nova recebe o modelo da pasta onde foi criada (a mais funda que tiver um).", p, |ui| kit::toggle(ui, &mut app.templater_settings.trigger_on_create, p).changed());
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Modelos por pasta").font(kit::medium(13.0)).color(p.text));
+                            let mut remove = None;
+                            for (i, (folder, template)) in app.templater_settings.folder_templates.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    changed |= ui.add(egui::TextEdit::singleline(folder).hint_text("pasta").desired_width(170.0)).changed();
+                                    ui.label(RichText::new("→").color(p.faint));
+                                    changed |= ui.add(egui::TextEdit::singleline(template).hint_text("modelo").desired_width(220.0)).changed();
+                                    if kit::icon_button_sized(ui, icons::X, "Remover", false, p, 22.0, 12.0).clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                app.templater_settings.folder_templates.remove(i);
+                                changed = true;
+                            }
+                            if kit::button(ui, Some(icons::PLUS), "Modelo para uma pasta", p).clicked() {
+                                app.templater_settings.folder_templates.push((String::new(), String::new()));
+                            }
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Modelos na paleta de comandos").font(kit::medium(13.0)).color(p.text));
+                            ui.label(RichText::new("Cada um vira um comando “Templater: Inserir …”, que pode ganhar atalho em hotkeys.json.").size(12.0).color(p.faint));
+                            let mut remove = None;
+                            for (i, t) in app.templater_settings.hotkey_templates.iter_mut().enumerate() {
+                                ui.horizontal(|ui| {
+                                    changed |= ui.add(egui::TextEdit::singleline(t).hint_text("modelo").desired_width(400.0)).changed();
+                                    if kit::icon_button_sized(ui, icons::X, "Remover", false, p, 22.0, 12.0).clicked() {
+                                        remove = Some(i);
+                                    }
+                                });
+                            }
+                            if let Some(i) = remove {
+                                app.templater_settings.hotkey_templates.remove(i);
+                                changed = true;
+                            }
+                            if kit::button(ui, Some(icons::PLUS), "Modelo na paleta", p).clicked() {
+                                app.templater_settings.hotkey_templates.push(String::new());
+                            }
+                            if changed {
                                 app.templater_settings.save(&cfg);
                             }
                         }

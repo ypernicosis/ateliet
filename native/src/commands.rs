@@ -49,6 +49,7 @@ pub enum Cmd {
     Focus,
     Back,
     Forward,
+    ReplaceTemplates,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -90,6 +91,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Focus, "scriptorium-omena:modo-foco", "Scriptorium: Alternar modo foco"),
     (Cmd::Back, "app:go-back", "Voltar"),
     (Cmd::Forward, "app:go-forward", "Avançar"),
+    (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -106,6 +108,7 @@ fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
         Cmd::Settings => KeyboardShortcut::new(cmd, Key::Comma),
         Cmd::ImageMode => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::I),
         Cmd::Back => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowLeft),
+        Cmd::ReplaceTemplates => KeyboardShortcut::new(Modifiers::ALT, Key::R),
         Cmd::Forward => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowRight),
         _ => return None,
     })
@@ -174,6 +177,11 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
+        Cmd::ReplaceTemplates => {
+            if let Some(c) = app.ctx.clone() {
+                app.replace_templates(&c);
+            }
+        }
         Cmd::Manuscript => {
             let b = app.current_book().map(|b| b.path);
             app.open_view("binder", b);
@@ -377,6 +385,16 @@ pub fn show_palette(app: &mut App, ctx: &egui::Context) {
                 if let Some(s) = fuzzy(&pal.query, name) {
                     let sc = default_shortcut(*c).map(|k| ctx.format_shortcut(&k)).unwrap_or_default();
                     items.push((s, name.to_string(), sc, Choice::Cmd(*c)));
+                }
+            }
+            // a command for each template given a hotkey in Templater's settings
+            for t in &app.templater_settings.hotkey_templates {
+                let path = if t.to_lowercase().ends_with(".md") { t.clone() } else { format!("{t}.md") };
+                let name = format!("Templater: Inserir {}", vault::basename(&path).trim_end_matches(".md"));
+                if let Some(s) = fuzzy(&pal.query, &name) {
+                    let id = format!("templater-obsidian:{path}");
+                    let sc = app.hotkeys.iter().find(|(h, _)| *h == id).map(|(_, k)| ctx.format_shortcut(k)).unwrap_or_default();
+                    items.push((s, name, sc, Choice::Template(path, app.tabs.is_empty())));
                 }
             }
             if pal.query.is_empty() {
