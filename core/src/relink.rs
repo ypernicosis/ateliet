@@ -130,6 +130,89 @@ pub fn rewrite(text: &str, moved: &dyn Fn(&str) -> Option<String>) -> Option<Str
     changed.then_some(out)
 }
 
+/// Byte ranges of the text that are links or code (where a mention is not one).
+fn covered(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    let mut fence = false;
+    for line in text.split_inclusive('\n') {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") || fence {
+            if t.starts_with("```") || t.starts_with("~~~") {
+                fence = !fence;
+            }
+            out.push((at, at + line.len()));
+            at += line.len();
+            continue;
+        }
+        // frontmatter is not prose either
+        let b = line.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            let (open, close): (&str, &str) = if line[i..].starts_with("[[") { ("[[", "]]") } else if b[i] == b'`' { ("`", "`") } else if b[i] == b'[' { ("[", ")") } else { ("", "") };
+            if !open.is_empty() {
+                if let Some(j) = line[i + open.len()..].find(close) {
+                    let end = i + open.len() + j + close.len();
+                    out.push((at + i, at + end));
+                    i = end;
+                    continue;
+                }
+            }
+            i += line[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+        at += line.len();
+    }
+    out
+}
+
+fn frontmatter_end(text: &str) -> usize {
+    if let Some(rest) = text.strip_prefix("---\n") {
+        if let Some(i) = rest.find("\n---") {
+            return 4 + i + 4;
+        }
+    }
+    0
+}
+
+/// Where `name` is mentioned as a whole word (any case) outside links,
+/// code and frontmatter: (byte offset, a line of context).
+pub fn unlinked_mentions(text: &str, name: &str) -> Vec<(usize, String)> {
+    let name = name.trim();
+    if name.chars().count() < 2 {
+        return Vec::new();
+    }
+    let lower = text.to_lowercase();
+    let needle = name.to_lowercase();
+    // lowercasing can change byte lengths; only search when it did not
+    if lower.len() != text.len() {
+        return Vec::new();
+    }
+    let skip = covered(text);
+    let fm = frontmatter_end(text);
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(i) = lower[from..].find(&needle) {
+        let s = from + i;
+        let e = s + needle.len();
+        from = e;
+        if s < fm || word(text[..s].chars().next_back()) || word(text[e..].chars().next()) || skip.iter().any(|(a, b)| s >= *a && s < *b) {
+            continue;
+        }
+        let ls = text[..s].rfind('\n').map(|x| x + 1).unwrap_or(0);
+        let le = text[e..].find('\n').map(|x| e + x).unwrap_or(text.len());
+        out.push((s, text[ls..le].trim().to_string()));
+    }
+    out
+}
+
+/// The mention at `at` turned into a link to `target` (shown as written).
+pub fn link_mention(text: &str, at: usize, len: usize, target: &str) -> String {
+    let shown = &text[at..at + len];
+    let link = if shown == target { format!("[[{target}]]") } else { format!("[[{target}|{shown}]]") };
+    format!("{}{}{}", &text[..at], link, &text[at + len..])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,5 +234,10 @@ mod tests {
         assert!(out.contains("[x](Elenco/Ana%20Clara.md)"));
         assert!(out.contains("[y](https://a.b/Ana) [[Outra]]"));
         assert!(rewrite("nada aqui", &moved).is_none());
+        let t = "---\ntitle: Ana\n---\nAna veio. [[Ana]] e `Ana` e Anabela. Falei com ana.\n";
+        let m = unlinked_mentions(t, "Ana");
+        assert_eq!(m.len(), 2);
+        let linked = link_mention(t, m[1].0, 3, "Ana");
+        assert!(linked.ends_with("Falei com [[Ana|ana]].\n"));
     }
 }

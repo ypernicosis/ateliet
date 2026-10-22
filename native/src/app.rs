@@ -156,6 +156,8 @@ pub struct App {
     pub new_board_dlg: Option<crate::board_ui::NewBoard>,
     /// Set while going back (true) or forward (false) in a tab's history.
     nav: Option<bool>,
+    /// Unlinked mentions of a note: (note, index generation, [(source, offset, line)]).
+    pub unlinked: Option<(String, u64, Vec<(String, usize, String)>)>,
     pub updater: crate::update::Updater,
     pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
@@ -210,6 +212,7 @@ impl App {
             picker: None,
             new_board_dlg: None,
             nav: None,
+            unlinked: None,
             updater: crate::update::Updater::new(),
             music: Default::default(),
             focus: None,

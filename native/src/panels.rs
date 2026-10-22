@@ -516,6 +516,58 @@ fn backlinks(app: &mut App, ui: &mut egui::Ui) {
             open = Some(s.clone());
         }
     }
+    // notes naming this one without a link
+    let generation = v.index.read().map(|ix| ix.generation).unwrap_or(0);
+    if app.unlinked.as_ref().is_none_or(|u| u.0 != path || u.1 != generation) {
+        let name = vault::basename(&path).trim_end_matches(".md").to_string();
+        let mut found = Vec::new();
+        if path.to_lowercase().ends_with(".md") {
+            for e in v.markdown_files() {
+                if e.path == path || inl.contains(&e.path) {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(v.abs(&e.path)) else { continue };
+                for (at, line) in ateliet_core::relink::unlinked_mentions(&text, &name) {
+                    found.push((e.path.clone(), at, line));
+                }
+            }
+        }
+        app.unlinked = Some((path.clone(), generation, found));
+    }
+    let mentions = app.unlinked.as_ref().map(|u| u.2.clone()).unwrap_or_default();
+    ui.add_space(10.0);
+    kit::section(ui, &format!("Menções sem link · {}", mentions.len()), p);
+    let mut link: Option<(String, usize)> = None;
+    for (src, at, line) in mentions.iter().take(60) {
+        if kit::Row::new(vault::basename(src)).icon(icons::FILE_TEXT).show(ui, p).clicked() {
+            open = Some(src.clone());
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.add_space(8.0);
+            let short: String = line.chars().take(140).collect();
+            ui.label(RichText::new(short).size(11.5).color(p.faint));
+            if ui.add(egui::Label::new(RichText::new("Linkar").size(11.5).color(p.accent_strong)).sense(Sense::click())).on_hover_text("Transforma esta menção em link").clicked() {
+                link = Some((src.clone(), *at));
+            }
+        });
+        ui.add_space(4.0);
+    }
+    if let Some((src, at)) = link {
+        let name = vault::basename(&path).trim_end_matches(".md").to_string();
+        if let Ok(text) = std::fs::read_to_string(v.abs(&src)) {
+            let new_text = ateliet_core::relink::link_mention(&text, at, name.len(), &name);
+            if v.write(&src, &new_text).is_ok() {
+                v.index.write().unwrap().update(&[src.clone()]);
+                for t in &mut app.tabs {
+                    if t.path == src && !t.dirty() {
+                        t.text = new_text.clone();
+                        t.saved = new_text.clone();
+                    }
+                }
+                app.unlinked = None;
+            }
+        }
+    }
     if let Some(p) = open {
         app.open_link(&p, false);
     }
