@@ -1,0 +1,14 @@
+[package]
+name = "tauri-compat"
+version = "0.1.0"
+description = "Empty stand-in so updaters of the old web-view Ateliet can still build this one"
+edition = "2021"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+# The web-view Ateliet's updater runs `cargo build --release --features
+# tauri/custom-protocol`; this feature lets that command build the native app.
+custom-protocol = []

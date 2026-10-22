@@ -1,6 +1,6 @@
 # Third-party notices
 
-The shared picture library (`src/pictogrep.rs`, `src/pinterest.rs`, `src/shared.rs`, `src/plugin-sdk.js`) and the storyboard's graphite pencil and storyboards-folder format (`ui/storyboard/brush.ts`, `src/storyboard.rs`) follow the file formats, naming rules, plugin API, Pinterest reading approach and drawing code of Pictogrep (https://github.com/tiagohierath/pictogrep), reimplemented in Rust and TypeScript. Pictogrep is distributed under the MIT License:
+The shared picture library (`core/src/pictogrep.rs`, `core/src/pinterest.rs`, `src/images_ui.rs`) and the storyboard's graphite pencil and storyboards-folder format (`core/src/board/`, `src/board_ui/`) follow the file formats, naming rules, plugin API, Pinterest reading approach and drawing code of Pictogrep (https://github.com/tiagohierath/pictogrep), reimplemented in Rust. Pictogrep is distributed under the MIT License:
 
 ```text
 MIT License
@@ -26,7 +26,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The Clip Studio Paint reader (`src/clipstudio.rs`) follows the `.clip` format as worked out by clip_to_psd (https://github.com/dobrokot/clip_to_psd), reimplemented in Rust. clip_to_psd is distributed under the MIT License:
+The Clip Studio Paint reader (`core/src/clipstudio.rs`) follows the `.clip` format as worked out by clip_to_psd (https://github.com/dobrokot/clip_to_psd), reimplemented in Rust. clip_to_psd is distributed under the MIT License:
 
 ```text
 MIT License
@@ -52,7 +52,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The built-in Dataview, Templater and Calendar tools (`src/dataview/`, `src/script/`, `src/calendar.rs`, `ui/tools/`) reimplement the query language, script APIs and behaviour of the Dataview (https://github.com/blacksmithgu/obsidian-dataview), Templater (https://github.com/SilentVoid13/Templater) and Calendar (https://github.com/liamcain/obsidian-calendar-plugin) plugins for Obsidian, all distributed under the MIT License, so that notes written for them keep working. No code from those projects is included.
+The built-in Dataview, Templater and Calendar tools (`core/src/dataview/`, `core/src/script/`, `core/src/calendar.rs`, `src/dv.rs`, `src/templater.rs`, `src/daily.rs`) reimplement the query language, script APIs and behaviour of the Dataview (https://github.com/blacksmithgu/obsidian-dataview), Templater (https://github.com/SilentVoid13/Templater) and Calendar (https://github.com/liamcain/obsidian-calendar-plugin) plugins for Obsidian, all distributed under the MIT License, so that notes written for them keep working. No code from those projects is included.
 
 The script engine embeds QuickJS (https://bellard.org/quickjs/, MIT License, Copyright (c) 2017-2021 Fabrice Bellard and Charlie Gordon) through the rquickjs crate (MIT License).
 

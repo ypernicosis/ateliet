@@ -1,129 +1,63 @@
 # Arquitetura do Ateliet
 
 ```
-┌──────────────────────────── webview (WebKit / WebView2 / WebKitGTK) ────────────────────────────┐
-│  plugins da comunidade (main.js)  ──require("obsidian")──▶  ui/obsidian/  (API reimplementada) │
-│                                   ──require("@codemirror/*")──▶ mesmas instâncias do editor   │
-│                                   ──require("fs"|"path"|…)──▶  ui/obsidian/nodeshim.ts         │
-│  ui/app.ts (App) · ui/core/ (core plugins) · ui/editor/ (CM6: sintaxe + Live Preview)          │
-│  ui/images/ (biblioteca de imagens: modos escrita/imagens, galeria, coleções, painel)          │
-└──────────────────────────────┬───────────────────────────────────┬─────────────────────────────┘
-                     invoke (IPC Tauri)                  ateliet:// (protocolo próprio)
-┌──────────────────────────────▼───────────────────────────────────▼─────────────────────────────┐
-│ src/main.rs   comandos: vault, fs, metadados, render, busca, http, processos, janelas          │
-│ src/lib.rs    núcleo puro (testável):                                                          │
-│   text.rs      índice de linhas com posições UTF-16 (o que o JS espera)                        │
-│   syntax.rs    frontmatter, %%comentários%%, [[wikilinks]], #tags, ^ids, callouts, ==realce==  │
-│   metadata.rs  markdown → CachedMetadata (links, embeds, tags, headings, sections, listItems…) │
-│   render.rs    markdown → blocos HTML com linhas de origem (reading view / post-processors)    │
-│   search.rs    busca paralela (rayon) com a sintaxe do Obsidian                                │
-│   vault.rs     listagem, stat, cópia                                                           │
-│   images.rs    biblioteca de imagens: varredura, índice persistente, busca vetorial e por nome │
-│   clip.rs      CLIP: tokenizer BPE, pré-processamento, inferência ONNX (ort)                   │
-│   dataview/    índice de páginas, linguagem de consultas (DQL) e funções do Dataview           │
-│   script/      QuickJS: dataviewjs e comandos do Templater, com as APIs dv/tp                  │
-│   calendar.rs  mês de notas diárias · datefmt.rs formatos moment/Luxon (en, pt)               │
-│ src/process.rs child_process para plugins (spawn/exec, stdout em eventos)                      │
-│ src/gallery.rs indexador em segundo plano por janela, download do modelo, comandos images_*    │
-│ src/pictogrep.rs pasta do Pictogrep: estado, coleções (symlinks), importação, vetores, plugins │
-│ src/pinterest.rs importação do Pinterest: gallery-dl ou leitor nativo, quadros seguidos         │
-│ src/shared.rs  comandos da biblioteca compartilhada, protocolo pgplugin://, mediador de plugins │
-│ src/tools.rs   comandos do Dataview, Templater e Calendar; um índice por vault                 │
-└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────── src/ (crate `ateliet`, interface em egui) ────────────────────────────────┐
+│ main.rs     janela (eframe/glow), ícone, vault inicial                                                    │
+│ app.rs      estado: vault, abas, splits, histórico, salvamento, ações, arrastar/colar, modelos             │
+│ editor.rs · live.rs · markdown.rs   editor com realce, Live Preview por bloco, árvore e desenho do Markdown│
+│ panels.rs · commands.rs · settings_pages.rs   barras laterais, paleta e atalhos, configurações             │
+│ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, busca por descrição (CLIP)                │
+│ board_ui.rs, board_ui/   storyboard: quadros, camadas, pincéis, ferramentas, referências, exportações      │
+│ sc/         Scriptorium, Enredo, Mundo, Mapas, Diagramação, Capa, Compositor, Trilha                       │
+│ dv.rs · templater.rs · daily.rs   Dataview, Templater, notas diárias e calendário                          │
+│ vault.rs · host.rs · config.rs · update.rs   arquivos e watcher, caches, configurações, autoatualização    │
+└──────────────────────────────────────────────────┬────────────────────────────────────────────────────────┘
+                                                   │ chamadas diretas (sem IPC)
+┌──────────────────────────────────────────────────▼────────────────────────────────────────────────────────┐
+│ core/ (crate `ateliet_core`, sem janela, testável)                                                        │
+│   text.rs · syntax.rs · metadata.rs · render.rs   frontmatter, wikilinks, tags, callouts, metadados        │
+│   search.rs · vault.rs · relink.rs                busca com a sintaxe do Obsidian, listagem, renomear links │
+│   dataview/ · script/ (QuickJS) · calendar.rs · datefmt.rs   Dataview, dataviewjs, Templater, datas         │
+│   images.rs · clip.rs · pictogrep.rs · pinterest.rs          biblioteca de imagens, CLIP, Pictogrep        │
+│   board/ · clipstudio.rs                          storyboard: documento, pintura, composição, .clip       │
+│   scriptorium/ · typeset/                         livros, enredo, mundo; composição de páginas e PDF       │
+│   css_theme.rs · texmath.rs · mermaid.rs          cores de temas, TeX → Unicode, fluxogramas               │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Crates
 
-O repositório é um workspace com três crates:
-- **`core/` (`ateliet_core`)**: tudo o que não depende de janela (vault, Markdown, metadados, busca, Dataview, scripts, calendário, imagens, Clip Studio). A busca de imagens por CLIP (ONNX Runtime) é a feature opcional `vision`.
-- **`.` (`ateliet`)**: a interface web atual, com Tauri e a webview do sistema, descrita no diagrama acima.
-- **`native/` (`ateliet-native`)**: a interface nativa em egui, sem webview nem GTK, que está substituindo a web. Os módulos são `app` (estado, abas, salvamento, ações), `editor` (realce de Markdown no editor), `live` (Live Preview por bloco), `markdown` (árvore do documento e renderização, com um parágrafo por bloco de texto e links achados pela posição do clique), `dv` (resultados do Dataview), `host` (caches de imagens, consultas e notas embutidas), `panels`, `commands` (paleta e atalhos), `templater`, `daily`, `images_ui` (modo imagens), `vault` (arquivos, índice e watcher), `theme` e `fonts`.
+O repositório é um workspace com dois crates, mais um terceiro vazio:
+- **`core/` (`ateliet_core`)**: tudo o que não depende de janela. A busca de imagens por CLIP (ONNX Runtime) entra pelas features `ort-bundled` e `ort-dynamic`.
+- **`.` (`ateliet`)**: o app, desenhado com egui, sem webview nem GTK. As features são `vision` (CLIP com ONNX Runtime embutido, padrão), `vision-dynamic` (ONNX Runtime do sistema) e `audio` (rodio, padrão).
+- **`compat/tauri` (`tauri-compat`)**: um crate sem código, ligado como dependência `tauri`. Existe só para que o atualizador da versão anterior do Ateliet (feita com Tauri), que compila com `--features tauri/custom-protocol` e roda `build.sh` antes, consiga compilar esta versão e trocar o executável instalado por ela.
 
 ## Princípios
 
-1. **O vault é a fonte da verdade.** Nada fica num banco próprio. O índice de metadados é recalculado pelo Rust (em paralelo) a cada abertura e mantido por eventos do watcher.
-2. **O contrato é o `obsidian.d.ts`.** Cada classe exportada (Plugin, Vault, Workspace, MetadataCache, MarkdownView, Modal, Setting…) é reimplementada com o mesmo comportamento observável, a mesma estrutura de DOM e os mesmos nomes de classes CSS, porque os temas dependem disso.
-3. **Carregamento de plugins idêntico ao do Obsidian.** O `main.js` é avaliado como `function(require, module, exports)`, o export default é instanciado com `new Plugin(app, manifest)` e depois vêm `load()` e `loadCSS()`. O `require` expõe `obsidian`, os pacotes `@codemirror/*` e `@lezer/*` (as mesmas instâncias usadas pelo editor, então extensões de plugins funcionam), os aliases antigos do CM6 e os shims de Node.
-4. **Escrita mínima e cirúrgica nos arquivos compartilhados.** As configurações são gravadas com *merge* das chaves alteradas. A lista de plugins preserva a ordem e as entradas desconhecidas. O layout fica num arquivo próprio.
-5. **Robustez contra plugins.** Erros de plugins são isolados (tryTrigger, try/catch em post-processors e no estado do editor). Um `TextFileView` só grava depois de o conteúdo do arquivo estar carregado, o que evita sobrescrever uma nota com um editor ainda vazio.
+1. **O vault é a fonte da verdade.** Nada fica num banco próprio. O índice é recalculado a cada abertura e mantido por eventos do watcher.
+2. **Escrita mínima e cirúrgica nos arquivos compartilhados.** As configurações de `.obsidian/` são gravadas com *merge* das chaves alteradas, preservando as desconhecidas. O que é só do Ateliet fica em `.obsidian/ateliet/`.
+3. **Nada de trabalho pesado na thread da janela.** Índices, imagens, composição de páginas, scripts e a atualização rodam em threads e entregam o resultado por canais; a janela redesenha quando ele chega.
 
-## Fluxo de inicialização (`ui/main.ts`)
+## Autoatualização (`src/update.rs`)
 
-1. `vault_init` (Rust, fora da thread principal): lista arquivos e inicia o watcher do vault. A listagem fica guardada para o passo 4 não percorrer o vault de novo.
-2. `App` é criado, `app.json`/`appearance.json` são carregados e os core plugins registrados. A leitura dos metadados (passo 4) já começa aqui, em paralelo.
-3. Tema, snippets e variáveis CSS (fonte, cor de destaque) são aplicados.
-4. `vault_metadata_all` (Rust) devolve os metadados de todas as notas como bytes JSON prontos. As notas com a mesma data e o mesmo tamanho da última vez vêm de `.obsidian/ateliet/metadata-cache.txt`, que guarda o JSON de cada nota como texto e nunca é reinterpretado no Rust. Só as novas ou editadas são lidas, em paralelo, e o cache é regravado em segundo plano. Um build novo começa do zero (a versão do cache inclui o commit). Na resolução de links, uma passada completa memoriza o destino de cada texto de link por pasta.
-- Comandos Tauri síncronos rodam na thread principal no macOS e travam a janela inteira. Por isso os que podem demorar (vault, biblioteca de imagens, coleções, plugins do Pictogrep) são `async`. A biblioteca de imagens abre sem que o boot espere por ela. O modelo CLIP só é carregado quando uma imagem realmente precisa de vetor novo. As miniaturas menores saem da miniatura de 480 px em cache, e o protocolo `ateliet://` atende num pool limitado de threads.
-- O console registra o tempo de cada etapa (`[ateliet] boot …`, `[ateliet] metadata: …`) para achar o que deixa um vault lento para abrir.
-5. Os core plugins são ligados conforme o `core-plugins.json`.
-6. Os plugins da comunidade carregam, na ordem do `community-plugins.json`.
-7. O layout é carregado (`.obsidian/ateliet/workspace.json`, ou o `workspace.json` do Obsidian na primeira vez) e `onLayoutReady` é disparado.
+`build.rs` grava no binário o commit (`ATELIET_GIT_COMMIT`), o caminho do clone (`ATELIET_SOURCE_DIR`) e as features usadas (`ATELIET_FEATURES`). O app roda `git fetch` no clone e compara o upstream com o commit gravado; para atualizar, roda `git pull --ff-only` e `cargo build -p ateliet --release` com as mesmas features, copia `target/release/ateliet` para o lado do executável em uso (`.ateliet-update`), troca os dois por renomeação e, no macOS, reassina o `.app` ad hoc. Um binário que está no próprio `target/` do clone é recompilado no lugar, com o mesmo perfil.
 
-## Resolução de links (`MetadataCache.getFirstLinkpathDest`)
+## Resolução de links
 
 A ordem de tentativa é a mesma do Obsidian:
 1. caminho exato (com e sem `.md`);
 2. caminho relativo à pasta da nota de origem;
 3. por nome, sem diferenciar maiúsculas: se houver vários candidatos, vence o da mesma pasta, senão o de caminho mais curto.
 
-## Live Preview (`ui/editor/livepreview.ts`)
+## Ferramentas embutidas (`core/src/dataview/`, `core/src/script/`, `core/src/calendar.rs`)
 
-- `lineClasses` (ViewPlugin): classes de linha `HyperMD-header-N`, `HyperMD-list-line`, `HyperMD-quote`, `HyperMD-codeblock`… nos dois modos.
-- `livePreviewPlugin` (ViewPlugin, `Prec.low`): esconde a marcação fora do cursor (inclusive as cercas dos blocos de código, deixando a linguagem como `.code-block-flair`) e adiciona widgets de checkbox, bullet, linha horizontal, imagem e matemática inline. A precedência baixa garante que decorações de plugins (por exemplo, as queries inline do Dataview) vençam.
-- `blockWidgets` (StateField): callouts, propriedades, tabelas, blocos de código com processador (`registerMarkdownCodeBlockProcessor`, como o `dataviewjs`, e mermaid), `$$…$$` sozinho no parágrafo, `![[nota]]` sozinho na linha e blocos HTML viram widgets de bloco, renderizados como na reading view. Cada bloco volta a ser texto enquanto o cursor estiver nele. Um clique na tabela põe o cursor na célula correspondente; blocos com conteúdo interativo (processadores, embeds) se editam pelo botão `.edit-block-button`. Cada renderização tem o próprio `Component`, descarregado quando o CodeMirror descarta o widget, para que o que os plugins penduram nele (as queries do Dataview) pare junto. Decorações que atravessam linhas precisam vir de um StateField.
-- A gramática (`ui/editor/syntax.ts`) estende o lezer-markdown e anota cada nó com `tokenClassNodeProp`, usando as classes HyperMD do Obsidian (`inline-code`, `formatting formatting-code`…). Código inline vira nós irmãos planos, como no parser do Obsidian.
-- `blockWidgetMargins`: o CodeMirror mede um widget de bloco pela borda e ignora as margens. Por isso, margens verticais que um plugin dá ao próprio widget (o cabeçalho de capítulo do Scriptorium) deslocam todas as linhas abaixo, e o clique cai em outra linha. Um `MutationObserver` no `.cm-content` passa essas margens para dentro da caixa (padding, ou borda transparente quando o widget pinta fundo) antes da primeira medição.
-- O DOM do editor reproduz o do Obsidian: `.cm-scroller > .cm-sizer > (.inline-title, .cm-contentContainer > (.cm-gutters, .cm-content))`.
+Dataview, Templater e Calendar eram plugins e agora fazem parte do Ateliet. A lógica está no núcleo; `src/dv.rs`, `src/templater.rs` e `src/daily.rs` só desenham e aplicam o resultado.
 
-## Biblioteca de imagens (`src/images.rs`, `src/clip.rs`, `src/gallery.rs`, `ui/images/`)
-
-- **O vault é a biblioteca.** Toda imagem do vault (jpg, png, webp, gif) faz parte dela; as coleções são as pastas. Pastas externas entram por configuração e são lidas no lugar, com chaves em caminho absoluto.
-- **Índice** (`.obsidian/ateliet/images/index.bin`, formato `ATI1`): por imagem, mtime, tamanho, dimensões, digest SHA-256 e o vetor CLIP de 512 dimensões. Ele é gravado de forma atômica. Vetores de outro modelo são descartados na leitura. Um arquivo novo cujo digest bate com o de um registro órfão (renomeado ou movido) herda o vetor.
-- **Indexador** (`Gallery::work`): uma thread por janela analisa as imagens pendentes em lotes de 8. Para cada imagem: decodificação com orientação EXIF, miniatura de 480 px gravada no cache, 224×224 normalizado e o modelo de visão. A varredura inicial reaproveita as dimensões já gravadas. Mudanças no vault chegam pelos eventos do `Vault` (JS → `images_refresh`); as pastas externas têm um watcher próprio.
-- **Busca**: a frase vira vetor pelo modelo de texto (com cache), e o ranking é o produto escalar com um pequeno bônus para nomes de arquivo que batem. Imagens ainda não analisadas aparecem no fim quando o nome bate. "Semelhantes" usa o vetor da própria imagem.
-- **Miniaturas**: `ateliet://…/__thumb?path=…&w=…`, com cache em disco cujo nome inclui mtime e tamanho (mudou, invalida).
-- **Modos**: `App.layoutFile` aponta para o layout do modo atual. A troca salva as notas abertas e o layout do modo que sai, depois carrega o do outro.
-- **Modelo**: `Xenova/clip-vit-base-patch32` (q8) numa revisão fixa, baixado para `<dados do app>/ateliet/models/`. `ATELIET_CLIP_DIR` aponta para outra pasta com `tokenizer.json`, `text_model.onnx` e `vision_model.onnx`. Os testes de `clip.rs` rodam contra arquivos reais quando `ATELIET_CLIP_TEST_DIR` está definido.
-
-## Biblioteca compartilhada (`src/pictogrep.rs`, `src/shared.rs`, `src/pinterest.rs`)
-
-- **Formato**: o mesmo do Pictogrep 0.11. As imagens importadas ficam em `library/` (nome "seguro" + sufixo numérico, como em `safeImageName`/`uniqueFile`). As coleções são diretórios em `collections/` com um symlink por imagem (ou `images.json` onde não há symlinks). Os nomes seguem `collectionName`, com os acentos convertidos antes. O id de imagem dado aos plugins é o SHA-256 do caminho absoluto limpo, igual ao do Pictogrep, para que o armazenamento dos plugins sirva aos dois.
-- **Concorrência**: o Ateliet testa a trava `flock` do Pictogrep (`<cache>/pictogrep/locks/<sha256(home)[:16]>.lock`). Com o Pictogrep aberto, não escreve `library-state.json` e chama `POST /api/app/index {"mode":"incremental"}` na porta 8765. Com ele fechado, atualiza o arquivo de forma atômica.
-- **Vetores**: registros `PGE1`/`PGE2` de `embeddings-v1.bin` (CRC conferido) são usados quando o caminho e o mtime batem, ou quando o digest do conteúdo é o mesmo. O Ateliet só lê esse arquivo.
-- **Encontrar a pasta**: `PICTOGREP_HOME`, a pasta anotada em `<config>/ateliet/pictogrep-home.txt` (gravada sempre que um Pictogrep aberto informa a dele em `/api/app/state`), depois os locais padrão. **Cópia própria** (`copy_home`): percorre a pasta sem seguir links (pulando `*.tmp`), copia para `<destino>.copying` e renomeia no fim. Links absolutos para dentro da pasta antiga são refeitos para a cópia; arquivos `.json` têm o prefixo da pasta antiga trocado (só quando é um prefixo de caminho inteiro, na forma crua e escapada em JSON); `embeddings-v1.bin` é relido e regravado em PGE2 com os caminhos novos; as datas de modificação são mantidas para os vetores continuarem válidos. `data/ateliet-copy.json` anota a origem.
-- **Plugins**: validados como em `loadPlugins` (id/entry/version, `0.0.0` ignorado, entry sem `..`, permissões fora da lista descartadas). São servidos em `pgplugin://localhost/plugin/<id>/…` com a CSP do Pictogrep. O SDK fica em `/assets/plugin-sdk.js` (`src/plugin-sdk.js`). As mídias saem em `/media?p=&s=`, assinadas com uma chave gerada a cada execução. As chamadas passam por `plugin_call`, que confere a permissão no Rust. `ui.openExternal` (só https) é feito pela página que hospeda o plugin.
-- **Pinterest**: `gallery-dl` com os argumentos do Pictogrep (grupo de processos próprio, para o cancelamento matar tudo) ou o leitor nativo (`BoardResource`/`BoardFeedResource`/`PinResource` com `X-Pinterest-PWS-Handler`). O histórico de download fica em `data/web-archives/<sha256(url)[:16]>.sqlite3` (`.native` no leitor nativo), compartilhado com o Pictogrep. A importação calcula digests para pular duplicatas, liga as imagens à coleção e avisa a biblioteca.
-
-## Storyboard (`ui/storyboard/`, `src/clipstudio.rs`, `src/storyboard.rs`)
-
-- **Arquivo**: `.storyboard` é um zip sem compressão (`ui/storyboard/zip.ts`) com `board.json` (o modelo de `model.ts`: quadros, camadas, referências, paleta, guias, onion skin), os pixels das camadas em tiles PNG de 512×512 (`tiles/<camada>/<x>_<y>.png`), imagens guardadas dentro (`refs/`), miniaturas por quadro (`thumbs/`) e `preview.png` (o primeiro quadro, para a lista e os embeds). Gravado inteiro a cada salvamento, a partir dos PNGs em cache; só os tiles alterados são codificados de novo. A escrita é atômica (`fs_write_bytes` com `x-atomic`).
-- **Tiles** (`store.ts`): canvas infinito e limitado são a mesma coisa; só existem os tiles desenhados. Um tile está decodificado (canvas) enquanto o quadro está na tela ou foi usado há pouco (LRU, com os do quadro atual e dos vizinhos do onion skin presos) e, fora isso, só como PNG. Mover uma camada inteira muda o deslocamento dela, sem tocar nos pixels.
-- **Composição** (`render.ts`): papel, onion skin, camadas em ordem (decalques "por cima" no fim), cada uma isolada num buffer quando precisa (modo de mesclagem, recorte, traço em andamento, pixels flutuantes). A mesma função desenha a tela, as miniaturas, a reprodução e as exportações. Na tela, o que está abaixo e acima da camada ativa fica em cache enquanto se desenha. Bordas de tiles são arredondadas para pixels inteiros para não aparecerem emendas.
-- **Pincéis** (`brush.ts`): carimbos espaçados ao longo do caminho suavizado, com pressão. O lápis desenha direto na camada (acumula, como grafite); caneta, pincel, marcador e borracha desenham num buffer do traço e entram na camada ao soltar, com a opacidade exata e sem escurecer onde o traço se cruza.
-- **Desfazer** (`history.ts`): passos de pixels (tiles antes/depois) e passos de estrutura (cópia de `board.json`). Camadas apagadas guardam os pixels enquanto algum passo precisa deles.
-- **Decalque** (`trace.ts`): modos calculados uma vez por imagem e configuração (Sobel sobre luminância desfocada para linhas, posterização para valores), em até 2048 px.
-- **Clip Studio** (`src/clipstudio.rs`): o arquivo é uma sequência de chunks depois de `CSFCHUNK`; `SQLi` é um banco SQLite (lido com rusqlite) com a árvore de camadas e `Exta` guarda os pixels em blocos zlib de 256×256 (plano alfa + BGRx), ligados ao banco por `Layer.LayerRenderMipmap → Mipmap → MipmapInfo → Offscreen.BlockData`. Pastas são achatadas (visibilidade, opacidade e máscaras descem), máscaras ativas são aplicadas, o papel vira cor, preenchimentos chapados vêm de `GradationFillInfo`. Os testes comparam pixel a pixel com o clip_to_psd quando `ATELIET_CLIP_SAMPLE` e `ATELIET_CLIP_REFERENCE` estão definidos. O resultado vai para a interface como `ACLP` + JSON + PNGs (`clip_import`).
-- **Tipos** (`kinds.ts`, `pages.ts`, `pagetools.ts`): `board.kind` decide a área de trabalho. Os tipos de página (`thumbnails`, `name`, `comic`, `webtoon`) têm `board.page` (dpi, sangria, quadro interno, leitura, páginas espelhadas, medianizes, borda, máscara, fatias) e, em cada quadro, `panels` (polígonos, para cortes inclinados), `balloons` e `script`. Tamanhos de página em mm viram pixels no dpi escolhido. Cortar um quadro é recortar o polígono pelos dois semiplanos da linha, afastados meia medianiz (Sutherland–Hodgman); a ordem de leitura agrupa os quadros em tiras pela altura. `drawPage` desenha papel fora dos quadros (máscara evenodd), bordas, balões e números, e entra na composição depois das camadas. Com `clipToPanel`, o traço é recortado no quadro onde começou. A página ao lado de um par é renderizada uma vez por troca e desenhada deslocada até a linha de corte; a sangria do lado da lombada fica coberta por ela. Exportações: PDF por página no tamanho físico (JPEG `DCTDecode`), PDF de pranchas A4 para o presentation board, fatias de webtoon cortando o papel vazio do fim.
-- **Canvas infinito** (`kind: "canvas"`): um quadro com `infinite` sempre ligado; `hasFrames` esconde a linha do tempo, a navegação entre quadros, o onion skin e as importações/exportações por quadro. Os quadros que o arquivo já tinha continuam no `board.json`.
-- **Divisão desenho/referência** (`split.ts`): no modo foco, `.sb-main` vira grid e a classe `ref-<lado>` com a variável `--sb-ref` decide onde fica a referência e quanto ela ocupa. No automático, para cada arranjo (lado a lado, empilhado) varre-se a fração da referência entre 20% e 65% e fica a que maximiza a menor das duas áreas na tela (o quadro encaixado com a margem do `fit`, a imagem encaixada no palco descontando as barras do painel); no empate, a menor fração, para o painel abraçar a imagem. O arranjo só troca quando o outro é 15% melhor, para não pular a cada referência. Sem bordas (canvas infinito, webtoon longo), o desenho conta como 60% da sua caixa. Fora do foco, a altura do painel de referências na barra lateral segue o formato da imagem até a divisória ser arrastada. Flutuando (`ref-float`), o `.sb-refs` sai do fluxo com `position: absolute` relativo ao `.sb-main` (a `.sb-side` não é posicionada, então o `overflow: hidden` dela não o recorta; no foco ela vira `display: contents`), e a caixa em pixels da área de trabalho fica no mesmo estado guardado, presa dentro dela a cada redimensionamento.
-- **Pictogrep** (`src/storyboard.rs`): `pictogrep_boards` lê `storyboards/` (PNGs e JSON) e `storyboards/references/`; `pictogrep_board_save` grava `0001_16x9_<stem>_<id>.png` + JSON como `saveBoard` do Pictogrep, com id derivado do storyboard e do quadro.
-
-## Ferramentas embutidas (`src/dataview/`, `src/script/`, `src/calendar.rs`, `src/tools.rs`, `ui/tools/`)
-
-Dataview, Templater e Calendar eram plugins e agora são core plugins do Ateliet. A lógica está no Rust e a interface só desenha. O carregador de plugins (`Plugins.initialize`) pula os ids `dataview`, `templater-obsidian` e `calendar` (`BUILT_IN_PLUGINS` em `ui/tools/common.ts`).
-
-- **Índice** (`dataview/index.rs`): cada nota vira uma página com frontmatter, campos inline (linha inteira `chave:: valor`, `[chave:: valor]` e `(chave:: valor)` fora de código, sob o nome original e o canônico, minúsculo e com `-`), tags (com as tags-pai em `file.tags`), links resolvidos na mesma ordem do Obsidian, back-links, itens de lista e tarefas (texto, status, filhos, seção, datas com emoji 📅 ✅ ➕ 🛫 ⏳), e `file.day` a partir do nome ou do campo `date`. O índice é construído em paralelo 3 s depois de o vault abrir, ou na primeira consulta, e os eventos do watcher do vault (`vault_init`) relêem só os caminhos alterados.
+- **Índice** (`dataview/index.rs`): cada nota vira uma página com frontmatter, campos inline (linha inteira `chave:: valor`, `[chave:: valor]` e `(chave:: valor)` fora de código, sob o nome original e o canônico, minúsculo e com `-`), tags (com as tags-pai em `file.tags`), links resolvidos na mesma ordem do Obsidian, back-links, itens de lista e tarefas (texto, status, filhos, seção, datas com emoji 📅 ✅ ➕ 🛫 ⏳), e `file.day` a partir do nome ou do campo `date`. O índice é construído em paralelo 3 s depois de o vault abrir, ou na primeira consulta, e os eventos do watcher do vault relêem só os caminhos alterados.
 - **Valores e expressões** (`value.rs`, `parse.rs`, `eval.rs`): os tipos do Dataview (texto, número, booleano, data, duração com partes de calendário, link, lista, objeto, função), a mesma ordenação entre tipos, campos com `-` no nome, `row["Nome com espaço"]`, `this`, indexação de listas que mapeia (`rows.file.link`), links que dão acesso aos campos da nota (`[[A]].status`), lambdas e cerca de 70 funções. `date(today)` e `dur(1 week)` são literais.
 - **Consultas** (`query.rs`): `FROM` monta o conjunto (tags com subtags, pastas ou nota, `[[link]]` = quem aponta para ela, `outgoing([[link]])`, `and`/`or`/negação). Depois as operações rodam na ordem escrita. `TASK` usa as tarefas como linhas, com os campos da página por baixo, e mostra subtarefas sob a tarefa-mãe. O resultado sai como JSON com datas e durações já formatadas (formato Luxon das configurações, nomes em inglês ou português).
-- **Scripts** (`script/`): cada bloco roda num runtime QuickJS novo, com limite de memória e de tempo (o tempo esperando o usuário num prompt não conta). O `prelude.js` monta `dv` (com `DataArray` por Proxy, que faz o `pages.file.name` funcionar), `tp`, `DateTime`/`Duration` e `moment` sobre uma única função do host (`__host(nome, json)`), que responde do índice em Rust. O `dv.el`/`dv.container` gravam uma árvore de elementos e as tabelas e listas entram nela na ordem em que o script as cria. O Templater é compilado para o corpo de uma função assíncrona (`tR += …`), então as variáveis de `<%* %>` valem nos `<% %>` seguintes. Os prompts e suggesters vão para a janela pelo evento `tp-prompt` e voltam por `tp_answer`, enquanto a thread do script espera.
-- **Interface** (`ui/tools/`): `dataview.ts` registra os processadores de bloco, o pós-processador das consultas inline e dos campos estilizados, e uma extensão do CodeMirror para o Live Preview. Re-executa os blocos visíveis depois de mudanças no vault, respeitando o intervalo das configurações. `templater.ts` tem os comandos, as janelas de prompt e aplica o que o template devolveu: texto, cursor, renomear, abrir. `calendar.ts` é uma view `calendar` (o mesmo tipo do plugin, então o layout salvo encontra a view) e cria notas diárias pelo core plugin de notas diárias.
+- **Scripts** (`script/`): cada bloco roda num runtime QuickJS novo, com limite de memória e de tempo (o tempo esperando o usuário num prompt não conta). O `prelude.js` monta `dv` (com `DataArray` por Proxy, que faz o `pages.file.name` funcionar), `tp`, `DateTime`/`Duration` e `moment` sobre uma única função do host (`__host(nome, json)`), que responde do índice em Rust. O `dv.el`/`dv.container` gravam uma árvore de elementos e as tabelas e listas entram nela na ordem em que o script as cria. O Templater é compilado para o corpo de uma função assíncrona (`tR += …`), então as variáveis de `<%* %>` valem nos `<% %>` seguintes. Os prompts e suggesters vão para a janela do app, enquanto a thread do script espera a resposta.
 
-## Área de transferência de imagens
+## Storyboard (`core/src/board/`, `src/board_ui.rs`, `src/board_ui/`)
 
-`copyPng` (`ui/tauri.ts`) recebe o PNG como promessa e é chamado direto do atalho ou do clique. No macOS, o comando `clipboard_write_png` (corpo cru) escreve no `NSPasteboard` geral, com `public.png` e `public.tiff`, na thread principal: a API de clipboard do WebKit exige que o gesto do usuário ainda esteja valendo na hora da escrita, e a codificação do PNG passa desse prazo. Nos outros sistemas, a promessa vai para o `ClipboardItem` da webview antes de qualquer `await`, o que mantém o gesto.
-
-## Depuração
-
-Com `ATELIET_DEBUG=<pasta>`, o console do webview é espelhado em `<pasta>/console.log`, o conteúdo de `<pasta>/eval.js` é avaliado no app e o comando `debug_snapshot` gera um PNG da webview (macOS). Fora desse modo, os comandos de depuração ficam inativos.
-
-No Linux (WebKitGTK), o app roda numa tela virtual para testar plugins de verdade: `sh build.sh --dev`, `cargo build --no-default-features --features ort-dynamic` (o recurso `ort-dynamic` dispensa baixar o ONNX Runtime na compilação), depois `Xvfb :99` e `DISPLAY=:99 ATELIET_DEBUG=<pasta> target/debug/ateliet <vault>`; capturas com `import -window root` e cliques com `xdotool`.
+- **Clip Studio** (`core/src/clipstudio.rs`): o arquivo é uma sequência de chunks depois de `CSFCHUNK`; `SQLi` é um banco SQLite (lido com rusqlite) com a árvore de camadas e `Exta` guarda os pixels em blocos zlib de 256×256 (plano alfa + BGRx), ligados ao banco por `Layer.LayerRenderMipmap → Mipmap → MipmapInfo → Offscreen.BlockData`. Pastas são achatadas (visibilidade, opacidade e máscaras descem), máscaras ativas são aplicadas, o papel vira cor, preenchimentos chapados vêm de `GradationFillInfo`. Os testes comparam pixel a pixel com o clip_to_psd quando `ATELIET_CLIP_SAMPLE` e `ATELIET_CLIP_REFERENCE` estão definidos.

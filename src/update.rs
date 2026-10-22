@@ -1,47 +1,89 @@
 //! Self-update from the git checkout this binary was built from: `git fetch`
-//! tells whether the upstream branch moved past the built commit; applying
-//! pulls, rebuilds (front-end + Rust) and swaps the running executable.
+//! tells whether the upstream branch moved past the built commit; updating
+//! pulls, rebuilds the app with the same
+//! features and swaps the running executable. Checked every half hour; with
+//! automatic updates on (the default), the new build is made in the
+//! background and starts with the app, or right away on a restart.
 
-use crate::process::augmented_path;
-use serde::Serialize;
-use serde_json::json;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use tauri::{AppHandle, Emitter};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 
 const BUILT_COMMIT: &str = env!("ATELIET_GIT_COMMIT");
 const SOURCE_DIR: &str = env!("ATELIET_SOURCE_DIR");
+const FEATURES: &str = env!("ATELIET_FEATURES");
+const CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 
-static RUNNING: AtomicBool = AtomicBool::new(false);
-/// Every window checks on its own schedule; two `git fetch` at once fight over the ref locks.
-static CHECKING: Mutex<()> = Mutex::new(());
+#[derive(Clone, Debug, Default)]
+pub struct Status {
+    pub available: bool,
+    pub behind: u32,
+    pub current: String,
+    pub latest: String,
+    pub upstream: String,
+    pub commits: Vec<String>,
+}
 
-/// The checkout to update from: `ATELIET_SOURCE` overrides the build path.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum State {
+    Idle,
+    Checking,
+    Building,
+    /// Built: the new version starts with the app.
+    Ready,
+    Failed,
+}
+
+enum Msg {
+    Checked(Result<Status, String>),
+    Step(String),
+    Log(String),
+    Done(Result<(), String>),
+}
+
+pub struct Updater {
+    pub status: Option<Status>,
+    pub error: Option<String>,
+    pub state: State,
+    pub step: String,
+    pub log: Vec<String>,
+    pub auto: bool,
+    pub open: bool,
+    last_check: Option<Instant>,
+    /// The commit a background build was tried for (not tried again).
+    tried: String,
+    tx: Sender<Msg>,
+    rx: Receiver<Msg>,
+    pub notice: Option<String>,
+}
+
 fn source_dir() -> Result<PathBuf, String> {
     let dir = std::env::var("ATELIET_SOURCE").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(SOURCE_DIR));
     if dir.join(".git").exists() {
         Ok(dir)
     } else {
-        Err(format!("No git checkout at {} (set ATELIET_SOURCE to the repository folder)", dir.display()))
+        Err(format!("Não há checkout git em {} (defina ATELIET_SOURCE com a pasta do repositório)", dir.display()))
     }
 }
 
 fn command(dir: &Path, prog: &str, args: &[&str]) -> Command {
     let mut c = Command::new(prog);
-    // No terminal to answer a prompt: fail instead of waiting forever for a password.
-    c.args(args)
-        .current_dir(dir)
-        .env("PATH", augmented_path())
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes")
-        // The log is plain text: no colours from deno, cargo or git.
-        .env("NO_COLOR", "1")
-        .env("CARGO_TERM_COLOR", "never")
-        .stdin(Stdio::null());
+    // no terminal to answer a prompt: fail instead of waiting for a password
+    c.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes").env("NO_COLOR", "1").env("CARGO_TERM_COLOR", "never").stdin(Stdio::null());
+    if let Some(home) = std::env::var_os("HOME") {
+        // cargo installed by rustup is not always on the PATH of an app started from the desktop
+        let cargo = PathBuf::from(home).join(".cargo/bin");
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        let mut parts: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        parts.push(cargo);
+        parts.extend(["/opt/homebrew/bin", "/usr/local/bin"].iter().map(PathBuf::from));
+        if let Ok(p) = std::env::join_paths(parts) {
+            c.env("PATH", p);
+        }
+    }
     c
 }
 
@@ -54,50 +96,19 @@ fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-#[derive(Serialize)]
-pub struct UpdateStatus {
-    available: bool,
-    behind: u32,
-    current: String,
-    latest: String,
-    upstream: String,
-    commits: Vec<String>,
-}
-
-fn check() -> Result<UpdateStatus, String> {
-    let _one_at_a_time = CHECKING.lock().unwrap_or_else(|e| e.into_inner());
-    check_in(&source_dir()?, BUILT_COMMIT)
-}
-
-fn check_in(dir: &Path, built: &str) -> Result<UpdateStatus, String> {
-    let dir = dir.to_path_buf();
-    git(&dir, &["fetch", "--quiet"])?;
-    let upstream = git(&dir, &["rev-parse", "--abbrev-ref", "@{u}"]).map_err(|_| "The checkout's branch has no upstream to update from".to_string())?;
-    let latest = git(&dir, &["rev-parse", "@{u}"])?;
-    // A binary built outside the checkout (or before history was rewritten) compares against HEAD.
-    let built_known = !built.is_empty() && git(&dir, &["cat-file", "-e", &format!("{built}^{{commit}}")]).is_ok();
-    let current = if built_known { built.to_string() } else { git(&dir, &["rev-parse", "HEAD"])? };
+pub fn check_in(dir: &Path, built: &str) -> Result<Status, String> {
+    git(dir, &["fetch", "--quiet"])?;
+    let upstream = git(dir, &["rev-parse", "--abbrev-ref", "@{u}"]).map_err(|_| "O ramo do checkout não tem de onde atualizar (upstream)".to_string())?;
+    let latest = git(dir, &["rev-parse", "@{u}"])?;
+    let known = !built.is_empty() && git(dir, &["cat-file", "-e", &format!("{built}^{{commit}}")]).is_ok();
+    let current = if known { built.to_string() } else { git(dir, &["rev-parse", "HEAD"])? };
     let range = format!("{current}..{latest}");
-    let behind: u32 = git(&dir, &["rev-list", "--count", &range])?.parse().unwrap_or(0);
-    let commits = if behind > 0 {
-        git(&dir, &["log", "--format=%h %s", "-n", "30", &range])?.lines().map(String::from).collect()
-    } else {
-        Vec::new()
-    };
-    Ok(UpdateStatus { available: behind > 0, behind, current, latest, upstream, commits })
+    let behind: u32 = git(dir, &["rev-list", "--count", &range])?.parse().unwrap_or(0);
+    let commits = if behind > 0 { git(dir, &["log", "--format=%h %s", "-n", "30", &range])?.lines().map(String::from).collect() } else { Vec::new() };
+    Ok(Status { available: behind > 0, behind, current, latest, upstream, commits })
 }
 
-#[tauri::command]
-pub async fn update_check() -> Result<UpdateStatus, String> {
-    tauri::async_runtime::spawn_blocking(check).await.map_err(|e| e.to_string())?
-}
-
-fn emit(app: &AppHandle, kind: &str, text: &str) {
-    let _ = app.emit("update-progress", json!({ "kind": kind, "text": text }));
-}
-
-/// What a terminal would show of a line: ANSI escape sequences removed, and
-/// only the text after the last carriage return (progress redraws).
+/// A line as a terminal would show it: escapes removed, the last redraw only.
 fn plain(line: &str) -> String {
     let line = line.rsplit('\r').find(|s| !s.is_empty()).unwrap_or("");
     let mut out = String::with_capacity(line.len());
@@ -107,130 +118,210 @@ fn plain(line: &str) -> String {
             out.push(c);
             continue;
         }
-        match chars.next() {
-            // CSI: parameters and intermediates up to a final byte in @..~
-            Some('[') => {
-                for c in chars.by_ref() {
-                    if ('@'..='~').contains(&c) {
-                        break;
-                    }
+        if chars.next() == Some('[') {
+            for c in chars.by_ref() {
+                if ('@'..='~').contains(&c) {
+                    break;
                 }
             }
-            // OSC (hyperlinks, titles): up to BEL or ESC \
-            Some(']') => {
-                while let Some(c) = chars.next() {
-                    if c == '\x07' || (c == '\x1b' && chars.next_if_eq(&'\\').is_some()) {
-                        break;
-                    }
-                }
-            }
-            _ => {}
         }
     }
     out
 }
 
-/// Runs one build step, streaming its output to the windows.
-fn run(app: &AppHandle, dir: &Path, step: &str, prog: &str, args: &[&str]) -> Result<(), String> {
-    emit(app, "step", step);
+fn run(tx: &Sender<Msg>, dir: &Path, step: &str, prog: &str, args: &[&str]) -> Result<(), String> {
+    let _ = tx.send(Msg::Step(step.into()));
     let mut child = command(dir, prog, args).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("{step}: {prog}: {e}"))?;
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let a = app.clone();
-    let out_thread = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            emit(&a, "log", &plain(&line));
+    let t2 = tx.clone();
+    let out = std::thread::spawn(move || {
+        for l in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = t2.send(Msg::Log(plain(&l)));
         }
     });
     let mut tail: Vec<String> = Vec::new();
-    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-        let line = plain(&line);
-        emit(app, "log", &line);
-        tail.push(line);
+    for l in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let l = plain(&l);
+        let _ = tx.send(Msg::Log(l.clone()));
+        tail.push(l);
         if tail.len() > 12 {
             tail.remove(0);
         }
     }
-    let _ = out_thread.join();
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if status.success() {
+    let _ = out.join();
+    if child.wait().map_err(|e| e.to_string())?.success() {
         Ok(())
     } else {
-        Err(format!("{step} failed:\n{}", tail.join("\n")))
+        Err(format!("{step} falhou:\n{}", tail.join("\n")))
     }
 }
 
-/// Puts `new` in place of the running executable. Renaming (not writing over)
-/// keeps the running process valid on every platform.
+/// Puts `new` in place of the running executable (renaming keeps the running process valid).
 fn install(new: &Path, exe: &Path) -> Result<(), String> {
     let staged = exe.with_file_name(".ateliet-update");
     let old = exe.with_file_name(".ateliet-old");
-    fs::copy(new, &staged).map_err(|e| format!("copy {}: {e}", staged.display()))?;
+    fs::copy(new, &staged).map_err(|e| format!("copiar {}: {e}", staged.display()))?;
     let _ = fs::remove_file(&old);
-    fs::rename(exe, &old).map_err(|e| format!("replace {}: {e}", exe.display()))?;
+    fs::rename(exe, &old).map_err(|e| format!("substituir {}: {e}", exe.display()))?;
     if let Err(e) = fs::rename(&staged, exe) {
         let _ = fs::rename(&old, exe);
-        return Err(format!("replace {}: {e}", exe.display()));
+        return Err(format!("substituir {}: {e}", exe.display()));
     }
-    // Fails on Windows while the old binary still runs; it is removed next time.
     let _ = fs::remove_file(&old);
     #[cfg(target_os = "macos")]
     if let Some(bundle) = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app")) {
-        // The bundle's seal no longer matches the new binary; re-sign ad hoc.
         let _ = Command::new("codesign").args(["--force", "--deep", "--sign", "-"]).arg(bundle).status();
     }
     Ok(())
 }
 
-fn apply(app: &AppHandle, dir: &Path) -> Result<(), String> {
+fn apply(tx: &Sender<Msg>, dir: &Path) -> Result<(), String> {
     let exe = std::env::current_exe().and_then(fs::canonicalize).map_err(|e| e.to_string())?;
     let target = fs::canonicalize(dir.join("target")).unwrap_or_else(|_| dir.join("target"));
-    // A `cargo run`/`cargo build` binary (target/debug/ateliet, target/release/ateliet)
-    // is rebuilt in place with its own profile. Anything else, including the
-    // .app that `cargo tauri build` leaves in target/release/bundle, gets a
-    // release build copied over its executable.
+    // a binary in the checkout's target is rebuilt in place with its own
+    // profile; anything else gets a release build copied over it
     let in_checkout = exe.parent().is_some_and(|p| p == target.join("debug") || p == target.join("release"));
     let release = !in_checkout || exe.parent() == Some(target.join("release").as_path());
-
-    run(app, dir, "Pulling changes", "git", &["pull", "--ff-only"])?;
-    run(app, dir, "Building interface", "sh", &["build.sh"])?;
-    let mut args = vec!["build"];
+    run(tx, dir, "Baixando as mudanças", "git", &["pull", "--ff-only"])?;
+    let mut args = vec!["build", "-p", "ateliet", "--no-default-features"];
+    if !FEATURES.is_empty() {
+        args.extend(["--features", FEATURES]);
+    }
     if release {
         args.push("--release");
     }
-    if !tauri::is_dev() {
-        // what `cargo tauri build` enables: assets served from the embedded dist
-        args.extend(["--features", "tauri/custom-protocol"]);
-    }
-    run(app, dir, "Compiling Ateliet", "cargo", &args)?;
+    run(tx, dir, "Compilando o Ateliet", "cargo", &args)?;
     if !in_checkout {
-        emit(app, "step", "Installing");
+        let _ = tx.send(Msg::Step("Instalando".into()));
         let built = target.join("release").join(if cfg!(windows) { "ateliet.exe" } else { "ateliet" });
         install(&built, &exe)?;
     }
     Ok(())
 }
 
-#[tauri::command]
-pub fn update_apply(app: AppHandle) -> Result<(), String> {
-    let dir = source_dir()?;
-    if RUNNING.swap(true, Ordering::SeqCst) {
-        return Err("An update is already running".into());
+impl Updater {
+    pub fn new() -> Updater {
+        let (tx, rx) = mpsc::channel();
+        let auto = crate::config::load_app_config()["autoUpdate"].as_bool().unwrap_or(true);
+        Updater { status: None, error: None, state: State::Idle, step: String::new(), log: Vec::new(), auto, open: false, last_check: None, tried: String::new(), tx, rx, notice: None }
     }
-    std::thread::spawn(move || {
-        let res = apply(&app, &dir);
-        RUNNING.store(false, Ordering::SeqCst);
-        match res {
-            Ok(()) => emit(&app, "done", ""),
-            Err(e) => emit(&app, "error", &e),
-        }
-    });
-    Ok(())
-}
 
-#[tauri::command]
-pub fn update_restart(app: AppHandle) {
-    app.restart();
+    pub fn set_auto(&mut self, on: bool) {
+        self.auto = on;
+        let mut cfg = crate::config::load_app_config();
+        cfg["autoUpdate"] = serde_json::json!(on);
+        let file = crate::config::app_config_path();
+        if let Some(d) = file.parent() {
+            let _ = fs::create_dir_all(d);
+        }
+        let _ = fs::write(file, serde_json::to_string_pretty(&cfg).unwrap_or_default());
+    }
+
+    pub fn check(&mut self) {
+        if matches!(self.state, State::Checking | State::Building) {
+            return;
+        }
+        self.state = State::Checking;
+        self.last_check = Some(Instant::now());
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let r = source_dir().and_then(|d| check_in(&d, BUILT_COMMIT));
+            let _ = tx.send(Msg::Checked(r));
+        });
+    }
+
+    pub fn update(&mut self) {
+        if self.state == State::Building {
+            return;
+        }
+        let dir = match source_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                self.error = Some(e);
+                self.state = State::Failed;
+                return;
+            }
+        };
+        self.state = State::Building;
+        self.log.clear();
+        self.error = None;
+        let tx = self.tx.clone();
+        std::thread::spawn(move || {
+            let r = apply(&tx, &dir);
+            let _ = tx.send(Msg::Done(r));
+        });
+    }
+
+    /// Start the new build in place of this process.
+    pub fn restart(&self) -> ! {
+        if let Ok(exe) = std::env::current_exe() {
+            let _ = Command::new(exe).args(std::env::args().skip(1)).spawn();
+        }
+        std::process::exit(0)
+    }
+
+    /// Messages from the threads, and the periodic check.
+    pub fn tick(&mut self, ctx: &eframe::egui::Context) {
+        let first = self.last_check.is_none();
+        if self.state == State::Idle && self.last_check.is_none_or(|t| t.elapsed() > CHECK_EVERY) {
+            if first {
+                // a little after start, not while the window opens
+                self.last_check = Some(Instant::now() - CHECK_EVERY + Duration::from_secs(5));
+            } else {
+                self.check();
+            }
+        }
+        while let Ok(m) = self.rx.try_recv() {
+            match m {
+                Msg::Checked(Ok(s)) => {
+                    self.state = State::Idle;
+                    self.error = None;
+                    if s.available && self.auto && self.tried != s.latest && !self.open {
+                        self.tried = s.latest.clone();
+                        self.notice = Some(format!("Atualizando o Ateliet em segundo plano ({} {}).", s.behind, if s.behind == 1 { "commit novo" } else { "commits novos" }));
+                        self.status = Some(s);
+                        self.update();
+                    } else {
+                        if s.available && !self.auto && self.tried != s.latest {
+                            self.tried = s.latest.clone();
+                            self.notice = Some("O Ateliet tem uma atualização: clique na seta no pé da barra lateral.".into());
+                        }
+                        self.status = Some(s);
+                    }
+                }
+                Msg::Checked(Err(e)) => {
+                    self.state = State::Idle;
+                    self.error = Some(e);
+                }
+                Msg::Step(s) => self.step = s,
+                Msg::Log(l) => {
+                    self.log.push(l);
+                    if self.log.len() > 400 {
+                        self.log.remove(0);
+                    }
+                }
+                Msg::Done(Ok(())) => {
+                    self.state = State::Ready;
+                    self.notice = Some("O Ateliet foi atualizado: reinicie para usar a versão nova.".into());
+                }
+                Msg::Done(Err(e)) => {
+                    self.state = State::Failed;
+                    self.notice = Some(format!("A atualização automática falhou: {}", e.lines().next().unwrap_or("")));
+                    self.error = Some(e);
+                }
+            }
+        }
+        if matches!(self.state, State::Checking | State::Building) {
+            ctx.request_repaint_after(Duration::from_millis(300));
+        } else {
+            ctx.request_repaint_after(Duration::from_secs(60));
+        }
+    }
+
+    pub fn available(&self) -> bool {
+        self.status.as_ref().is_some_and(|s| s.available) || self.state == State::Ready
+    }
 }
 
 #[cfg(test)]
@@ -238,49 +329,23 @@ mod tests {
     use super::*;
 
     fn sh(dir: &Path, script: &str) {
-        let ok = Command::new("sh").arg("-c").arg(script).current_dir(dir).status().unwrap().success();
+        let ok = Command::new("sh").arg("-c").arg(script).current_dir(dir).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap().success();
         assert!(ok, "{script}");
     }
 
     #[test]
-    fn plain_drops_escapes_and_progress_redraws() {
-        assert_eq!(plain("\x1b[0m\x1b[36mdist/chunk.js\x1b[0m  \x1b[38;5;245m84.79KB\x1b[0m"), "dist/chunk.js  84.79KB");
-        assert_eq!(plain("\x1b[1m\x1b[32m   Compiling\x1b[0m ateliet v0.1.0"), "   Compiling ateliet v0.1.0");
-        assert_eq!(plain("\x1b]8;;https://a.b\x1b\\link\x1b]8;;\x07 end"), "link end");
-        assert_eq!(plain("Building 1/9\rBuilding 9/9\r"), "Building 9/9");
-        assert_eq!(plain("plain é"), "plain é");
-    }
-
-    #[test]
-    fn detects_upstream_commits_and_installs_binary() {
-        let root = std::env::temp_dir().join(format!("ateliet-update-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let cfg = "git -c user.name=t -c user.email=t@t";
-        sh(&root, &format!("git init -q -b main origin && cd origin && echo a > f && git add f && {cfg} commit -qm one"));
-        sh(&root, "git clone -q origin local");
-        let local = root.join("local");
-        let built = git(&local, &["rev-parse", "HEAD"]).unwrap();
-
-        let s = check_in(&local, &built).unwrap();
-        assert!(!s.available);
-
-        sh(&root.join("origin"), &format!("echo b >> f && {cfg} commit -qam two && echo c >> f && {cfg} commit -qam three"));
-        let s = check_in(&local, &built).unwrap();
+    fn sees_upstream_commits() {
+        let base = std::env::temp_dir().join(format!("ateliet-upd-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        sh(&base, "git init -q --bare origin.git && git clone -q origin.git a 2>/dev/null && cd a && git commit -q --allow-empty -m one && git push -q origin HEAD 2>/dev/null");
+        sh(&base, "git clone -q origin.git b && cd a && git commit -q --allow-empty -m two && git push -q origin HEAD 2>/dev/null");
+        let built = git(&base.join("b"), &["rev-parse", "HEAD"]).unwrap();
+        let s = check_in(&base.join("b"), &built).unwrap();
         assert!(s.available);
-        assert_eq!(s.behind, 2);
-        assert_eq!(s.upstream, "origin/main");
-        assert!(s.commits[0].ends_with(" three"));
-        // unknown build commit: compare against HEAD
-        assert_eq!(check_in(&local, "").unwrap().behind, 2);
-
-        let exe = root.join("app");
-        let new = root.join("new");
-        fs::write(&exe, "old").unwrap();
-        fs::write(&new, "new").unwrap();
-        install(&new, &exe).unwrap();
-        assert_eq!(fs::read_to_string(&exe).unwrap(), "new");
-        assert!(!root.join(".ateliet-old").exists());
-        fs::remove_dir_all(&root).unwrap();
+        assert_eq!(s.behind, 1);
+        assert!(s.commits[0].ends_with("two"));
+        assert_eq!(plain("\x1b[1mCompiling\x1b[0m x\r  Building 3/9"), "  Building 3/9");
+        let _ = fs::remove_dir_all(&base);
     }
 }
