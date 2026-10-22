@@ -94,6 +94,16 @@ pub struct Appearance {
     pub dark: bool,
     pub accent: [u8; 3],
     pub font_size: f32,
+    /// The community theme (`.obsidian/themes/<name>`), empty for none.
+    pub css_theme: String,
+    /// Its colour variables and the enabled snippets': (light, dark).
+    pub theme_vars: Option<std::sync::Arc<(ateliet_core::css_theme::Vars, ateliet_core::css_theme::Vars)>>,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Appearance { dark: false, accent: [0x8a, 0x5c, 0xf5], font_size: 16.0, css_theme: String::new(), theme_vars: None }
+    }
 }
 
 impl Appearance {
@@ -107,7 +117,30 @@ impl Appearance {
         };
         let accent = a["accentColor"].as_str().and_then(parse_hex).unwrap_or([0x8a, 0x5c, 0xf5]);
         let font_size = a["baseFontSize"].as_f64().map(|f| f as f32).unwrap_or(16.0).clamp(10.0, 30.0);
-        Appearance { dark, accent, font_size }
+        let mut ap = Appearance { dark, accent, font_size, css_theme: a["cssTheme"].as_str().unwrap_or("").to_string(), theme_vars: None };
+        ap.load_css(cfg);
+        ap
+    }
+
+    /// The themes installed in the vault.
+    pub fn themes(cfg: &VaultConfig) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(cfg.dir.join("themes")).into_iter().flatten().flatten().filter(|e| e.path().join("theme.css").is_file()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort_by_key(|a| a.to_lowercase());
+        v
+    }
+
+    /// Read the theme's and the enabled snippets' variables.
+    pub fn load_css(&mut self, cfg: &VaultConfig) {
+        let mut css = String::new();
+        if !self.css_theme.is_empty() {
+            css += &fs::read_to_string(cfg.dir.join("themes").join(&self.css_theme).join("theme.css")).unwrap_or_default();
+        }
+        let a = cfg.read("appearance.json");
+        for s in a["enabledCssSnippets"].as_array().into_iter().flatten().filter_map(|x| x.as_str()) {
+            css.push('\n');
+            css += &fs::read_to_string(cfg.dir.join("snippets").join(format!("{s}.css"))).unwrap_or_default();
+        }
+        self.theme_vars = if css.contains("--") { Some(std::sync::Arc::new(ateliet_core::css_theme::variables(&css))) } else { None };
     }
 
     pub fn save(&self, cfg: &VaultConfig) {
@@ -117,6 +150,7 @@ impl Appearance {
                 "theme": if self.dark { "obsidian" } else { "moonstone" },
                 "accentColor": format!("#{:02x}{:02x}{:02x}", self.accent[0], self.accent[1], self.accent[2]),
                 "baseFontSize": self.font_size,
+                "cssTheme": self.css_theme,
             }),
         );
     }

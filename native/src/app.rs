@@ -170,8 +170,8 @@ impl App {
         let mut app = App {
             vault: None,
             cfg: None,
-            appearance: Appearance { dark: false, accent: [0x8a, 0x5c, 0xf5], font_size: 16.0 },
-            palette: Palette::new(&Appearance { dark: false, accent: [0x8a, 0x5c, 0xf5], font_size: 16.0 }),
+            appearance: Appearance::default(),
+            palette: Palette::new(&Appearance::default()),
             tabs: Vec::new(),
             active: 0,
             left_open: true,

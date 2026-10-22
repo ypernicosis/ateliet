@@ -66,6 +66,50 @@ fn readable(c: Color32, against: Color32, to: Color32, ratio: f32) -> Color32 {
 
 impl Palette {
     pub fn new(a: &Appearance) -> Palette {
+        let p = Self::base(a);
+        match &a.theme_vars {
+            Some(v) => p.themed(a, if a.dark { &v.1 } else { &v.0 }),
+            None => p,
+        }
+    }
+
+    /// The colours a community theme sets, over the built-in ones.
+    fn themed(mut self, a: &Appearance, theme: &ateliet_core::css_theme::Vars) -> Palette {
+        use ateliet_core::css_theme as ct;
+        let mut vars = ct::accent_vars(a.accent);
+        vars.extend(theme.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let get = |k: &str| ct::var_color(&vars, k);
+        let over = |c: [u8; 4], under: Color32| mix(under, Color32::from_rgb(c[0], c[1], c[2]), c[3] as f32 / 255.0);
+        let solid = |k: &str| get(k).filter(|c| c[3] >= 200).map(|c| Color32::from_rgb(c[0], c[1], c[2]));
+        if let Some(c) = solid("--background-primary") {
+            self.bg = c;
+        }
+        if let Some(c) = solid("--background-secondary") {
+            self.bg_secondary = c;
+        }
+        if let Some(c) = solid("--text-normal") {
+            self.text = c;
+        }
+        self.muted = solid("--text-muted").unwrap_or_else(|| mix(self.bg, self.text, 0.6));
+        self.faint = solid("--text-faint").unwrap_or_else(|| mix(self.bg, self.text, 0.38));
+        self.border = get("--background-modifier-border").map(|c| over(c, self.bg)).unwrap_or_else(|| mix(self.bg, self.text, 0.1));
+        self.border_strong = mix(self.border, self.text, 0.12);
+        self.bg_hover = get("--background-modifier-hover").map(|c| over(c, self.bg_secondary)).unwrap_or_else(|| mix(self.bg_secondary, self.text, 0.06));
+        self.bg_active = get("--background-modifier-active-hover").map(|c| over(c, self.bg_secondary)).unwrap_or_else(|| mix(self.bg_secondary, self.text, 0.1));
+        if let Some(c) = solid("--interactive-accent") {
+            self.accent = c;
+        }
+        self.accent_strong = readable(self.accent, self.bg, self.text, 4.5);
+        self.accent_soft = mix(self.bg, self.accent, if self.dark { 0.22 } else { 0.16 });
+        self.on_accent = solid("--text-on-accent").filter(|c| contrast(*c, self.accent_strong) >= 3.0).unwrap_or(if contrast(self.accent_strong, Color32::BLACK) > contrast(self.accent_strong, Color32::WHITE) { Color32::from_rgb(0x12, 0x12, 0x12) } else { Color32::WHITE });
+        self.code_bg = get("--code-background").map(|c| over(c, self.bg)).unwrap_or_else(|| mix(self.bg, self.text, 0.04));
+        if let Some(c) = solid("--text-error") {
+            self.error = c;
+        }
+        self
+    }
+
+    fn base(a: &Appearance) -> Palette {
         let accent = Color32::from_rgb(a.accent[0], a.accent[1], a.accent[2]);
         if a.dark {
             let bg = Color32::from_rgb(0x19, 0x19, 0x19);

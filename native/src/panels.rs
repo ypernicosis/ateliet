@@ -1069,6 +1069,26 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                 r.changed()
                             });
                             retheme |= changed;
+                            let themes = crate::config::Appearance::themes(&cfg);
+                            let cur = app.appearance.css_theme.clone();
+                            let mut pick: Option<String> = None;
+                            kit::setting(ui, "Tema da comunidade", "As cores do tema instalado em .obsidian/themes (o resto do CSS precisa da interface web).", p, |ui| {
+                                egui::ComboBox::from_id_salt("css-theme").width(180.0).selected_text(if cur.is_empty() { "Nenhum".to_string() } else { cur.clone() }).show_ui(ui, |ui| {
+                                    if ui.selectable_label(cur.is_empty(), "Nenhum").clicked() {
+                                        pick = Some(String::new());
+                                    }
+                                    for t in &themes {
+                                        if ui.selectable_label(&cur == t, t.as_str()).clicked() {
+                                            pick = Some(t.clone());
+                                        }
+                                    }
+                                });
+                            });
+                            if let (Some(t), c) = (pick, &cfg) {
+                                app.appearance.css_theme = t;
+                                app.appearance.load_css(c);
+                                retheme = true;
+                            }
                             if kit::setting(ui, "Tamanho do texto", "O tamanho das notas; a interface não muda.", p, |ui| {
                                 ui.spacing_mut().slider_width = 140.0;
                                 ui.add(egui::Slider::new(&mut app.appearance.font_size, 12.0..=26.0).max_decimals(0)).changed()

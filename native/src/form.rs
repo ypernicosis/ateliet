@@ -65,7 +65,7 @@ pub struct Form {
 
 impl Form {
     pub fn new(title: &str, purpose: Purpose, submit: &str, fields: Vec<Field>) -> Form {
-        Form { title: title.into(), fields, submit: submit.into(), purpose, note: String::new(), palette: crate::theme::Palette::new(&crate::config::Appearance { dark: false, accent: [0x76, 0xce, 0xf4], font_size: 16.0 }), focused: false }
+        Form { title: title.into(), fields, submit: submit.into(), purpose, note: String::new(), palette: crate::theme::Palette::new(&crate::config::Appearance { accent: [0x76, 0xce, 0xf4], ..Default::default() }), focused: false }
     }
 
     pub fn with_note(mut self, n: &str) -> Form {

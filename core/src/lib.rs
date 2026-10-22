@@ -14,6 +14,7 @@
 //! - `calendar` — a month of daily notes for the calendar view
 //! - `board`    — storyboards: file format, brushes, compositing, tracing
 
+pub mod css_theme;
 pub mod metadata;
 pub mod render;
 pub mod search;
