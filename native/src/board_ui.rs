@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 mod pages;
 mod refs;
 mod timeline;
+mod tools;
 pub use pages::NewBoard;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,6 +29,11 @@ pub enum Tool {
     Panel,
     /// Page kinds: balloons, captions and sound effects.
     Balloon,
+    Fill,
+    Lasso,
+    Shape,
+    Select,
+    Move,
 }
 
 enum Edit {
@@ -75,6 +81,7 @@ pub struct BoardEditor {
     zoom_target: Option<(f32, f32, f32, f32)>,
     tl: timeline::TimelineState,
     rf: refs::RefState,
+    ts: tools::ToolState,
     /// The view mirrored (a check of proportions, not a change).
     mirror: bool,
 }
@@ -129,11 +136,13 @@ impl BoardEditor {
             zoom_target: None,
             tl: timeline::TimelineState::default(),
             rf: refs::RefState::default(),
+            ts: tools::ToolState::default(),
             mirror: false,
         }
     }
 
     pub fn save(&mut self) {
+        self.commit_float();
         if !self.dirty {
             return;
         }
@@ -428,7 +437,13 @@ impl BoardEditor {
                     }
                 }
             }
-            if self.tool == Tool::Picker && resp.clicked() {
+            let z = self.zoom;
+            let tc = move |pos: egui::Pos2| to_canvas(pos, z, origin);
+            if let Some(e) = self.tool_input(ui, &resp, &tc) {
+                toast = Some(e);
+            }
+            let alt_pick = ui.input(|i| i.modifiers.alt) && matches!(self.tool, Tool::Brush(_) | Tool::Fill | Tool::Shape);
+            if (self.tool == Tool::Picker || alt_pick) && resp.clicked() {
                 if let Some(pos) = resp.interact_pointer_pos() {
                     let c = to_canvas(pos, self.zoom, origin);
                     let opts = Options { background: true, onion: false, overlay: None, exporting: false };
@@ -436,7 +451,9 @@ impl BoardEditor {
                     if px[3] > 0 {
                         let a = px[3] as u32;
                         self.color = [((px[0] as u32 * 255) / a) as u8, ((px[1] as u32 * 255) / a) as u8, ((px[2] as u32 * 255) / a) as u8];
-                        self.tool = Tool::Brush(BrushKind::Pen);
+                        if !alt_pick {
+                            self.tool = Tool::Brush(BrushKind::Pen);
+                        }
                     }
                 }
             }
@@ -452,6 +469,7 @@ impl BoardEditor {
         let view0 = egui::pos2(a0.x.min(a1.x), a0.y.min(a1.y));
         let view1 = egui::pos2(a0.x.max(a1.x), a0.y.max(a1.y));
         let (vx0, vy0, vx1, vy1) = if self.doc.infinite() { (view0.x, view0.y, view1.x, view1.y) } else { (view0.x.max(0.0), view0.y.max(0.0), view1.x.min(cw), view1.y.min(ch)) };
+        self.ts.view = (vx0, vy0, vx1, vy1);
         let mut budget = if self.active.is_some() { 8 } else { 6 };
         let mut pending = false;
         if vx0 < vx1 && vy0 < vy1 {
@@ -509,6 +527,11 @@ impl BoardEditor {
         if !self.doc.infinite() {
             self.draw_guides(&clip, origin);
         }
+        {
+            let z = self.zoom;
+            let fc = move |c: egui::Pos2| egui::pos2(origin.x + (if mirror { mw - c.x } else { c.x }) * z, origin.y + c.y * z);
+            self.tool_draw(ui, &clip, &fc);
+        }
         if mirror {
             clip.text(stage.left_top() + egui::vec2(12.0, 10.0), egui::Align2::LEFT_TOP, "Vista espelhada (F)", egui::FontId::proportional(11.0), p.faint);
         }
@@ -540,6 +563,11 @@ impl BoardEditor {
                     (Tool::Brush(BrushKind::Brush), icons::PAINTBRUSH, "Pincel"),
                     (Tool::Brush(BrushKind::Marker), icons::HIGHLIGHTER, "Marcador"),
                     (Tool::Brush(BrushKind::Eraser), icons::ERASER, "Borracha (E)"),
+                    (Tool::Fill, icons::PAINT_BUCKET, "Balde (G)"),
+                    (Tool::Lasso, icons::LASSO, "Laço de preenchimento (L) · Alt apaga"),
+                    (Tool::Shape, icons::SHAPES, "Formas e setas de câmera (U) · Shift alinha, Alt desenha do centro"),
+                    (Tool::Select, icons::SQUARE_DASHED, "Seleção (M) · Shift: quadrado ou círculo · Delete apaga · Ctrl+D tira"),
+                    (Tool::Move, icons::MOVE, "Mover e escalar (V): arraste a seleção; os cantos escalam (Shift mantém a proporção); Enter aplica, Esc desfaz. Sem seleção, move a camada"),
                     (Tool::Hand, icons::HAND, "Mão (H, ou segure Espaço)"),
                     (Tool::Picker, icons::PIPETTE, "Conta-gotas (I)"),
                     (Tool::Panel, icons::SQUARE_SPLIT_HORIZONTAL, "Quadros (J): arraste através de um quadro para cortá-lo; num espaço vazio, um quadro novo"),
@@ -616,6 +644,8 @@ impl BoardEditor {
                     ui.label(RichText::new("Dureza").size(12.0).color(p.muted));
                     ui.add(egui::Slider::new(&mut s.hardness, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
                 });
+            } else {
+                self.tool_options(ui, p);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
@@ -1002,9 +1032,10 @@ impl BoardEditor {
                 self.step_ref(-1);
             }
             self.trace_keys(ui);
+            self.tool_keys(ui);
         }
         // autosave two seconds after the last change
-        if self.dirty && self.active.is_none() && self.last_change.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
+        if self.dirty && self.active.is_none() && self.ts.float.is_none() && self.last_change.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
             self.save();
         }
         if self.dirty {

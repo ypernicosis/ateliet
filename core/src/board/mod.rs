@@ -7,6 +7,7 @@ pub mod brush;
 pub mod compose;
 pub mod doc;
 pub mod pages;
+pub mod paint;
 pub mod tile;
 pub mod trace;
 pub mod zip;
