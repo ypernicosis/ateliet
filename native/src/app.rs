@@ -3,7 +3,7 @@
 use crate::config::{self, Appearance, VaultConfig};
 use crate::daily::{self, DailySettings};
 use crate::host::{Caches, RenderHost};
-use crate::markdown::{self, Action, Doc, Renderer};
+use crate::markdown::{self, Action, Doc, Host as _, Renderer};
 use crate::panels;
 use crate::templater::{self, Templater, TemplaterSettings};
 use crate::theme::{self, Palette};
@@ -158,6 +158,9 @@ pub struct App {
     nav: Option<bool>,
     /// Unlinked mentions of a note: (note, index generation, [(source, offset, line)]).
     pub unlinked: Option<(String, u64, Vec<(String, usize, String)>)>,
+    /// A link hovered: its target, since when, where; and the preview's rect.
+    hover: Option<(String, Instant, egui::Pos2)>,
+    hover_rect: Option<egui::Rect>,
     pub updater: crate::update::Updater,
     pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
@@ -213,6 +216,8 @@ impl App {
             new_board_dlg: None,
             nav: None,
             unlinked: None,
+            hover: None,
+            hover_rect: None,
             updater: crate::update::Updater::new(),
             music: Default::default(),
             focus: None,
@@ -1215,12 +1220,59 @@ impl App {
             }
             self.open(&path, true);
         }
+        self.hover_preview(ctx, &mut actions);
         for a in actions {
             self.apply(a);
         }
         for a in sc_actions {
             self.sc_apply(a);
         }
+    }
+
+    /// Hovering a note link for a moment shows the note in a small window,
+    /// which stays while the pointer is over it.
+    fn hover_preview(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let now_frame = ctx.cumulative_pass_nr();
+        let hovered: Option<(String, egui::Pos2, u64)> = ctx.data(|d| d.get_temp(egui::Id::new("md-hover-link")));
+        let fresh = hovered.filter(|h| h.2 + 1 >= now_frame);
+        let ptr = ctx.input(|i| i.pointer.hover_pos());
+        let over_popup = matches!((self.hover_rect, ptr), (Some(r), Some(q)) if r.expand(8.0).contains(q));
+        match (&fresh, &self.hover) {
+            (Some((t, pos, _)), Some((h, _, _))) if t == h => {
+                let _ = pos;
+            }
+            (Some((t, pos, _)), _) => self.hover = Some((t.clone(), Instant::now(), *pos)),
+            (None, _) if over_popup => {}
+            (None, _) => {
+                self.hover = None;
+                self.hover_rect = None;
+            }
+        }
+        let Some((target, since, pos)) = self.hover.clone() else { return };
+        if since.elapsed() < Duration::from_millis(450) {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        let Some(vault) = self.vault.as_ref() else { return };
+        let source = self.active_path().unwrap_or_default();
+        let p = self.palette;
+        let size = self.appearance.font_size * 0.9;
+        let mut host = RenderHost { vault, palette: p, size, source: &source, caches: &mut self.caches, settings: &self.dv_settings };
+        let Some((path, doc)) = host.embed(&target) else { return };
+        let area = egui::Area::new(egui::Id::new("link-preview")).order(egui::Order::Foreground).fixed_pos(pos + egui::vec2(12.0, 16.0)).constrain(true);
+        let resp = area.show(ctx, |ui| {
+            egui::Frame::new().fill(p.bg).stroke(egui::Stroke::new(1.0_f32, p.border)).corner_radius(10.0).shadow(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: egui::Color32::from_black_alpha(50) }).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
+                ui.set_width(420.0);
+                ui.label(egui::RichText::new(vault::basename(&path).trim_end_matches(".md")).font(crate::kit::medium(14.0)).color(p.muted));
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().max_height(320.0).id_salt("link-preview-scroll").show(ui, |ui| {
+                    let mut r = Renderer::new(&mut host);
+                    r.blocks(ui, &doc.blocks);
+                    actions.append(&mut r.actions);
+                });
+            });
+        });
+        self.hover_rect = Some(resp.response.rect);
     }
 
     /// The open note: title and editor / Live Preview / reading view.

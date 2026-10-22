@@ -591,6 +591,11 @@ impl Runs {
         if hover_link.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         }
+        // a note link under the pointer: the app may show its preview
+        if let (Some(Action::Open(t, _)), Some(pos)) = (&hover_link, resp.hover_pos()) {
+            let frame = ui.ctx().cumulative_pass_nr();
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("md-hover-link"), (t.clone(), pos, frame)));
+        }
         ui.painter().galley(rect.min, galley, ui.visuals().text_color());
         if resp.clicked() {
             if let Some(a) = hover_link {
