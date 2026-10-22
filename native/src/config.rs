@@ -78,6 +78,16 @@ impl VaultConfig {
         let _ = fs::write(path, serde_json::to_string_pretty(&cur).unwrap_or_default());
     }
 
+    /// Remove one key from a JSON file, keeping the rest.
+    pub fn remove(&self, name: &str, key: &str) {
+        let mut cur = self.read(name);
+        if let Some(o) = cur.as_object_mut() {
+            if o.remove(key).is_some() {
+                let _ = fs::write(self.dir.join(name), serde_json::to_string_pretty(&cur).unwrap_or_default());
+            }
+        }
+    }
+
     /// A built-in tool's settings: `ateliet/<id>.json`, or the old plugin's data.json.
     pub fn tool(&self, id: &str, plugin: &str) -> Value {
         let own = self.read(&format!("ateliet/{id}.json"));

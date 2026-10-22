@@ -1128,7 +1128,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     let page_id = egui::Id::new("settings-page");
     let mut page: usize = ctx.data(|d| d.get_temp(page_id)).unwrap_or(0);
     kit::scrim(ctx, p);
-    let pages = [(icons::PALETTE, "Aparência"), (icons::PEN_LINE, "Editor"), (icons::CALENDAR_DAYS, "Notas diárias"), (icons::LAYOUT_TEMPLATE, "Templater"), (icons::TABLE, "Dataview"), (icons::CALENDAR, "Calendário"), (icons::IMAGES, "Imagens"), (icons::INFO, "Sobre")];
+    let pages = [(icons::PALETTE, "Aparência"), (icons::PEN_LINE, "Editor"), (icons::CALENDAR_DAYS, "Notas diárias"), (icons::LAYOUT_TEMPLATE, "Templater"), (icons::TABLE, "Dataview"), (icons::CALENDAR, "Calendário"), (icons::IMAGES, "Imagens"), (icons::FOLDER, "Arquivos e links"), (icons::COMMAND, "Atalhos"), (icons::INFO, "Sobre")];
     let win = egui::Window::new("settings").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::ZERO).corner_radius(14.0)).show(ctx, |ui| {
         let Some(cfg) = app.cfg.clone() else { return };
         ui.set_width(760.0);
@@ -1372,6 +1372,8 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                 app.images.rescan();
                             }
                         }
+                        7 => crate::settings_pages::files_page(ui, &cfg, p),
+                        8 => crate::settings_pages::hotkeys_page(app, ui, &cfg, p),
                         _ => {
                             ui.label(RichText::new("Ateliet").font(kit::bold(16.0)).color(p.text));
                             ui.add_space(4.0);

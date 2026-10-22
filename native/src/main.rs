@@ -19,6 +19,7 @@ mod markdown;
 mod music;
 mod panels;
 mod sc;
+mod settings_pages;
 mod templater;
 mod theme;
 mod update;

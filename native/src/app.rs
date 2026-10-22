@@ -674,7 +674,8 @@ impl App {
         }
         // links to it, resolved with the index as it was before the move
         let mut relinked = 0;
-        if let Ok(ix) = v.index.read() {
+        let update_links = self.cfg.as_ref().map(|c| c.read("app.json")["alwaysUpdateLinks"].as_bool().unwrap_or(true)).unwrap_or(true);
+        if let Some(ix) = v.index.read().ok().filter(|_| update_links) {
             let mut sources: Vec<String> = moves.iter().flat_map(|(old, _)| ix.inlinks(old)).collect();
             sources.sort();
             sources.dedup();

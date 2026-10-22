@@ -52,7 +52,7 @@ pub enum Cmd {
     ReplaceTemplates,
 }
 
-const COMMANDS: &[(Cmd, &str, &str)] = &[
+pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::NewNote, "file-explorer:new-file", "Nova nota"),
     (Cmd::OpenDaily, "daily-notes", "Notas diárias: Abrir a nota de hoje"),
     (Cmd::ToggleMode, "markdown:toggle-preview", "Alternar modo leitura"),
@@ -94,7 +94,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
-fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
+pub(crate) fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
     let cmd = Modifiers::COMMAND;
     Some(match c {
         Cmd::NewNote => KeyboardShortcut::new(cmd, Key::N),
@@ -169,7 +169,13 @@ pub fn load_hotkeys(cfg: &VaultConfig) -> Vec<(String, KeyboardShortcut)> {
 pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
     match c {
         Cmd::NewNote => {
-            let folder = app.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
+            // where new notes go (Files and links)
+            let appj = app.cfg.as_ref().map(|c| c.read("app.json")).unwrap_or_default();
+            let folder = match appj["newFileLocation"].as_str().unwrap_or("current") {
+                "root" => String::new(),
+                "folder" => appj["newFileFolderPath"].as_str().unwrap_or("").trim_matches('/').to_string(),
+                _ => app.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default(),
+            };
             app.new_note(&folder);
         }
         Cmd::NewStoryboard => app.new_board_dlg = Some(crate::board_ui::NewBoard::new()),
@@ -280,6 +286,10 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
 }
 
 pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
+    // a shortcut being recorded in the settings takes the keys
+    if ctx.data(|d| d.get_temp::<String>(egui::Id::new("hotkey-capture")).is_some()) {
+        return;
+    }
     if app.palette_ui.is_some() || app.ask.is_some() || app.templater.current.is_some() {
         if ctx.input(|i| i.key_pressed(Key::Escape)) {
             app.palette_ui = None;
