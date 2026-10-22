@@ -385,7 +385,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let mut layouter = |ui: &egui::Ui, s: &str, wrap: f32| {
             let mut job = cache.get(s, st);
             job.wrap.max_width = wrap;
-            ui.fonts(|f| f.layout_job(job))
+            ui.fonts(|f| crate::align::layout(f, job, wrap, crate::align::current()))
         };
         // a right click must not move the caret: the menu acts on the selection
         let prev = selection(ui.ctx(), id);

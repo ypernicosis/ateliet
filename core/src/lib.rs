@@ -13,9 +13,11 @@
 //! - `script`   — QuickJS for `dataviewjs` blocks and Templater commands
 //! - `calendar` — a month of daily notes for the calendar view
 //! - `board`    — storyboards: file format, brushes, compositing, tracing
+//! - `moodboard` — reference boards: documents, storage, layout and palettes
 
 pub mod css_theme;
 pub mod mermaid;
+pub mod moodboard;
 pub mod metadata;
 pub mod pictogrep;
 pub mod pinterest;

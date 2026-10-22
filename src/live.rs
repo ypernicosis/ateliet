@@ -88,6 +88,10 @@ pub struct LiveState {
     pub highlight: editor::HighlightCache,
     /// Where to put the cursor when a block opens (char index), or the end.
     pub cursor_at: Option<usize>,
+    /// In the source editor: the query block (by its order) shown as code.
+    pub query_edit: Option<usize>,
+    query_focus: bool,
+    query_hl: Vec<editor::HighlightCache>,
 }
 
 impl LiveState {
@@ -134,9 +138,126 @@ impl LiveState {
     }
 }
 
+/// The `dataview` / `dataviewjs` fenced blocks of a note, as byte ranges
+/// from the opening fence to the end of the closing one's line.
+pub fn query_blocks(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    // the open fence: its character, length, start, and whether it's a query
+    let mut open: Option<(char, usize, usize, bool)> = None;
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        let indent = body.len() - body.trim_start_matches(' ').len();
+        let t = body.trim_start_matches(' ');
+        let fence = t.chars().next().filter(|c| (*c == '`' || *c == '~') && indent <= 3).map(|c| (c, t.chars().take_while(|x| *x == c).count())).filter(|f| f.1 >= 3);
+        match (open, fence) {
+            (None, Some((c, n))) => {
+                let lang = t[n..].trim().split_whitespace().next().unwrap_or("").to_lowercase();
+                open = Some((c, n, at, lang == "dataview" || lang == "dataviewjs"));
+            }
+            (Some((c, n, start, query)), Some((c2, n2))) if c2 == c && n2 >= n && t[n2..].trim().is_empty() => {
+                if query {
+                    out.push(start..at + line.len());
+                }
+                open = None;
+            }
+            _ => {}
+        }
+        at += line.len();
+    }
+    out
+}
+
+/// The source editor of a note with Dataview blocks: the text around them is
+/// edited as source, and each query shows its result (click its corner to
+/// edit the query; Escape shows the result again).
+pub fn source_with_queries(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::Styles, blocks: &[std::ops::Range<usize>]) -> Vec<Action> {
+    let mut actions = Vec::new();
+    let p = st.p;
+    // the pieces: text, query, text, query… (text pieces may be empty)
+    let mut pieces: Vec<(bool, String)> = Vec::new();
+    let mut at = 0;
+    for b in blocks {
+        pieces.push((false, tab.text[at..b.start].to_string()));
+        pieces.push((true, tab.text[b.clone()].to_string()));
+        at = b.end;
+    }
+    pieces.push((false, tab.text[at..].to_string()));
+    let n_texts = pieces.iter().filter(|x| !x.0).count() + blocks.len();
+    if tab.live.query_hl.len() < n_texts {
+        tab.live.query_hl.resize_with(n_texts, Default::default);
+    }
+    if tab.live.query_edit.is_some_and(|q| q >= blocks.len()) {
+        tab.live.query_edit = None;
+    }
+    let base = egui::Id::new(("source-pieces", &tab.path));
+    let mut changed = false;
+    let mut q = 0;
+    let n_pieces = pieces.len();
+    for (i, (query, text)) in pieces.iter_mut().enumerate() {
+        let id = base.with(i);
+        if !*query {
+            // an empty piece between two queries still takes the cursor
+            if text.is_empty() && i > 0 && i + 1 < n_pieces {
+                continue;
+            }
+            let r = ui.add(editor::editor_widget(text, id, &mut tab.live.query_hl[i], st, 1));
+            changed |= r.changed();
+            continue;
+        }
+        let k = q;
+        q += 1;
+        if tab.live.query_edit == Some(k) {
+            let r = ui.add(editor::editor_widget(text, id, &mut tab.live.query_hl[i], st, 1));
+            changed |= r.changed();
+            if std::mem::take(&mut tab.live.query_focus) {
+                r.request_focus();
+            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) || (r.lost_focus() && !r.has_focus()) {
+                tab.live.query_edit = None;
+            }
+            continue;
+        }
+        // the result, with a quiet way back to the query
+        let top = ui.cursor().min;
+        ui.add_space(4.0);
+        let doc = markdown::parse(text);
+        let mut r = Renderer::new(&mut *host);
+        r.blocks(ui, &doc.blocks);
+        actions.append(&mut r.actions);
+        ui.add_space(4.0);
+        let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
+        let hovered = ui.rect_contains_pointer(rect);
+        if hovered {
+            ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(1.0_f32, p.border), egui::StrokeKind::Outside);
+            let br = egui::Rect::from_min_size(egui::pos2(rect.right() - 30.0, rect.top() + 2.0), egui::vec2(26.0, 24.0));
+            let b = ui.interact(br, id.with("edit"), egui::Sense::click());
+            ui.painter().rect_filled(br, 5.0, if b.hovered() { p.bg_active } else { p.bg_hover });
+            ui.painter().text(br.center(), egui::Align2::CENTER_CENTER, crate::icons::CODE, crate::kit::icon_font(13.0), p.muted);
+            if b.on_hover_text("Editar a consulta").clicked() {
+                tab.live.query_edit = Some(k);
+                tab.live.query_focus = true;
+            }
+        }
+    }
+    if changed {
+        tab.text = pieces.into_iter().map(|x| x.1).collect();
+        tab.last_edit = Some(std::time::Instant::now());
+    }
+    actions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_blocks_are_found() {
+        let t = "a\n```dataviewjs\ndv.paragraph(1)\n```\nb\n~~~js\n```dataview\n~~~\n```dataview\nLIST\n```";
+        let b = query_blocks(t);
+        assert_eq!(b.len(), 2, "a fence inside another code block is not a query");
+        assert_eq!(&t[b[0].clone()], "```dataviewjs\ndv.paragraph(1)\n```\n");
+        assert_eq!(&t[b[1].clone()], "```dataview\nLIST\n```");
+    }
 
     #[test]
     fn blocks_and_splice() {

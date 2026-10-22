@@ -16,9 +16,15 @@ use crate::vision::Vision;
 
 const MODEL_KEY: &str = "clip-vit-base-patch32-q8";
 const THUMB: u32 = 240;
-const THUMB_LARGE: u32 = 480;
+/// Preview sizes on disk (longest side). A picture is shown from the
+/// smallest one at least as large as it is on screen, in physical pixels.
+const TIERS: [u32; 3] = [THUMB, 480, 960];
+/// The picture itself (up to this side), for a reference filling the screen.
+const FULL: u32 = 0;
+const FULL_MAX: u32 = 2560;
 
 mod pinterest;
+pub mod moodboard;
 
 pub fn thumb_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("ateliet").join("thumbnails")
@@ -30,10 +36,25 @@ enum Thumb {
     Failed,
 }
 
+/// One preview: a picture at a size, in colour or in greys.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+struct ThumbKey {
+    key: String,
+    tier: u32,
+    gray: bool,
+}
+
+struct Job {
+    id: ThumbKey,
+    abs: PathBuf,
+    mtime: i64,
+    size: u64,
+}
+
 /// Background decoding of previews (a few threads, newest requests first).
 struct Loader {
-    queue: Mutex<VecDeque<(String, PathBuf, i64, u64)>>,
-    ready: Mutex<Vec<(String, Option<egui::ColorImage>)>>,
+    queue: Mutex<VecDeque<Job>>,
+    ready: Mutex<Vec<(ThumbKey, Option<egui::ColorImage>)>>,
     wake: Condvar,
 }
 
@@ -51,9 +72,9 @@ impl Loader {
                     }
                     q.pop_back()
                 };
-                let Some((key, abs, mtime, size)) = job else { continue };
-                let img = preview(&abs, mtime, size);
-                l2.ready.lock().unwrap().push((key, img));
+                let Some(job) = job else { continue };
+                let img = preview(&job.abs, job.mtime, job.size, job.id.tier).map(|i| if job.id.gray { grayscale(i) } else { i });
+                l2.ready.lock().unwrap().push((job.id, img));
                 c.request_repaint();
             });
         }
@@ -61,25 +82,53 @@ impl Loader {
     }
 }
 
-/// A cached preview (the same cache as earlier versions), made when missing.
-fn preview(abs: &Path, mtime: i64, size: u64) -> Option<egui::ColorImage> {
-    let dir = thumb_dir();
-    let cached = images::thumbnail_path(&dir, abs, mtime, size, THUMB);
-    let img = match image::open(&cached) {
-        Ok(i) => i,
-        Err(_) => {
-            let larger = images::thumbnail_path(&dir, abs, mtime, size, THUMB_LARGE);
-            let full = image::open(&larger).ok().or_else(|| images::open_oriented(abs).ok())?;
-            let (bytes, _) = images::thumbnail(&full, THUMB);
-            if let Some(d) = cached.parent() {
-                let _ = std::fs::create_dir_all(d);
+/// A cached preview of `tier` pixels (made when missing, from a larger
+/// cached one or the picture), or the picture itself for `FULL`.
+fn preview(abs: &Path, mtime: i64, size: u64, tier: u32) -> Option<egui::ColorImage> {
+    let img = if tier == FULL {
+        let img = images::open_oriented(abs).ok()?;
+        if img.width() > FULL_MAX || img.height() > FULL_MAX { img.resize(FULL_MAX, FULL_MAX, image::imageops::FilterType::Triangle) } else { img }
+    } else {
+        let dir = thumb_dir();
+        let cached = images::thumbnail_path(&dir, abs, mtime, size, tier);
+        match image::open(&cached) {
+            Ok(i) => i,
+            Err(_) => {
+                let larger = TIERS.iter().filter(|&&t| t > tier).find_map(|&t| image::open(images::thumbnail_path(&dir, abs, mtime, size, t)).ok());
+                let full = larger.or_else(|| images::open_oriented(abs).ok())?;
+                let (bytes, _) = images::thumbnail(&full, tier);
+                if let Some(d) = cached.parent() {
+                    let _ = std::fs::create_dir_all(d);
+                }
+                let _ = std::fs::write(&cached, &bytes);
+                image::load_from_memory(&bytes).ok()?
             }
-            let _ = std::fs::write(&cached, &bytes);
-            image::load_from_memory(&bytes).ok()?
         }
     };
     let rgba = img.to_rgba8();
     Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+}
+
+fn grayscale(mut img: egui::ColorImage) -> egui::ColorImage {
+    for px in &mut img.pixels {
+        let [r, g, b, a] = px.to_srgba_unmultiplied();
+        let l = (0.299 * r as f32 + 0.587 * g as f32 + 0.114 * b as f32).round() as u8;
+        *px = Color32::from_rgba_unmultiplied(l, l, l, a);
+    }
+    img
+}
+
+/// Linear filtering with mipmaps: a large preview drawn small stays smooth.
+const TEX: egui::TextureOptions = egui::TextureOptions {
+    magnification: egui::TextureFilter::Linear,
+    minification: egui::TextureFilter::Linear,
+    wrap_mode: egui::TextureWrapMode::ClampToEdge,
+    mipmap_mode: Some(egui::TextureFilter::Linear),
+};
+
+/// The size to load for a picture drawn `px` physical pixels long.
+fn tier_for(px: f32, full: bool) -> u32 {
+    TIERS.iter().copied().find(|&t| t as f32 >= px * 0.9).unwrap_or(if full { FULL } else { TIERS[TIERS.len() - 1] })
 }
 
 pub struct Viewer {
@@ -94,6 +143,10 @@ pub struct Viewer {
 
 pub struct ImagesState {
     pub entries: Vec<ImageEntry>,
+    /// Bumped whenever `entries` is replaced.
+    entries_gen: u64,
+    /// The moodboards.
+    pub mb: moodboard::Moodboards,
     /// Whether the collections (left) and notes (right) panels are shown in
     /// image mode (the writing mode's sidebars are separate).
     pub panels: [bool; 2],
@@ -106,7 +159,10 @@ pub struct ImagesState {
     shown: Vec<usize>,
     shown_key: String,
     similar_to: Option<usize>,
-    thumbs: HashMap<String, Thumb>,
+    thumbs: HashMap<ThumbKey, Thumb>,
+    /// When each large preview was last drawn (pass number): unused ones are let go.
+    thumb_used: HashMap<ThumbKey, u64>,
+    pass: u64,
     loader: Option<Arc<Loader>>,
     pub viewer: Option<Viewer>,
     pub selection: HashSet<usize>,
@@ -133,6 +189,8 @@ impl Default for ImagesState {
         ImagesState {
             panels: [true, true],
             entries: Vec::new(),
+            entries_gen: 0,
+            mb: moodboard::Moodboards::default(),
             index: Arc::new(Mutex::new(images::Index::new(MODEL_KEY, 512))),
             #[cfg(feature = "clip")]
             vision: Arc::new(Vision::default()),
@@ -142,6 +200,8 @@ impl Default for ImagesState {
             shown_key: String::from("\u{0}"),
             similar_to: None,
             thumbs: HashMap::new(),
+            thumb_used: HashMap::new(),
+            pass: 0,
             loader: None,
             viewer: None,
             selection: HashSet::new(),
@@ -264,6 +324,7 @@ impl ImagesState {
         if let Some(rx) = &self.scanning {
             if let Ok((entries, index)) = rx.try_recv() {
                 self.entries = entries;
+                self.entries_gen += 1;
                 *self.index.lock().unwrap() = index;
                 #[cfg(feature = "clip")]
                 self.vision.index(self.index.clone(), self.entries.clone(), self.root.join(".obsidian/ateliet/images/index.bin"), ctx.clone());
@@ -278,30 +339,62 @@ impl ImagesState {
         }
         if let Some(l) = &self.loader {
             let done: Vec<_> = std::mem::take(&mut *l.ready.lock().unwrap());
-            for (key, img) in done {
+            for (id, img) in done {
                 let t = match img {
-                    Some(img) => Thumb::Ready(ctx.load_texture(format!("thumb:{key}"), img, egui::TextureOptions::LINEAR)),
+                    Some(img) => Thumb::Ready(ctx.load_texture(format!("thumb:{}:{}:{}", id.key, id.tier, id.gray), img, TEX)),
                     None => Thumb::Failed,
                 };
-                self.thumbs.insert(key, t);
+                self.thumbs.insert(id, t);
+            }
+        }
+        // large previews not drawn for a few seconds go (the small ones stay)
+        self.pass = ctx.cumulative_pass_nr();
+        if self.thumb_used.len() > 120 && self.pass % 60 == 0 {
+            let now = self.pass;
+            let stale: Vec<ThumbKey> = self.thumb_used.iter().filter(|(_, &at)| now.saturating_sub(at) > 240).map(|(k, _)| k.clone()).collect();
+            for k in stale {
+                self.thumb_used.remove(&k);
+                self.thumbs.remove(&k);
             }
         }
     }
 
+    /// The small colour preview of a picture.
     fn thumb(&mut self, i: usize) -> Option<egui::TextureId> {
+        self.thumb_sized(i, THUMB as f32, false, false)
+    }
+
+    /// The best preview loaded for a picture drawn `px` physical pixels long,
+    /// asking for a sharper one when the loaded ones are too small; `full`
+    /// allows the picture itself beyond the largest preview.
+    fn thumb_sized(&mut self, i: usize, px: f32, full: bool, gray: bool) -> Option<egui::TextureId> {
+        let want = tier_for(px, full);
         let e = &self.entries[i];
-        match self.thumbs.get(&e.key) {
-            Some(Thumb::Ready(t)) => Some(t.id()),
-            Some(_) => None,
-            None => {
-                self.thumbs.insert(e.key.clone(), Thumb::Loading);
-                if let Some(l) = &self.loader {
-                    l.queue.lock().unwrap().push_back((e.key.clone(), PathBuf::from(&e.abs), e.mtime, e.size));
-                    l.wake.notify_one();
-                }
-                None
+        let id = ThumbKey { key: e.key.clone(), tier: want, gray };
+        if want != THUMB || gray {
+            self.thumb_used.insert(id.clone(), self.pass);
+        }
+        if !self.thumbs.contains_key(&id) {
+            self.thumbs.insert(id.clone(), Thumb::Loading);
+            if let Some(l) = &self.loader {
+                l.queue.lock().unwrap().push_back(Job { id: id.clone(), abs: PathBuf::from(&e.abs), mtime: e.mtime, size: e.size });
+                l.wake.notify_one();
             }
         }
+        if let Some(Thumb::Ready(t)) = self.thumbs.get(&id) {
+            return Some(t.id());
+        }
+        // meanwhile the sharpest one already loaded
+        for tier in [FULL, 960, 480, THUMB] {
+            if let Some(Thumb::Ready(t)) = self.thumbs.get(&ThumbKey { key: e.key.clone(), tier, gray }) {
+                return Some(t.id());
+            }
+        }
+        // greys not ready yet: the colour one rather than nothing
+        if gray {
+            return self.thumb_sized(i, px, full, false);
+        }
+        None
     }
 
     fn refresh_shown(&mut self) {
@@ -444,7 +537,8 @@ impl ImagesState {
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         let all = self.entries.len();
-        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none()).show(ui, p).clicked() {
+        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none() && !self.mb.open).show(ui, p).clicked() {
+            self.close_moodboards();
             self.folder = None;
             self.collection = None;
             self.similar_to = None;
@@ -452,7 +546,8 @@ impl ImagesState {
         }
         if self.shared.is_some() {
             let n = self.entries.iter().filter(|e| e.origin == ateliet_core::images::Origin::Shared).count();
-            if kit::Row::new("Biblioteca compartilhada").icon(icons::LIBRARY_BIG).trailing(n.to_string()).selected(self.collection.as_deref() == Some("")).show(ui, p).on_hover_text("A pasta do Pictogrep: as mesmas imagens e coleções nos dois apps").clicked() {
+            if kit::Row::new("Biblioteca compartilhada").icon(icons::LIBRARY_BIG).trailing(n.to_string()).selected(self.collection.as_deref() == Some("") && !self.mb.open).show(ui, p).on_hover_text("A pasta do Pictogrep: as mesmas imagens e coleções nos dois apps").clicked() {
+                self.close_moodboards();
                 self.folder = None;
                 self.collection = Some(String::new());
                 self.similar_to = None;
@@ -488,7 +583,7 @@ impl ImagesState {
                         continue;
                     }
                 }
-                let r = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str())).show(ui, p);
+                let r = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str()) && !self.mb.open).show(ui, p);
                 // pictures dropped on a collection join it
                 if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
                     let k = self.add_to_collection(&name, &idx);
@@ -498,6 +593,7 @@ impl ImagesState {
                     ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                 }
                 if r.clicked() {
+                    self.close_moodboards();
                     self.folder = None;
                     self.collection = Some(name.clone());
                     self.similar_to = None;
@@ -549,6 +645,27 @@ impl ImagesState {
                 self.col_edit = Some((None, String::new()));
             }
         }
+        // moodboards: the list, and each board
+        let boards = self.moodboard_list();
+        let open_board = self.open_board_id();
+        if kit::Row::new("Moodboards").icon(icons::LAYOUT_DASHBOARD).trailing(boards.len().to_string()).selected(self.mb.open && open_board.is_none()).show(ui, p).on_hover_text("Quadros de referência com as imagens da biblioteca").clicked() {
+            self.show_moodboards(None);
+        }
+        if self.mb.open {
+            for b in &boards {
+                let r = kit::Row::new(&b.name).icon(icons::FRAME).depth(1).trailing(b.count.to_string()).selected(open_board.as_deref() == Some(b.id.as_str())).show(ui, p);
+                // pictures dropped on a board go on it
+                if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
+                    self.queue_add_to_board(&b.id, (*idx).clone());
+                }
+                if r.dnd_hover_payload::<Vec<usize>>().is_some() {
+                    ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                }
+                if r.clicked() {
+                    self.show_moodboards(Some(&b.id));
+                }
+            }
+        }
         ui.add_space(10.0);
         kit::section(ui, "Coleções", p);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -585,6 +702,7 @@ impl ImagesState {
                     ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                 }
                 if r.on_hover_text(&folder).clicked() {
+                    self.close_moodboards();
                     self.collection = None;
                     self.folder = Some(folder.clone());
                     self.similar_to = None;
@@ -598,6 +716,27 @@ impl ImagesState {
     /// The mosaic or the viewer (centre in image mode).
     pub fn center_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette, vault: &vault::Vault) -> Option<ImageAction> {
         self.poll(ui.ctx());
+        if self.mb.open {
+            // the board takes the whole centre (the tools float over it)
+            let mut action = None;
+            if self.mb.board_open() {
+                self.moodboard_ui(ui, p);
+            } else {
+                ui.horizontal(|ui| {
+                    if let Some(a) = panel_toggle(ui, self.panels, true, p) {
+                        action = Some(a);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(a) = panel_toggle(ui, self.panels, false, p) {
+                            action = Some(a);
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                self.moodboard_ui(ui, p);
+            }
+            return action;
+        }
         if self.viewer.is_some() {
             return self.viewer_ui(ui, p, vault);
         }
@@ -697,7 +836,9 @@ impl ImagesState {
                     resp.dnd_set_drag_payload(self.dragged(i));
                 }
                 ui.painter().rect_filled(rect, 10.0, p.bg_secondary);
-                if let Some(t) = self.thumb(i) {
+                // a preview as sharp as the tile is large on this screen
+                let px = rect.width().max(rect.height()) * ui.ctx().pixels_per_point();
+                if let Some(t) = self.thumb_sized(i, px, false, false) {
                     // the whole picture: the tile already has its proportions
                     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                     ui.painter().add(egui::epaint::RectShape::filled(rect, 10.0, Color32::WHITE).with_texture(t, uv));
@@ -738,6 +879,19 @@ impl ImagesState {
                         action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
                         ui.close_menu();
                     }
+                    let boards = self.mb.boards.clone();
+                    ui.menu_button("Adicionar ao moodboard", |ui| {
+                        if boards.is_empty() {
+                            ui.label(RichText::new("Nenhum moodboard ainda").size(12.0).color(p.faint));
+                        }
+                        for b in &boards {
+                            if ui.button(&b.name).clicked() {
+                                let idx = self.dragged(i);
+                                self.queue_add_to_board(&b.id, idx);
+                                ui.close_menu();
+                            }
+                        }
+                    });
                     if self.shared.is_some() {
                         let names: Vec<String> = self.collections.iter().map(|c| c.0.clone()).collect();
                         ui.menu_button("Adicionar à coleção", |ui| {

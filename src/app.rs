@@ -977,6 +977,19 @@ impl eframe::App for App {
         if ctx.wants_keyboard_input() {
             return;
         }
+        // the same for a moodboard (studio and focus looks)
+        if self.images_mode && self.images.mb.open && self.images.mb.board_open() {
+            raw.events.retain(|e| match e {
+                egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.any() => {
+                    if *pressed {
+                        self.images.mb.tab_pressed = true;
+                    }
+                    false
+                }
+                _ => true,
+            });
+            return;
+        }
         let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) else { return };
         raw.events.retain(|e| match e {
             egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
@@ -1090,6 +1103,7 @@ impl eframe::App for App {
                 Some(Some(o)) => {
                     let clip = d.clip.take();
                     self.new_board_dlg = None;
+                    self.images_mode = false;
                     match clip {
                         Some(f) => self.new_board_from_clip(&f),
                         None => self.new_board_of(o),
@@ -1201,7 +1215,9 @@ impl App {
             self.insert_pictures(&dropped);
         }
         let mut act = None;
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 10 })).show(ctx, |ui| {
+        // a moodboard runs to the edges; the mosaic has a margin
+        let margin = if self.images.mb.open && self.images.mb.board_open() { egui::Margin::ZERO } else { egui::Margin { left: 18, right: 18, top: 14, bottom: 10 } };
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(margin)).show(ctx, |ui| {
             if let Some(v) = &self.vault {
                 act = self.images.center_ui(ui, p, v);
             }
@@ -1537,6 +1553,7 @@ impl App {
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
+            crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
             let max_w = if readable && centered { 46.0 * size } else { f32::INFINITY };
             let pad = if centered { 32.0 } else { 14.0 };
             egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
@@ -1568,6 +1585,15 @@ impl App {
                                 let path = tab.path.clone();
                                 let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
                                 let mut acts = crate::live::show(ui, tab, &mut host, &st);
+                                actions.append(&mut acts);
+                            }
+                            // the source, with Dataview results shown in place
+                            Mode::Edit if !crate::live::query_blocks(&tab.text).is_empty() => {
+                                let st = editor::Styles { size, p };
+                                let blocks = crate::live::query_blocks(&tab.text);
+                                let path = tab.path.clone();
+                                let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
+                                let mut acts = crate::live::source_with_queries(ui, tab, &mut host, &st, &blocks);
                                 actions.append(&mut acts);
                             }
                             Mode::Edit => {
@@ -1625,6 +1651,7 @@ impl App {
                     });
                 });
             });
+            crate::align::set_current(crate::align::TextAlign::Left);
         }
     }
 }

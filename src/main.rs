@@ -1,6 +1,7 @@
 //! Ateliet: the same vault, notes and built-in tools as Obsidian, drawn with
 //! egui (no web view, no GTK).
 
+mod align;
 mod app;
 mod board_ui;
 mod commands;

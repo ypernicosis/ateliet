@@ -68,6 +68,8 @@ pub enum Block {
     Embed { target: String, alt: String },
     /// The footnotes, numbered, gathered at the end of the note.
     Footnotes(Vec<(u32, Vec<Block>)>),
+    /// Blank lines beyond the one that separates two blocks, kept as space.
+    Space(usize),
 }
 
 pub struct Doc {
@@ -258,7 +260,20 @@ impl<'a> Builder<'a> {
     fn blocks(&mut self, until: Option<TagEnd>) -> Vec<Block> {
         let mut out = Vec::new();
         let mut loose: Vec<Inline> = Vec::new();
+        // the last line of the block before (top level only): the blank lines
+        // written between two blocks show as that much space
+        let mut last_line: Option<usize> = None;
         while let Some((ev, r)) = self.events.next() {
+            if until.is_none() && r.end > r.start && !matches!(ev, Event::End(_)) {
+                let first = self.lines.line_of(r.start);
+                if let Some(prev) = last_line {
+                    let blank = first.saturating_sub(prev + 1);
+                    if blank > 1 && loose.is_empty() {
+                        out.push(Block::Space(blank - 1));
+                    }
+                }
+                last_line = Some(self.lines.line_of(r.end - 1).max(first));
+            }
             match ev {
                 Event::End(t) if Some(t) == until => break,
                 Event::Start(tag) => {
@@ -517,7 +532,8 @@ impl<'a> Builder<'a> {
         match ev {
             Event::Text(t) => out.push(Inline::Text(t.to_string(), *style)),
             Event::Code(t) => out.push(Inline::Code(t.to_string())),
-            Event::SoftBreak => out.push(Inline::Text(" ".into(), *style)),
+            // a single line break shows as one, as in Obsidian (without strict line breaks)
+            Event::SoftBreak => out.push(Inline::Break),
             Event::HardBreak => out.push(Inline::Break),
             Event::InlineMath(m) => out.push(Inline::Math(m.to_string())),
             Event::DisplayMath(m) => out.push(Inline::DisplayMath(m.to_string())),
@@ -635,7 +651,7 @@ impl Runs {
     /// Lay out and draw; returns the action of a clicked link.
     pub fn show(self, ui: &mut egui::Ui) -> Option<Action> {
         let w = ui.available_width();
-        self.show_width(ui, w)
+        self.show_aligned(ui, w, crate::align::current())
     }
 
     /// Table cells: their natural width up to a limit (a grid starts narrow).
@@ -644,12 +660,17 @@ impl Runs {
     }
 
     pub fn show_width(self, ui: &mut egui::Ui, width: f32) -> Option<Action> {
+        self.show_aligned(ui, width, crate::align::TextAlign::Left)
+    }
+
+    /// Laid out with the note's alignment (justified, centred, to the right).
+    pub fn show_aligned(self, ui: &mut egui::Ui, width: f32, align: crate::align::TextAlign) -> Option<Action> {
         if self.is_empty() {
             return None;
         }
         let mut job = self.job;
         job.wrap.max_width = width;
-        let galley = ui.fonts(|f| f.layout_job(job));
+        let galley = ui.fonts(|f| crate::align::layout(f, job, width, align));
         let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
         let hover_link = resp.hover_pos().and_then(|p| {
             let c = galley.cursor_from_pos(p - rect.min).ccursor.index;
@@ -988,6 +1009,7 @@ impl<'h> Renderer<'h> {
             if i > 0 {
                 // headings bring their own space above
                 let gap = match b {
+                    Block::Space(_) => 0.0,
                     Block::Heading { level, .. } => size * if *level <= 2 { 1.5 } else { 1.1 },
                     _ => size * 0.7,
                 };
@@ -1192,6 +1214,7 @@ impl<'h> Renderer<'h> {
                 });
                 self.in_cell = false;
             }
+            Block::Space(n) => ui.add_space(size * 1.45 * *n as f32),
             Block::Rule => {
                 ui.add_space(size * 0.6);
                 let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 1.0), Sense::hover());
@@ -1346,5 +1369,15 @@ mod tests {
         let Block::Callout { kind, folded, .. } = &d.blocks[3] else { panic!() };
         assert_eq!(kind, "warning");
         assert_eq!(*folded, Some(true));
+    }
+
+    #[test]
+    fn blank_lines_and_line_breaks_are_kept() {
+        let d = parse("um\ndois\n\n\n\ntrês\n\nquatro");
+        let Block::Para(inl) = &d.blocks[0] else { panic!() };
+        assert!(inl.iter().any(|i| matches!(i, Inline::Break)));
+        assert!(matches!(d.blocks[1], Block::Space(2)), "{:?}", d.blocks);
+        assert!(matches!(d.blocks[2], Block::Para(_)));
+        assert!(matches!(d.blocks[3], Block::Para(_)), "one blank line is the usual gap");
     }
 }

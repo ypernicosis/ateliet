@@ -215,3 +215,14 @@ file-search
 message-circle zap shapes sunset chevrons-up chevrons-down file-down spline magnet corner-down-left message-square-text
 presentation infinity book-open-text square-split-horizontal
 circle-arrow-down shuffle paint-bucket lasso square-dashed slash move-up-right flip-horizontal-2 merge
+align-justify
+align-right
+mouse-pointer-2
+droplet
+frame
+bring-to-front
+send-to-back
+contrast
+fullscreen
+grid-2x2
+layout-dashboard
