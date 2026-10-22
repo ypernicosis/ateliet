@@ -773,6 +773,17 @@ impl App {
                 let source = self.active_path().unwrap_or_default();
                 self.sc_apply(crate::sc::Action::Music(crate::music::Cmd::PlaySrc(src, source)));
             }
+            Action::External(target) => {
+                let source = self.active_path().unwrap_or_default();
+                if let Some(v) = &self.vault {
+                    match v.resolve(&target, &source) {
+                        Some(p) => {
+                            let _ = open::that(v.abs(&p));
+                        }
+                        None => self.toast(format!("“{target}” não foi encontrado.")),
+                    }
+                }
+            }
         }
     }
 

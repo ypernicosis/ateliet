@@ -582,6 +582,8 @@ pub enum Action {
     Play(String),
     /// Open a composed page (its id) of this note in the compositor.
     EditPage(String),
+    /// A file of the vault (video, PDF…) in the system's app.
+    External(String),
 }
 
 /// What the renderer needs from the app.
@@ -1127,6 +1129,25 @@ impl<'h> Renderer<'h> {
                 let ext = target.rsplit('.').next().unwrap_or("").to_lowercase();
                 if ["png", "jpg", "jpeg", "gif", "webp", "bmp"].contains(&ext.as_str()) {
                     self.image(ui, target.split('#').next().unwrap_or(target), alt, true);
+                    return;
+                }
+                // audio plays here; video and PDF open in the system's app
+                let media = match ext.as_str() {
+                    "mp3" | "wav" | "m4a" | "ogg" | "flac" | "webm" | "3gp" => Some((crate::icons::PLAY, "áudio · tocar", true)),
+                    "mp4" | "mov" | "mkv" | "ogv" | "avi" => Some((crate::icons::FILM, "vídeo · abrir", false)),
+                    "pdf" => Some((crate::icons::FILE_TEXT, "PDF · abrir", false)),
+                    _ => None,
+                };
+                if let Some((icon, kind, audio)) = media {
+                    let file = target.split('#').next().unwrap_or(target).to_string();
+                    let name = file.rsplit('/').next().unwrap_or(&file).to_string();
+                    egui::Frame::new().fill(p.bg_secondary).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let r = crate::kit::Row::new(&name).icon(icon).trailing(kind.to_string()).show(ui, p);
+                        if r.clicked() {
+                            self.actions.push(if audio { Action::Play(format!("[[{file}]]")) } else { Action::External(file.clone()) });
+                        }
+                    });
                     return;
                 }
                 if self.depth >= 2 {
