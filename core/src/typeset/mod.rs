@@ -141,10 +141,10 @@ pub fn hex(c: &str) -> Option<[u8; 3]> {
 #[cfg(test)]
 pub(crate) mod testfonts {
     pub const BUNDLED: [&[u8]; 4] = [
-        include_bytes!("../../../native/assets/fonts/EBGaramond-Medium.ttf"),
-        include_bytes!("../../../native/assets/fonts/EBGaramond-MediumItalic.ttf"),
-        include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
-        include_bytes!("../../../native/assets/fonts/CormorantGaramond-MediumItalic.ttf"),
+        include_bytes!("../../../assets/fonts/EBGaramond-Medium.ttf"),
+        include_bytes!("../../../assets/fonts/EBGaramond-MediumItalic.ttf"),
+        include_bytes!("../../../assets/fonts/CormorantGaramond-Medium.ttf"),
+        include_bytes!("../../../assets/fonts/CormorantGaramond-MediumItalic.ttf"),
     ];
 }
 
@@ -203,15 +203,15 @@ mod book_tests {
         let b = crate::scriptorium::book::book_by_path(&ix, &book_path, "").expect("book");
         let m = model::build(root, &ix, &b, &crate::scriptorium::export::Options::default());
         let db = fonts::FontDb::new(&[
-            include_bytes!("../../../native/assets/fonts/EBGaramond-Medium.ttf"),
-            include_bytes!("../../../native/assets/fonts/EBGaramond-MediumItalic.ttf"),
-            include_bytes!("../../../native/assets/fonts/EBGaramond-Bold.ttf"),
-            include_bytes!("../../../native/assets/fonts/EBGaramond-BoldItalic.ttf"),
-            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
-            include_bytes!("../../../native/assets/fonts/CormorantGaramond-MediumItalic.ttf"),
-            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Bold.ttf"),
-            include_bytes!("../../../native/assets/fonts/Cinzel-Bold.ttf"),
-            include_bytes!("../../../native/assets/fonts/Inter-SemiBold.ttf"),
+            include_bytes!("../../../assets/fonts/EBGaramond-Medium.ttf"),
+            include_bytes!("../../../assets/fonts/EBGaramond-MediumItalic.ttf"),
+            include_bytes!("../../../assets/fonts/EBGaramond-Bold.ttf"),
+            include_bytes!("../../../assets/fonts/EBGaramond-BoldItalic.ttf"),
+            include_bytes!("../../../assets/fonts/CormorantGaramond-Medium.ttf"),
+            include_bytes!("../../../assets/fonts/CormorantGaramond-MediumItalic.ttf"),
+            include_bytes!("../../../assets/fonts/CormorantGaramond-Bold.ttf"),
+            include_bytes!("../../../assets/fonts/Cinzel-Bold.ttf"),
+            include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
         ]);
         let t0 = std::time::Instant::now();
         let laid = layout::typeset(&m, &db, &layout::Options { print: true });
@@ -231,10 +231,10 @@ mod book_tests {
         let ix = crate::dataview::index::Index::build(root);
         let b = crate::scriptorium::book::book_by_path(&ix, &book_path, "").expect("book");
         let db = fonts::FontDb::new(&[
-            include_bytes!("../../../native/assets/fonts/EBGaramond-Medium.ttf"),
-            include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
-            include_bytes!("../../../native/assets/fonts/Cinzel-Bold.ttf"),
-            include_bytes!("../../../native/assets/fonts/Inter-Regular.ttf"),
+            include_bytes!("../../../assets/fonts/EBGaramond-Medium.ttf"),
+            include_bytes!("../../../assets/fonts/CormorantGaramond-Medium.ttf"),
+            include_bytes!("../../../assets/fonts/Cinzel-Bold.ttf"),
+            include_bytes!("../../../assets/fonts/Inter-Regular.ttf"),
         ]);
         let m = crate::scriptorium::capa::load_or_default(root, &b);
         let cfg = crate::scriptorium::book::layout(&b);

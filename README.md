@@ -5,40 +5,25 @@
   </picture>
 </h1>
 
-Um clone minimalista do Obsidian, com núcleo em **Rust**, que abre **o mesmo vault** que o Obsidian e roda os **plugins da comunidade do Obsidian sem modificação**.
 
-- **Leve**: Tauri 2 + a webview nativa do sistema (WebKit no macOS), em vez de um Chromium embutido. O frontend tem cerca de 0,8 MB minificado, e as linguagens de código são carregadas sob demanda.
-- **Compatível**: implementa a API pública `obsidian` (o contrato do `obsidian.d.ts`) e as APIs internas mais usadas pelos plugins populares.
-- **Customizável**: temas, snippets CSS, atalhos e plugins são lidos de `.obsidian/`, as mesmas pastas e arquivos do Obsidian.
+Um clone minimalista do Obsidian, escrito em **Rust**, que abre **o mesmo vault** que o Obsidian, com as mesmas notas e configurações.
+
+- **Nativo**: a interface é desenhada com egui, sem webview, sem GTK e sem Chromium embutido. O binário tem cerca de 14 MB, com a fonte Inter e os ícones Lucide embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
+- **Compatível**: lê e grava `.obsidian/` (preferências, atalhos, favoritos, notas diárias, templates, temas e snippets) nos mesmos arquivos do Obsidian, e traz embutidos o Dataview, o Templater e o Calendar.
 
 ## Rodando
 
-Requisitos: Rust (stable) e [Deno](https://deno.com) (só para empacotar o frontend; não precisa de Node). Na primeira compilação, o crate `ort` baixa o ONNX Runtime (usado pela busca de imagens) e o liga estaticamente ao binário. Sem acesso a esses binários, compile com `--no-default-features --features ort-dynamic` e aponte `ORT_DYLIB_PATH` para uma `libonnxruntime` instalada no sistema.
+Requisitos: Rust (stable). Na primeira compilação, o crate `ort` baixa o ONNX Runtime (usado pela busca de imagens por descrição) e o liga estaticamente ao binário. Sem acesso a esses binários, compile com `--no-default-features --features vision-dynamic,audio` e aponte `ORT_DYLIB_PATH` para uma `libonnxruntime` instalada no sistema; com `--no-default-features --features audio`, a busca de imagens fica só por nome. No Linux, o áudio precisa dos cabeçalhos da ALSA (`libasound2-dev`); sem eles, deixe `audio` de fora.
 
 ```sh
-./build.sh            # empacota ui/ → dist/
-cargo run -- ~/caminho/do/vault
+cargo run --release -- ~/caminho/do/vault
+sh scripts/bundle-macos.sh --install    # macOS: gera e instala /Applications/Ateliet.app
 ```
 
 Sem argumento, o Ateliet reabre o último vault ou mostra o seletor, que já lista os vaults conhecidos pelo Obsidian.
 
-App instalável (macOS `.app`/`.dmg`, Windows `.msi`, Linux `.deb`/`.AppImage`):
+## O que funciona
 
-```sh
-cargo install tauri-cli --version "^2"
-./build.sh && cargo tauri build
-```
-
-## Interface nativa (sem WebKit)
-
-A interface está sendo migrada para uma versão nativa em Rust (`native/`, desenhada com egui). Ela não usa webview nem GTK e abre o mesmo vault, com as mesmas notas e configurações. O binário tem cerca de 14 MB, com a fonte Inter e os ícones Lucide embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
-
-```sh
-cargo run -p ateliet-native --release -- ~/caminho/do/vault
-sh native/bundle-macos.sh --install    # gera e instala "Ateliet Native.app"
-```
-
-Já funciona:
 - **Notas**: editor com Live Preview por bloco (o bloco em edição vira texto e os outros aparecem renderizados), modo código-fonte e modo de leitura. Salvamento automático, abas reabertas por vault, propriedades do frontmatter.
 - **Markdown do Obsidian**: wikilinks e embeds (notas, seções e imagens), tags, callouts dobráveis, realce, campos inline, tarefas com status personalizados que se marcam clicando, tabelas e código.
 - **Ferramentas embutidas**: blocos `dataview`, `dataviewjs` e consultas inline, desenhados a partir do núcleo; Templater com as janelas de prompt e de escolha; calendário de notas diárias.
@@ -54,9 +39,11 @@ Já funciona:
 - **Trilha sonora**: faixas com capa, temas (a música de um personagem, capítulo, cena, trama, ato ou lugar) e o diário do que tocava enquanto cada capítulo era escrito; no Mac, a playlist do livro vem do app Música (nome, artista, álbum, ano e capa) e o Ateliet toca, pausa e pula faixas nele; áudios do cofre tocam no próprio app, links abrem no serviço. Um mini player na barra de status oferece "Escrever ouvindo…", e blocos ```playlist``` viram listas tocáveis. No Linux, o áudio no app precisa dos cabeçalhos da ALSA (`libasound2-dev`); sem eles, compile com `--no-default-features --features vision`.
 - **Mapas interativos**: uma imagem com pinos (ligados a notas ou a outros mapas, com a trilha de volta), rótulos, os 26 carimbos do plugin e os seus próprios desenhos, rotas e áreas; régua com distância e dias de viagem, escala plana ou de mundo inteiro (Mollweide, com a elipse detectada na imagem); linha do tempo que mostra o mapa num ano das eras do mundo; exportação em PNG.
 
-Temas da comunidade: a interface nativa usa as cores do tema escolhido em Configurações › Aparência (as variáveis `--background-primary`, `--text-normal`, `--interactive-accent`… do `theme.css` e dos snippets ativos, nos modos claro e escuro); o restante do CSS de um tema só vale na interface web.
+Temas da comunidade: o Ateliet usa as cores do tema escolhido em Configurações › Aparência (as variáveis `--background-primary`, `--text-normal`, `--interactive-accent`… do `theme.css` e dos snippets ativos, nos modos claro e escuro); o restante do CSS de um tema não é aplicado.
 
-Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), o CSS dos temas além das cores, e os plugins do Pictogrep. A biblioteca compartilhada com o Pictogrep (Configurações › Imagens) aparece no modo imagem nativo com as suas coleções, e as pastas de fora do cofre também; uma imagem de fora usada numa nota é copiada para o cofre. O botão de download no alto das coleções traz pastas e pins do Pinterest para a biblioteca compartilhada (ou para a pasta Pinterest do cofre) e segue pastas, verificadas de hora em hora como no Pictogrep. O botão de atualizar (a seta no pé da barra lateral) também existe na versão nativa: verifica o checkout de onde o app foi compilado, puxa, recompila com as mesmas features e oferece reiniciar.
+A biblioteca compartilhada com o Pictogrep (Configurações › Imagens) aparece no modo imagens com as suas coleções, e as pastas de fora do cofre também; uma imagem de fora usada numa nota é copiada para o cofre. O botão de download no alto das coleções traz pastas e pins do Pinterest para a biblioteca compartilhada (ou para a pasta Pinterest do cofre) e segue pastas, verificadas de hora em hora como no Pictogrep. O botão de atualizar (a seta no pé da barra lateral): verifica o checkout de onde o app foi compilado, puxa, recompila com as mesmas features e oferece reiniciar.
+
+Não há plugins da comunidade: eles dependem de um navegador. Os arquivos deles em `.obsidian/plugins/` não são tocados, e o Obsidian continua a usá-los no mesmo vault.
 
 ## Instalando no macOS
 
@@ -70,41 +57,31 @@ xcode-select --install
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 
-# 3. Deno (empacota a interface)
-curl -fsSL https://deno.land/install.sh | sh -s -- -y
-export PATH="$HOME/.deno/bin:$PATH"
-
-# 4. CLI do Tauri (gera o .app)
-cargo install tauri-cli --version "^2" --locked
-
-# 5. O código
+# 3. O código
 mkdir -p ~/Developer && cd ~/Developer
 git clone https://github.com/ypernicosis/ateliet.git
 cd ateliet
 
-# 6. Compilar (a primeira vez leva alguns minutos)
-./build.sh && cargo tauri build --bundles app
-
-# 7. Instalar e abrir
-rm -rf /Applications/Ateliet.app
-cp -R target/release/bundle/macos/Ateliet.app /Applications/
+# 4. Compilar e instalar (a primeira vez leva alguns minutos)
+sh scripts/bundle-macos.sh --install
 open /Applications/Ateliet.app
 ```
 
-Se você já tem um clone, troque os passos 5 a 7 por: feche o Ateliet, entre na pasta do clone, rode `git checkout main && git pull` e depois os passos 6 e 7.
+Se você já tem um clone, troque os passos 3 e 4 por: feche o Ateliet, entre na pasta do clone, rode `git checkout main && git pull` e depois o passo 4.
+
+**Vindo da versão com webview.** O Ateliet instalado antes desta versão (feito com Tauri) se atualiza para esta pelo próprio botão de atualizar: ele puxa o clone, roda `build.sh` (que agora não faz nada) e compila com `--features tauri/custom-protocol`, que um pacote vazio em `compat/tauri` mantém válido. O executável dentro de `/Applications/Ateliet.app` é trocado pelo novo e, ao reiniciar, abre a interface nativa. Notas, vaults e configurações continuam onde estavam.
 
 ## Atualizando
 
-Na parte de baixo da faixa lateral esquerda fica o botão de atualizar (uma seta para baixo num círculo, também disponível como comando *Update Ateliet*). O Ateliet roda `git fetch` no clone ao abrir e a cada 30 minutos; quando há commits novos no branch acompanhado, o botão fica colorido com um ponto. Ao clicar, ele lista os commits novos e, em *Update and restart*:
+No pé da barra lateral esquerda fica o botão de atualizar (também na paleta de comandos). O Ateliet roda `git fetch` no clone ao abrir e a cada 30 minutos; quando há commits novos no branch acompanhado, o botão ganha um ponto. Ao atualizar, ele:
 
 1. roda `git pull --ff-only` no clone;
-2. empacota a interface (`./build.sh`);
-3. compila (`cargo build --release`);
-4. troca o executável do app instalado (dentro do `.app`) e reinicia, salvando as notas abertas antes.
+2. compila (`cargo build --release`), com as mesmas features com que foi compilado;
+3. troca o executável do app instalado (dentro do `.app`) e oferece reiniciar.
 
-O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou. Sem commits novos, o mesmo botão oferece *Rebuild anyway*.
+O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou.
 
-**Atualização automática** (ligada por padrão; a chave *Update automatically* fica na mesma janela). Quando a verificação acha commits novos, o Ateliet faz os passos 1 a 4 sozinho, em segundo plano, sem reiniciar: um aviso diz que está atualizando e outro, no fim, oferece reiniciar na hora. Quem não reiniciar abre a versão nova da próxima vez. Se algum passo falhar (por exemplo, o clone tem mudanças locais que impedem o `git pull --ff-only`), aparece um aviso com o erro e o mesmo commit não é tentado de novo até o app reabrir; o log completo fica em *Update Ateliet*. O app guarda o caminho do clone em que foi compilado: se você mover o clone, compile e instale de novo a partir do novo lugar (passos 6 e 7).
+**Atualização automática** (ligada por padrão, com a chave na mesma janela). Quando a verificação acha commits novos, o Ateliet faz os passos 1 a 3 sozinho, em segundo plano, e no fim oferece reiniciar. Quem não reiniciar abre a versão nova da próxima vez. Se algum passo falhar (por exemplo, o clone tem mudanças locais que impedem o `git pull --ff-only`), aparece um aviso com o erro e o mesmo commit não é tentado de novo até o app reabrir. O app guarda o caminho do clone em que foi compilado (ou o de `ATELIET_SOURCE`): se você mover o clone, compile e instale de novo a partir do novo lugar.
 
 ## Benchmark
 
@@ -136,7 +113,6 @@ Com o Pictogrep instalado, o modo imagens usa **a mesma pasta** que ele (Setting
 - **Os dois nunca escrevem o mesmo arquivo ao mesmo tempo.** Com o Pictogrep aberto, o Ateliet só grava os arquivos e pede a ele, pela API local, que releia a biblioteca. Com ele fechado, o Ateliet atualiza `data/library-state.json`.
 - **O que o Pictogrep já analisou não é analisado de novo.** Os vetores de `data/embeddings-v1.bin` usam o mesmo modelo e são reaproveitados.
 - **Uma biblioteca só do Ateliet.** "Copy library…" (Settings → Images) copia a pasta inteira do Pictogrep para uma pasta do Ateliet (`~/.local/share/ateliet/library`, `~/Library/Application Support/ateliet/library` no macOS, ou outra escolhida) e passa a usá-la: imagens, coleções, o que já foi analisado para a busca, quadros seguidos do Pinterest, plugins e o que eles guardaram, e os storyboards do Pictogrep. Os links das coleções e os caminhos guardados em JSON e nos vetores passam a apontar para a cópia, e os arquivos mantêm as datas, então nada é analisado de novo. A cópia é feita ao lado e só é colocada no lugar no fim; cancelada ou com erro, não fica nada pela metade. Em APFS, Btrfs e XFS os arquivos copiados dividem espaço com os originais até um deles mudar. Depois disso as duas bibliotecas são independentes: o Ateliet funciona igual com o Pictogrep aberto, fechado ou desinstalado (e o Pictogrep pode usar a cópia se for aberto com `PICTOGREP_HOME` apontando para ela).
-- **Plugins do Pictogrep** (`plugins/<id>/plugin.json`) aparecem em "Plugins" e abrem numa aba, isolados como no Pictogrep: iframe só com scripts, sem rede, numa origem própria (`pgplugin://`), com a mesma API (`window.pictogrep`, versão 0) e as permissões do manifesto conferidas a cada chamada. Eles enxergam a biblioteca compartilhada, e o armazenamento deles (`data/plugins/<id>.json`) é o mesmo nos dois apps.
 
 ### Importar do Pinterest
 
@@ -171,7 +147,7 @@ Desfazer/refazer cobre tudo (`Ctrl/Cmd+Z`, `Ctrl/Cmd+Shift+Z`), e o arquivo é s
 
 ## Ferramentas embutidas: Dataview, Templater e Calendar
 
-Estes três antes eram plugins da comunidade e agora fazem parte do Ateliet, com o motor em Rust. Os plugins com os mesmos ids (`dataview`, `templater-obsidian`, `calendar`) deixam de ser carregados, mesmo que continuem em `.obsidian/plugins/` e no `community-plugins.json`. Assim o Obsidian, se ainda abrir o mesmo vault, usa os dele normalmente. As configurações são lidas do `data.json` de cada plugin na primeira vez e depois ficam em `.obsidian/ateliet/<ferramenta>.json`.
+Estes três antes eram plugins da comunidade e agora fazem parte do Ateliet, com o motor em Rust. Os plugins com os mesmos ids (`dataview`, `templater-obsidian`, `calendar`) podem continuar em `.obsidian/plugins/`: o Obsidian, se ainda abrir o mesmo vault, usa os dele normalmente. As configurações são lidas do `data.json` de cada plugin na primeira vez e depois ficam em `.obsidian/ateliet/<ferramenta>.json`.
 
 - **Dataview**: blocos `dataview` (`LIST`, `TABLE`, `TASK` e `CALENDAR`, com `FROM`, `WHERE`, `SORT`, `GROUP BY`, `FLATTEN` e `LIMIT`) e as funções da linguagem, consultas inline (`` `= this.campo` ``), campos inline (`chave:: valor`, `[chave:: valor]`, `(chave:: valor)`) estilizados na leitura e no Live Preview, e tarefas que se marcam pela própria lista. Os blocos `dataviewjs` e as consultas `` `$= …` `` rodam num motor JavaScript (QuickJS) embutido no Rust, com a API `dv` (`pages`, `current`, `table`, `list`, `taskList`, `paragraph`, `el`, `query`, `io.load`, `view`…), as datas do Luxon e o `moment`. A interface só desenha o resultado, com as mesmas classes do plugin, então os temas continuam valendo.
 - **Templater**: `<% %>`, `<%* %>` e o controle de espaços com `-`/`_`, rodando no mesmo motor. Inclui `tp.date`, `tp.file` (`title`, `content`, `cursor`, `rename`, `move`, `include`, `create_new`, `exists`, `find_tfile`, `selection`…), `tp.frontmatter`, `tp.system.prompt` e `suggester` (com janelas do próprio Ateliet) e `tp.config`. Comandos: inserir template (Alt+E), criar nota a partir de template (Alt+N), substituir templates na nota (Alt+R) e um comando por template configurado com atalho. Os atalhos do `hotkeys.json` continuam valendo, porque os ids dos comandos são os mesmos. Também há templates por pasta para notas novas. Fica de fora o que depende do Obsidian ou da rede: `app`, `tp.obsidian`, `tp.web` e scripts de usuário.
@@ -196,24 +172,6 @@ Estes três antes eram plugins da comunidade e agora fazem parte do Ateliet, com
 | Storyboards | arquivos `.storyboard` no vault | ficam no vault; o Obsidian só os vê como arquivos |
 
 Mudanças feitas por um app aparecem ao vivo no outro: o watcher em Rust detecta e o vault concilia criação, edição, remoção e renomeação. Quando o Obsidian altera o `data.json` de um plugin, o Ateliet chama `onExternalSettingsChange()` nesse plugin.
-
-## O que funciona
-
-- Editor CodeMirror 6 com **Live Preview** (marcação escondida fora do cursor; checkboxes, bullets, imagens, callouts, tabelas, matemática, embeds de notas, blocos de código com processador (Dataview, mermaid) e propriedades como widgets), modo código-fonte e **modo de leitura** renderizado pelo Rust.
-- Wikilinks, embeds (notas com `#heading`/`^bloco`, imagens, áudio, vídeo, PDF), tags, callouts dobráveis, realce, comentários `%% %%`, matemática (MathJax), mermaid, notas de rodapé e tarefas com status personalizados.
-- Explorador de arquivos (arrastar para mover, renomear inline, ordenação), busca global em Rust (`path:`, `file:`, `tag:`, `"frase"`, `-exclusão`, `OR`, `/regex/`), Quick Switcher, Paleta de Comandos, backlinks (com menções não linkadas), links de saída, tags, outline, favoritos, notas diárias, templates, contagem de palavras e page preview ao passar o mouse.
-- Renomear arquivos **atualiza os links** no vault inteiro.
-- Abas, splits, barras laterais redimensionáveis, histórico voltar/avançar por aba e arrastar abas.
-- Configurações no estilo Obsidian: editor, arquivos e links, aparência, atalhos (gravando no `hotkeys.json`), core plugins e plugins da comunidade, com **instalação direta do catálogo oficial** de plugins e temas.
-
-Plugins testados num vault real: Tasks, Kanban (inclusive criar cartões pelo editor inline), Excalidraw, Style Settings, Make.md, PDF++, Code Styler, Advanced Tables, Novel Word Count, Mermaid Tools, Mehrmaid, ePub Reader, Docxer, Terminal e Blender Viewer.
-
-## Limitações conhecidas
-
-- O editor do Obsidian é um modo CM5 ("hypermd") dentro do CM6. O Ateliet usa o parser lezer-markdown com as mesmas classes de token (`tokenClassNodeProp`), mas extensões que **substituem** a linguagem do editor são ignoradas.
-- Não há Canvas, Graph view, Bases, Sync nem Publish. O Excalidraw recebe um stub mínimo do Canvas para embutir notas.
-- Do Node/Electron existem shims, não o ambiente completo: `fs` (síncrono e assíncrono), `path`, `os`, `child_process` (spawn/exec/execSync via Rust, sem PTY), `stream` básico, `electron.shell`/`remote` parciais. Módulos nativos como `node-pty` não funcionam.
-- Janelas pop-out abrem como abas.
 
 ## Arquitetura
 

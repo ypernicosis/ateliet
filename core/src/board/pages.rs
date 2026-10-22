@@ -976,7 +976,7 @@ mod tests {
         let mut d = board_for_kind(&o);
         d.board["frames"][0]["balloons"] = json!([new_balloon("speech", R { x: 60.0, y: 60.0, w: 120.0, h: 60.0 }, false, 14.0)]);
         d.board["frames"][0]["balloons"][0]["text"] = json!("Olá!");
-        let db = FontDb::new(&[include_bytes!("../../../native/assets/fonts/Inter-Regular.ttf")]);
+        let db = FontDb::new(&[include_bytes!("../../../assets/fonts/Inter-Regular.ttf")]);
         let mut pics = super::super::compose::Pictures::default();
         let (w, h, px) = page_image(&mut d, &mut pics, &db, 0, 1.0, true);
         assert_eq!((w, h), (d.width(), d.height()));
@@ -995,7 +995,7 @@ mod tests {
             d.add_frame(i);
         }
         d.board["frames"][0]["notes"]["action"] = json!("Ana atravessa o deserto.");
-        let db = FontDb::new(&[include_bytes!("../../../native/assets/fonts/Inter-Regular.ttf")]);
+        let db = FontDb::new(&[include_bytes!("../../../assets/fonts/Inter-Regular.ttf")]);
         let mut pics = super::super::compose::Pictures::default();
         let pdf = presentation_pdf(&mut d, &mut pics, &db, "Prancha", 6).unwrap();
         assert!(pdf.starts_with(b"%PDF"));
