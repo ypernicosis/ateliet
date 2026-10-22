@@ -322,9 +322,11 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "dirs 6.0.0",
  "fancy-regex",
  "flate2",
  "image",
+ "libc",
  "once_cell",
  "ort",
  "pdf-writer",
@@ -342,6 +344,7 @@ dependencies = [
  "subsetter",
  "ttf-parser",
  "unicode-normalization",
+ "ureq 2.12.1",
  "walkdir",
 ]
 

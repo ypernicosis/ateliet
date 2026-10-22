@@ -964,7 +964,7 @@ impl App {
         match act {
             Some(crate::images_ui::ImageAction::Insert(keys)) => self.insert_pictures(&keys),
             Some(crate::images_ui::ImageAction::NewNote(keys)) => {
-                let folder = self.images.folder.clone().unwrap_or_default();
+                let folder = self.images.folder.clone().filter(|f| !std::path::Path::new(f).is_absolute()).unwrap_or_default();
                 self.new_note(&folder);
                 self.ask = None;
                 self.insert_pictures(&keys);
@@ -974,12 +974,41 @@ impl App {
         }
     }
 
+    /// A picture key as a vault path: one outside the vault is copied into the
+    /// attachment folder (`importFolder`, or the open note's folder).
+    pub fn picture_into_vault(&mut self, key: &str) -> String {
+        let p = std::path::Path::new(key);
+        let Some(v) = &self.vault else { return key.to_string() };
+        if !p.is_absolute() {
+            return key.to_string();
+        }
+        let st = crate::images_ui::ImagesState::settings(&v.root);
+        let folder = st["importFolder"].as_str().filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| self.active_path().map(|a| vault::parent(&a).to_string()).unwrap_or_default());
+        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "imagem.png".into());
+        let (stem, ext) = name.rsplit_once('.').map(|(a, b)| (a.to_string(), format!(".{b}"))).unwrap_or((name.clone(), String::new()));
+        let mut rel = if folder.is_empty() { name.clone() } else { format!("{folder}/{name}") };
+        let mut n = 1;
+        while v.abs(&rel).exists() {
+            n += 1;
+            rel = if folder.is_empty() { format!("{stem} {n}{ext}") } else { format!("{folder}/{stem} {n}{ext}") };
+        }
+        if let Some(d) = v.abs(&rel).parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        match std::fs::copy(p, v.abs(&rel)) {
+            Ok(_) => rel,
+            Err(_) => key.to_string(),
+        }
+    }
+
     /// `![[picture]]` lines at the cursor of the open note (a new note when none is open).
     pub fn insert_pictures(&mut self, keys: &[String]) {
         if self.tabs.is_empty() {
             self.new_note("");
             self.ask = None;
         }
+        // pictures from outside the vault (shared library, external folders) are copied in first
+        let keys: Vec<String> = keys.iter().map(|k| self.picture_into_vault(k)).collect();
         let Some(t) = self.tabs.get_mut(self.active) else { return };
         let embeds: String = keys.iter().map(|k| format!("![[{}]]\n", k.rsplit('/').next().unwrap_or(k))).collect();
         let b = editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));

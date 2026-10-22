@@ -106,6 +106,12 @@ pub struct ImagesState {
     scanning: Option<std::sync::mpsc::Receiver<(Vec<ImageEntry>, images::Index)>>,
     root: PathBuf,
     pub cell: f32,
+    /// The shared picture library (Pictogrep's folder) in use, if any.
+    pub shared: Option<ateliet_core::pictogrep::Home>,
+    /// A shared collection shown ("" is the whole shared library).
+    pub collection: Option<String>,
+    /// Shared collections: (name, members' absolute paths).
+    collections: Vec<(String, HashSet<String>)>,
 }
 
 impl Default for ImagesState {
@@ -127,6 +133,9 @@ impl Default for ImagesState {
             scanning: None,
             root: PathBuf::new(),
             cell: 170.0,
+            shared: None,
+            collection: None,
+            collections: Vec::new(),
         }
     }
 }
@@ -150,13 +159,69 @@ impl ImagesState {
         }
     }
 
+    /// The image settings shared with the web interface (`ateliet/images.json`).
+    pub fn settings(root: &Path) -> serde_json::Value {
+        std::fs::read_to_string(root.join(".obsidian/ateliet/images.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    pub fn save_settings(root: &Path, patch: serde_json::Value) {
+        let mut s = Self::settings(root);
+        if !s.is_object() {
+            s = serde_json::json!({});
+        }
+        for (k, v) in patch.as_object().into_iter().flatten() {
+            s[k] = v.clone();
+        }
+        let p = root.join(".obsidian/ateliet/images.json");
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(p, serde_json::to_string_pretty(&s).unwrap_or_default());
+    }
+
+    /// The folders scanned: the vault, the shared library's, the external ones.
+    fn sources(root: &Path, shared: Option<&ateliet_core::pictogrep::Home>, external: &[String]) -> Vec<Source> {
+        use ateliet_core::images::Origin;
+        let mut s = vec![Source::vault(root.to_path_buf())];
+        let mut add = |p: PathBuf, origin: Origin| {
+            if p.is_dir() && !p.starts_with(root) && !s.iter().any(|x| x.root == p) {
+                s.push(Source::outside(p, origin));
+            }
+        };
+        if let Some(h) = shared {
+            let _ = std::fs::create_dir_all(h.library());
+            for r in ateliet_core::pictogrep::source_roots(h) {
+                add(r, Origin::Shared);
+            }
+        }
+        for e in external {
+            add(PathBuf::from(e), Origin::External);
+        }
+        s
+    }
+
     pub fn rescan(&mut self) {
+        if self.root.as_os_str().is_empty() {
+            return;
+        }
         let root = self.root.clone();
+        let st = Self::settings(&root);
+        let shared = match st["shared"].as_str().unwrap_or("auto").trim() {
+            "" => None,
+            "auto" => ateliet_core::pictogrep::detect(),
+            path => Some(ateliet_core::pictogrep::Home::new(PathBuf::from(path))).filter(|h| h.root.is_dir()),
+        };
+        let external: Vec<String> = st["external"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        self.collections = shared.as_ref().map(|h| ateliet_core::pictogrep::collection_names(h).into_iter().map(|n| {
+            let members = ateliet_core::pictogrep::collection_images(h, &n).into_iter().map(|p| p.to_string_lossy().to_string()).collect();
+            (n, members)
+        }).collect()).unwrap_or_default();
+        self.shared = shared.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let index_path = root.join(".obsidian/ateliet/images/index.bin");
             let mut index = images::Index::load(&index_path, MODEL_KEY, 512);
-            let found = images::scan(&[Source::vault(root.clone())]);
+            let found = images::scan(&Self::sources(&root, shared.as_ref(), &external));
             let entries = index.update_from_scan(&found);
             let _ = tx.send((entries, index));
         });
@@ -212,12 +277,21 @@ impl ImagesState {
     }
 
     fn refresh_shown(&mut self) {
-        let key = format!("{:?}|{}|{:?}|{}", self.folder, self.query, self.similar_to, self.entries.len());
+        let key = format!("{:?}|{:?}|{}|{:?}|{}", self.folder, self.collection, self.query, self.similar_to, self.entries.len());
         if key == self.shown_key {
             return;
         }
         self.shown_key = key;
-        let candidates: Vec<usize> = (0..self.entries.len()).filter(|&i| self.folder.as_ref().is_none_or(|f| &self.entries[i].folder == f)).collect();
+        let members = self.collection.as_ref().and_then(|c| self.collections.iter().find(|x| &x.0 == c)).map(|x| &x.1);
+        let candidates: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| self.folder.as_ref().is_none_or(|f| &self.entries[i].folder == f))
+            .filter(|&i| match (&self.collection, members) {
+                (None, _) => true,
+                (Some(c), _) if c.is_empty() => self.entries[i].origin == ateliet_core::images::Origin::Shared,
+                (Some(_), Some(m)) => m.contains(&self.entries[i].abs),
+                _ => false,
+            })
+            .collect();
         let index = self.index.clone();
         let ix = index.lock().unwrap();
         self.shown = if let Some(s) = self.similar_to {
@@ -277,7 +351,8 @@ impl ImagesState {
     /// Folders with pictures: (folder, count, cover index).
     pub fn folders(&self) -> Vec<(String, usize, usize)> {
         let mut m: HashMap<&str, (usize, usize, i64)> = HashMap::new();
-        for (i, e) in self.entries.iter().enumerate() {
+        // the shared library has its own rows (its collections)
+        for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.origin != ateliet_core::images::Origin::Shared) {
             let f = m.entry(e.folder.as_str()).or_insert((0, i, i64::MIN));
             f.0 += 1;
             if e.mtime > f.2 {
@@ -297,10 +372,29 @@ impl ImagesState {
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         let all = self.entries.len();
-        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none()).show(ui, p).clicked() {
+        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none()).show(ui, p).clicked() {
             self.folder = None;
+            self.collection = None;
             self.similar_to = None;
             self.viewer = None;
+        }
+        if self.shared.is_some() {
+            let n = self.entries.iter().filter(|e| e.origin == ateliet_core::images::Origin::Shared).count();
+            if kit::Row::new("Biblioteca compartilhada").icon(icons::LIBRARY_BIG).trailing(n.to_string()).selected(self.collection.as_deref() == Some("")).show(ui, p).on_hover_text("A pasta do Pictogrep: as mesmas imagens e coleções nos dois apps").clicked() {
+                self.folder = None;
+                self.collection = Some(String::new());
+                self.similar_to = None;
+                self.viewer = None;
+            }
+            let names: Vec<(String, usize)> = self.collections.iter().map(|(n, m)| (n.clone(), m.len())).collect();
+            for (name, n) in names {
+                if kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str())).show(ui, p).clicked() {
+                    self.folder = None;
+                    self.collection = Some(name.clone());
+                    self.similar_to = None;
+                    self.viewer = None;
+                }
+            }
         }
         ui.add_space(10.0);
         kit::section(ui, "Coleções", p);
@@ -328,6 +422,7 @@ impl ImagesState {
                 ui.painter().text(egui::pos2(thumb.right() + 10.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, if sel { kit::medium(13.0) } else { egui::FontId::proportional(13.0) }, p.text);
                 ui.painter().text(egui::pos2(rect.right() - 10.0, rect.center().y), egui::Align2::RIGHT_CENTER, n.to_string(), egui::FontId::proportional(11.5), p.faint);
                 if r.on_hover_text(&folder).clicked() {
+                    self.collection = None;
                     self.folder = Some(folder.clone());
                     self.similar_to = None;
                     self.viewer = None;

@@ -1038,7 +1038,7 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
     let page_id = egui::Id::new("settings-page");
     let mut page: usize = ctx.data(|d| d.get_temp(page_id)).unwrap_or(0);
     kit::scrim(ctx, p);
-    let pages = [(icons::PALETTE, "Aparência"), (icons::PEN_LINE, "Editor"), (icons::CALENDAR_DAYS, "Notas diárias"), (icons::LAYOUT_TEMPLATE, "Templater"), (icons::TABLE, "Dataview"), (icons::CALENDAR, "Calendário"), (icons::INFO, "Sobre")];
+    let pages = [(icons::PALETTE, "Aparência"), (icons::PEN_LINE, "Editor"), (icons::CALENDAR_DAYS, "Notas diárias"), (icons::LAYOUT_TEMPLATE, "Templater"), (icons::TABLE, "Dataview"), (icons::CALENDAR, "Calendário"), (icons::IMAGES, "Imagens"), (icons::INFO, "Sobre")];
     let win = egui::Window::new("settings").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::ZERO).corner_radius(14.0)).show(ctx, |ui| {
         let Some(cfg) = app.cfg.clone() else { return };
         ui.set_width(760.0);
@@ -1166,6 +1166,76 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                             }) {
                                 c.words_per_dot = wpd as u32;
                                 cfg.merge("ateliet/calendar.json", serde_json::json!({ "wordsPerDot": c.words_per_dot }));
+                            }
+                        }
+                        6 => {
+                            let root = app.vault.as_ref().map(|v| v.root.clone()).unwrap_or_default();
+                            let st = crate::images_ui::ImagesState::settings(&root);
+                            let shared = st["shared"].as_str().unwrap_or("auto").to_string();
+                            let mut rescan = false;
+                            kit::setting(ui, "Biblioteca compartilhada", "A pasta de dados do Pictogrep: as mesmas imagens e coleções nos dois apps.", p, |ui| {
+                                let label = match shared.as_str() {
+                                    "auto" => "Automática".to_string(),
+                                    "" => "Desligada".to_string(),
+                                    path => path.rsplit(['/', '\\']).next().unwrap_or(path).to_string(),
+                                };
+                                egui::ComboBox::from_id_salt("img-shared").width(170.0).selected_text(label).show_ui(ui, |ui| {
+                                    if ui.selectable_label(shared == "auto", "Automática (a do Pictogrep)").clicked() {
+                                        crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "shared": "auto" }));
+                                        rescan = true;
+                                    }
+                                    if ui.selectable_label(shared.is_empty(), "Desligada").clicked() {
+                                        crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "shared": "" }));
+                                        rescan = true;
+                                    }
+                                    if ui.selectable_label(false, "Escolher pasta…").clicked() {
+                                        if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                                            crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "shared": d.to_string_lossy() }));
+                                            rescan = true;
+                                        }
+                                    }
+                                });
+                            });
+                            match &app.images.shared {
+                                Some(h) => ui.label(RichText::new(format!("Em uso: {}{}", h.root.display(), if ateliet_core::pictogrep::is_running(h) { " (o Pictogrep está aberto)" } else { "" })).size(11.5).color(p.faint)),
+                                None => ui.label(RichText::new("Nenhuma biblioteca compartilhada em uso.").size(11.5).color(p.faint)),
+                            };
+                            ui.add_space(10.0);
+                            ui.label(RichText::new("Pastas de fora do cofre").font(kit::medium(13.0)).color(p.text));
+                            ui.label(RichText::new("As imagens ficam onde estão; só são copiadas para o cofre quando usadas numa nota.").size(11.5).color(p.faint));
+                            let external: Vec<String> = st["external"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+                            let mut remove = None;
+                            for e in &external {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(e).size(12.5).color(p.text));
+                                    if kit::icon_button_sized(ui, icons::X, "Tirar da biblioteca", false, p, 20.0, 11.0).clicked() {
+                                        remove = Some(e.clone());
+                                    }
+                                });
+                            }
+                            if kit::button(ui, Some(icons::FOLDER_CLOSED), "Adicionar pasta…", p).clicked() {
+                                if let Some(d) = rfd::FileDialog::new().pick_folder() {
+                                    let d = d.to_string_lossy().to_string();
+                                    if !d.starts_with(&root.to_string_lossy().to_string()) && !external.contains(&d) {
+                                        let mut list = external.clone();
+                                        list.push(d);
+                                        crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "external": list }));
+                                        rescan = true;
+                                    }
+                                }
+                            }
+                            if let Some(r) = remove {
+                                let list: Vec<String> = external.into_iter().filter(|x| *x != r).collect();
+                                crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "external": list }));
+                                rescan = true;
+                            }
+                            ui.add_space(10.0);
+                            let mut folder = st["importFolder"].as_str().unwrap_or("").to_string();
+                            if kit::setting(ui, "Pasta das imagens trazidas", "Onde ficam as cópias das imagens de fora usadas nas notas (vazio: a pasta da nota).", p, |ui| field(ui, &mut folder)) {
+                                crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "importFolder": folder.trim().trim_matches('/') }));
+                            }
+                            if rescan {
+                                app.images.rescan();
                             }
                         }
                         _ => {

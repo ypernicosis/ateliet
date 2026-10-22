@@ -29,6 +29,8 @@ percent-encoding = "2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "rayon"] }
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "ndarray"], optional = true }
 sha2 = "0.10"
+ureq = "2"
+dirs = "6"
 unicode-normalization = "0.1"
 flate2 = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -38,3 +40,6 @@ ttf-parser = "0.25"
 pdf-writer = "0.15"
 subsetter = "0.2"
 rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

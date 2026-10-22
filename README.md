@@ -56,7 +56,7 @@ Já funciona:
 
 Temas da comunidade: a interface nativa usa as cores do tema escolhido em Configurações › Aparência (as variáveis `--background-primary`, `--text-normal`, `--interactive-accent`… do `theme.css` e dos snippets ativos, nos modos claro e escuro); o restante do CSS de um tema só vale na interface web.
 
-Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), o CSS dos temas além das cores, e a biblioteca compartilhada com o Pictogrep. O botão de atualizar (a seta no pé da barra lateral) também existe na versão nativa: verifica o checkout de onde o app foi compilado, puxa, recompila com as mesmas features e oferece reiniciar.
+Ainda só na interface web: os plugins da comunidade (eles dependem de um navegador), o CSS dos temas além das cores, os plugins do Pictogrep e o download de pastas do Pinterest. A biblioteca compartilhada com o Pictogrep (Configurações › Imagens) aparece no modo imagem nativo com as suas coleções, e as pastas de fora do cofre também; uma imagem de fora usada numa nota é copiada para o cofre. O botão de atualizar (a seta no pé da barra lateral) também existe na versão nativa: verifica o checkout de onde o app foi compilado, puxa, recompila com as mesmas features e oferece reiniciar.
 
 ## Instalando no macOS
 
