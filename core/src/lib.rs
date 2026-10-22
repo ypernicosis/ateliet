@@ -18,6 +18,7 @@ pub mod css_theme;
 pub mod metadata;
 pub mod pictogrep;
 pub mod pinterest;
+pub mod relink;
 pub mod render;
 pub mod search;
 pub mod syntax;

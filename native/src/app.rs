@@ -585,7 +585,8 @@ impl App {
         }
     }
 
-    /// Rename/move a file and update the open tabs (links elsewhere are kept as they are).
+    /// Rename/move a file or folder; the open tabs and the links to it in
+    /// other notes follow.
     pub fn rename(&mut self, from: &str, new_name: &str) {
         self.save_all();
         let Some(v) = &self.vault else { return };
@@ -602,11 +603,44 @@ impl App {
         if let Some(d) = v.abs(&to).parent() {
             let _ = std::fs::create_dir_all(d);
         }
+        // what moves: the file, or every file in the folder
+        let prefix = format!("{from}/");
+        let moves: Vec<(String, String)> = if v.abs(from).is_dir() {
+            v.files.iter().filter(|e| !e.folder && e.path.starts_with(&prefix)).map(|e| (e.path.clone(), format!("{to}/{}", &e.path[prefix.len()..]))).collect()
+        } else {
+            vec![(from.to_string(), to.clone())]
+        };
         if let Err(e) = std::fs::rename(v.abs(from), v.abs(&to)) {
             self.toast(format!("Não foi possível renomear: {e}"));
             return;
         }
-        let prefix = format!("{from}/");
+        // links to it, resolved with the index as it was before the move
+        let mut relinked = 0;
+        if let Ok(ix) = v.index.read() {
+            let mut sources: Vec<String> = moves.iter().flat_map(|(old, _)| ix.inlinks(old)).collect();
+            sources.sort();
+            sources.dedup();
+            for src in sources {
+                // a note that moved too is read where it is now
+                let now = moves.iter().find(|(o, _)| *o == src).map(|(_, n)| n.clone()).unwrap_or_else(|| src.clone());
+                let Ok(text) = std::fs::read_to_string(v.abs(&now)) else { continue };
+                let moved = |t: &str| -> Option<String> {
+                    let r = ix.resolve(t, &src)?;
+                    moves.iter().find(|(o, _)| *o == r).map(|(_, n)| n.clone())
+                };
+                if let Some(new_text) = ateliet_core::relink::rewrite(&text, &moved) {
+                    if v.write(&now, &new_text).is_ok() {
+                        relinked += 1;
+                        for t in &mut self.tabs {
+                            if t.path == now || t.path == src {
+                                t.text = new_text.clone();
+                                t.saved = new_text.clone();
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for t in &mut self.tabs {
             if t.path == from {
                 t.path = to.clone();
@@ -614,9 +648,15 @@ impl App {
                 t.path = format!("{to}/{rest}");
             }
         }
-        v.index.write().unwrap().update(&[from.to_string(), to.clone()]);
+        let mut touched: Vec<String> = moves.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
+        touched.push(from.to_string());
+        touched.push(to.clone());
+        v.index.write().unwrap().update(&touched);
         self.vault.as_mut().unwrap().rescan();
         self.save_session();
+        if relinked > 0 {
+            self.toast(format!("Links atualizados em {relinked} {}.", if relinked == 1 { "nota" } else { "notas" }));
+        }
     }
 
     pub fn delete(&mut self, path: &str) {
