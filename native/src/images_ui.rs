@@ -88,6 +88,8 @@ pub struct Viewer {
     zoom: f32,
     offset: egui::Vec2,
     fit: bool,
+    /// Over the whole window (F).
+    full: bool,
 }
 
 pub struct ImagesState {
@@ -723,7 +725,7 @@ impl ImagesState {
             }
         });
         if let Some(i) = open {
-            self.viewer = Some(Viewer { idx: i, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true });
+            self.viewer = Some(Viewer { idx: i, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true, full: false });
         }
         action
     }
@@ -789,8 +791,12 @@ impl ImagesState {
         let mut close = false;
         let mut step: i64 = 0;
         ui.horizontal(|ui| {
-            if kit::icon_button(ui, icons::ARROW_LEFT, "Voltar (Esc)", false, p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if kit::icon_button(ui, icons::ARROW_LEFT, "Voltar (Esc)", false, p).clicked() || (esc && !v.full) {
                 close = true;
+            }
+            if esc && v.full {
+                v.full = false;
             }
             ui.add_space(4.0);
             ui.label(RichText::new(&e.name).font(kit::medium(14.0)).color(p.text));
@@ -817,9 +823,26 @@ impl ImagesState {
                     v.fit = true;
                     v.offset = egui::Vec2::ZERO;
                 }
+                if kit::icon_button(ui, icons::MAXIMIZE_2, "Tela cheia (F)", v.full, p).clicked() {
+                    v.full = !v.full;
+                    v.fit = true;
+                    v.offset = egui::Vec2::ZERO;
+                }
             });
         });
         ui.add_space(8.0);
+        // F: the whole window; + and −: zoom
+        let typing = ui.ctx().wants_keyboard_input();
+        if !typing && ui.input(|i| i.key_pressed(egui::Key::F) && i.modifiers.is_none()) {
+            v.full = !v.full;
+            v.fit = true;
+            v.offset = egui::Vec2::ZERO;
+        }
+        let (zin, zout) = ui.input(|i| (i.key_pressed(egui::Key::Plus) || i.key_pressed(egui::Key::Equals), i.key_pressed(egui::Key::Minus)));
+        if !typing && (zin || zout) {
+            v.zoom = (v.zoom * if zin { 1.25 } else { 0.8 }).clamp(0.05, 16.0);
+            v.fit = false;
+        }
         if ui.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
             step = 1;
         }
@@ -873,6 +896,30 @@ impl ImagesState {
             let shown = size * v.zoom;
             let rect = egui::Rect::from_center_size(stage.center() + v.offset, shown);
             ui.painter().with_clip_rect(stage).image(t.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            if v.full {
+                // the picture alone over the whole window, on black
+                let screen = ui.ctx().screen_rect();
+                let tid = t.id();
+                let k = if v.fit { (screen.width() / size.x).min(screen.height() / size.y).min(1.0) } else { v.zoom };
+                egui::Area::new(egui::Id::new("viewer-full")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ui.ctx(), |ui| {
+                    let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click_and_drag());
+                    ui.painter().rect_filled(r, 0.0, Color32::BLACK);
+                    let img = egui::Rect::from_center_size(r.center() + v.offset, size * k);
+                    ui.painter().image(tid, img, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().text(r.left_top() + egui::vec2(16.0, 14.0), egui::Align2::LEFT_TOP, format!("{}   ·   Esc sai, ← → passam, + − zoom", e.name), egui::FontId::proportional(12.0), Color32::from_gray(150));
+                    if resp.dragged() {
+                        v.offset += resp.drag_delta();
+                    }
+                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        v.zoom = (k * (1.0 + scroll * 0.002)).clamp(0.05, 16.0);
+                        v.fit = false;
+                    }
+                    if resp.double_clicked() {
+                        v.full = false;
+                    }
+                });
+            }
         }
         let mut similar: Vec<usize> = Vec::new();
         {
@@ -922,12 +969,12 @@ impl ImagesState {
         });
         let v = self.viewer.as_mut().unwrap();
         if let Some(i) = go_to {
-            *v = Viewer { idx: i, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true };
+            *v = Viewer { idx: i, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true, full: false };
         } else if step != 0 {
             if let Some(pos) = self.shown.iter().position(|&i| i == v.idx) {
                 let n = self.shown.len() as i64;
                 let next = self.shown[((pos as i64 + step).rem_euclid(n)) as usize];
-                *v = Viewer { idx: next, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true };
+                *v = Viewer { idx: next, tex: None, zoom: 1.0, offset: egui::Vec2::ZERO, fit: true, full: v.full };
             }
         }
         if close {
