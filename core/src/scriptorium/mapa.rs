@@ -651,6 +651,27 @@ impl Raster {
         Raster { w, h, px, ss: ss.max(1) }
     }
 
+    pub fn ss(&self) -> usize {
+        self.ss
+    }
+
+    /// Another raster of the same size laid over this one, through a
+    /// coverage mask (0–255 a pixel) and at an opacity.
+    pub fn over(&mut self, layer: &Raster, mask: Option<&[u8]>, alpha: f64) {
+        for i in 0..self.w * self.h {
+            let k = alpha * mask.map(|m| m[i] as f64 / 255.0).unwrap_or(1.0);
+            let s = &layer.px[i * 4..i * 4 + 4];
+            if k <= 0.0 || s[3] == 0 {
+                continue;
+            }
+            let inv = 1.0 - s[3] as f64 / 255.0 * k;
+            let d = &mut self.px[i * 4..i * 4 + 4];
+            for c in 0..4 {
+                d[c] = (s[c] as f64 * k + d[c] as f64 * inv).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+
     /// Straight RGBA.
     pub fn into_rgba(self) -> Vec<u8> {
         let mut px = self.px;

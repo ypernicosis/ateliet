@@ -89,6 +89,8 @@ enum Flow {
     /// An unbreakable piece (figure, opening): items relative to its top left.
     Block { h: f32, items: Vec<Item>, keep: bool, opening: bool },
     Break { recto: bool },
+    /// A composed page (or a spread of two), on pages of its own.
+    Composed { model: Json, pics: std::collections::HashMap<(String, String), (usize, u32, u32)> },
 }
 
 #[derive(Clone, Copy)]
@@ -462,6 +464,7 @@ impl<'a> L<'a> {
                     }
                 }
                 Blk::PageBreak { recto } => flow.push(Flow::Break { recto: *recto }),
+                Blk::Composed { model, pics } => flow.push(Flow::Composed { model: model.clone(), pics: pics.clone() }),
                 Blk::Missing(t) => {
                     let p = self.cx.piece(t, &Style { scale: 0.8, color: Some([0xbb, 0, 0]), ..Style::plain() });
                     flow.push(Flow::Line { h: lh, base: self.base(lh, self.cx.size, false), items: vec![Item::Text { font: p.font, size: p.size, x: x0, y: 0.0, color: p.color, glyphs: p.glyphs, text: p.text, map: p.map }], para: None, deco, keep: false });
@@ -731,6 +734,10 @@ pub fn shift(it: &Item, dx: f32, dy: f32) -> Item {
         Item::Line { x0, y0, x1, y1, width, color, dash } => Item::Line { x0: x0 + dx, y0: y0 + dy, x1: x1 + dx, y1: y1 + dy, width: *width, color: *color, dash: *dash },
         Item::Rect { x, y, w, h, color } => Item::Rect { x: x + dx, y: y + dy, w: *w, h: *h, color: *color },
         Item::Image { pic, x, y, w, h } => Item::Image { pic: *pic, x: x + dx, y: y + dy, w: *w, h: *h },
+        Item::Path { polys, fill, fill_alpha, stroke } => Item::Path { polys: polys.iter().map(|p| p.iter().map(|q| (q.0 + dx, q.1 + dy)).collect()).collect(), fill: *fill, fill_alpha: *fill_alpha, stroke: *stroke },
+        Item::Group { m, clip, alpha, items } => Item::Group { m: [m[0], m[1], m[2], m[3], m[4] + dx, m[5] + dy], clip: clip.clone(), alpha: *alpha, items: items.clone() },
+        Item::Gradient { x, y, w, h, color, a0, a1, across } => Item::Gradient { x: x + dx, y: y + dy, w: *w, h: *h, color: *color, a0: *a0, a1: *a1, across: *across },
+        Item::Outline { text, width, color } => Item::Outline { text: Box::new(shift(text, dx, dy)), width: *width, color: *color },
     }
 }
 
@@ -749,6 +756,27 @@ impl<'a> L<'a> {
             self.info.push(PInfo::default());
         }
         &mut self.info[page]
+    }
+
+    /// A composed page, or a spread starting on a verso.
+    fn composed(&mut self, model: &Json, pics: &std::collections::HashMap<(String, String), (usize, u32, u32)>, sec: &Sec) {
+        let mut env = super::compose::page_env(model, self.cfg, self.g.bleed > 0.0);
+        env.bleed = self.g.bleed;
+        let look = |p: &str, f: &str| pics.get(&(p.to_string(), f.to_string())).copied();
+        let items = super::compose::render(model, &env, self.cx.db, &look);
+        let dupla = model["tipo"].as_str() == Some("dupla");
+        if dupla && self.next_is_recto() {
+            self.blank();
+        }
+        for k in 0..if dupla { 2 } else { 1 } {
+            let p = self.new_page(PageKind::Fixed);
+            self.pages[p].section = sec.id.clone();
+            let (tx, ty) = (self.pages[p].trim.0 - k as f32 * env.page_w, self.pages[p].trim.1);
+            self.place(p, &items, tx, ty);
+            let inf = self.page_info(p);
+            inf.no_head = true;
+            inf.no_folio = true;
+        }
     }
 
     fn flow_page(&mut self, sec: &Sec) -> usize {
@@ -783,6 +811,17 @@ impl<'a> L<'a> {
             self.toc.push((sec.id.clone(), self.pages.len() + 1));
         }
         while i < flow.len() {
+            if let Flow::Composed { model, pics } = &flow[i] {
+                // an empty page waiting for text gives way
+                if let Some(pg) = page.filter(|p| placed == 0 && *p + 1 == self.pages.len()) {
+                    self.pages.pop();
+                    self.info.truncate(pg);
+                }
+                self.composed(model, pics, sec);
+                page = None;
+                i += 1;
+                continue;
+            }
             if page.is_none() {
                 page = Some(self.flow_page(sec));
                 y = 0.0;
@@ -790,6 +829,7 @@ impl<'a> L<'a> {
             }
             let pg = page.unwrap();
             match &flow[i] {
+                Flow::Composed { .. } => i += 1,
                 Flow::Break { recto } => {
                     if placed > 0 {
                         page = None;

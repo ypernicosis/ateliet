@@ -77,6 +77,8 @@ pub enum Blk {
     Notes(Vec<Vec<Run>>),
     PageBreak { recto: bool },
     Missing(String),
+    /// A composed page (comics…) and its pictures by (path, filter).
+    Composed { model: serde_json::Value, pics: HashMap<(String, String), (usize, u32, u32)> },
 }
 
 pub struct Opening {
@@ -360,6 +362,25 @@ impl Pics {
         self.by_path.insert(path.to_string(), i);
         i
     }
+
+    /// A picture through a composed page's filter ("pb", "sepia"…).
+    pub fn filtered(&mut self, root: &Path, path: &str, filter: &str) -> Option<usize> {
+        let i = self.load(root, path)?;
+        if filter.is_empty() {
+            return Some(i);
+        }
+        let key = format!("{path}#{filter}");
+        if let Some(j) = self.by_path.get(&key) {
+            return *j;
+        }
+        let src = &self.list[i];
+        let mut rgba = src.rgba.clone();
+        super::compose::filter(&mut rgba, src.w, src.h, filter);
+        self.list.push(Picture { w: src.w, h: src.h, rgba, jpeg: None });
+        let j = self.list.len() - 1;
+        self.by_path.insert(key, Some(j));
+        Some(j)
+    }
 }
 
 fn frac_of(e: &Embed) -> f32 {
@@ -440,7 +461,16 @@ fn convert(blocks: &[Block], h: &mut Host) -> Vec<Blk> {
                 }
                 prev = "p";
             }
-            Block::Page { .. } => {
+            Block::Page { json, .. } => {
+                let mut pics = HashMap::new();
+                for (img, filt) in super::compose::images(json) {
+                    let path = crate::scriptorium::export::resolve_image(h.ix, &img, &h.source);
+                    if let Some(i) = path.and_then(|p| h.pics.filtered(h.root, &p, &filt)) {
+                        let pc = &h.pics.list[i];
+                        pics.insert((img, filt), (i, pc.w, pc.h));
+                    }
+                }
+                out.push(Blk::Composed { model: json.clone(), pics });
                 prev = "pagebreak";
             }
             Block::PageBreak { recto, .. } => {

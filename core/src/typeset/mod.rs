@@ -4,6 +4,7 @@
 //! front matter, contents), then the pages as PDF or as pictures. The
 //! preview and the PDF come from the same pages, so they break alike.
 
+pub mod compose;
 pub mod fonts;
 pub mod hyph;
 pub mod layout;
@@ -40,6 +41,45 @@ pub enum Item {
     Line { x0: f32, y0: f32, x1: f32, y1: f32, width: f32, color: [u8; 3], dash: Option<(f32, f32)> },
     Rect { x: f32, y: f32, w: f32, h: f32, color: [u8; 3] },
     Image { pic: usize, x: f32, y: f32, w: f32, h: f32 },
+    /// Polygons (curves already flattened), filled (nonzero) and/or stroked.
+    Path { polys: Vec<Vec<(f32, f32)>>, fill: Option<[u8; 3]>, fill_alpha: f32, stroke: Option<Pen> },
+    /// Children seen through an affine map (theirs → the page's), clipped
+    /// to polygons in their own space, at an opacity.
+    Group { m: [f32; 6], clip: Option<Vec<Vec<(f32, f32)>>>, alpha: f32, items: Vec<Item> },
+    /// A colour fading along a box (down, or across when `across`).
+    Gradient { x: f32, y: f32, w: f32, h: f32, color: [u8; 3], a0: f32, a1: f32, across: bool },
+    /// A text item's glyph outlines stroked: a halo drawn under the text.
+    Outline { text: Box<Item>, width: f32, color: [u8; 3] },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Pen {
+    pub width: f32,
+    pub color: [u8; 3],
+    pub dash: Option<(f32, f32)>,
+}
+
+/// `m` after `n` (apply `n` first).
+pub fn mul(m: &[f32; 6], n: &[f32; 6]) -> [f32; 6] {
+    [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]]
+}
+
+pub const IDENTITY: [f32; 6] = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+
+pub fn apply(m: &[f32; 6], p: (f32, f32)) -> (f32, f32) {
+    (m[0] * p.0 + m[2] * p.1 + m[4], m[1] * p.0 + m[3] * p.1 + m[5])
+}
+
+/// Every item, groups and outlines opened.
+pub fn walk<'a>(items: &'a [Item], f: &mut impl FnMut(&'a Item)) {
+    for it in items {
+        f(it);
+        match it {
+            Item::Group { items, .. } => walk(items, f),
+            Item::Outline { text, .. } => walk(std::slice::from_ref(text), f),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,6 +210,8 @@ mod book_tests {
             include_bytes!("../../../native/assets/fonts/CormorantGaramond-Medium.ttf"),
             include_bytes!("../../../native/assets/fonts/CormorantGaramond-MediumItalic.ttf"),
             include_bytes!("../../../native/assets/fonts/CormorantGaramond-Bold.ttf"),
+            include_bytes!("../../../native/assets/fonts/Cinzel-Bold.ttf"),
+            include_bytes!("../../../native/assets/fonts/Inter-SemiBold.ttf"),
         ]);
         let t0 = std::time::Instant::now();
         let laid = layout::typeset(&m, &db, &layout::Options { print: true });
