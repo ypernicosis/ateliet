@@ -977,6 +977,19 @@ impl eframe::App for App {
         if ctx.wants_keyboard_input() {
             return;
         }
+        // the same for a moodboard (studio and focus looks)
+        if self.images_mode && self.images.mb.open && self.images.mb.board_open() {
+            raw.events.retain(|e| match e {
+                egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } if !modifiers.any() => {
+                    if *pressed {
+                        self.images.mb.tab_pressed = true;
+                    }
+                    false
+                }
+                _ => true,
+            });
+            return;
+        }
         let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) else { return };
         raw.events.retain(|e| match e {
             egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
@@ -1202,7 +1215,9 @@ impl App {
             self.insert_pictures(&dropped);
         }
         let mut act = None;
-        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 10 })).show(ctx, |ui| {
+        // a moodboard runs to the edges; the mosaic has a margin
+        let margin = if self.images.mb.open && self.images.mb.board_open() { egui::Margin::ZERO } else { egui::Margin { left: 18, right: 18, top: 14, bottom: 10 } };
+        egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(margin)).show(ctx, |ui| {
             if let Some(v) = &self.vault {
                 act = self.images.center_ui(ui, p, v);
             }

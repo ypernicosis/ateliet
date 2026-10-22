@@ -6,7 +6,7 @@
 │ app.rs      estado: vault, abas, splits, histórico, salvamento, ações, arrastar/colar, modelos             │
 │ editor.rs · live.rs · markdown.rs   editor com realce, Live Preview por bloco, árvore e desenho do Markdown│
 │ panels.rs · commands.rs · settings_pages.rs   barras laterais, paleta e atalhos, configurações             │
-│ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, busca por descrição (CLIP)                │
+│ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, moodboards, busca por descrição (CLIP)    │
 │ board_ui.rs, board_ui/   storyboard: quadros, camadas, pincéis, ferramentas, referências, exportações      │
 │ sc/         Scriptorium, Enredo, Mundo, Mapas, Diagramação, Capa, Compositor, Trilha                       │
 │ dv.rs · templater.rs · daily.rs   Dataview, Templater, notas diárias e calendário                          │
@@ -18,7 +18,7 @@
 │   text.rs · syntax.rs · metadata.rs · render.rs   frontmatter, wikilinks, tags, callouts, metadados        │
 │   search.rs · vault.rs · relink.rs                busca com a sintaxe do Obsidian, listagem, renomear links │
 │   dataview/ · script/ (QuickJS) · calendar.rs · datefmt.rs   Dataview, dataviewjs, Templater, datas         │
-│   images.rs · clip.rs · pictogrep.rs · pinterest.rs          biblioteca de imagens, CLIP, Pictogrep        │
+│   images.rs · clip.rs · pictogrep.rs · pinterest.rs · moodboard.rs   imagens, CLIP, Pictogrep, moodboards  │
 │   board/ · clipstudio.rs                          storyboard: documento, pintura, composição, .clip       │
 │   scriptorium/ · typeset/                         livros, enredo, mundo; composição de páginas e PDF       │
 │   css_theme.rs · texmath.rs · mermaid.rs          cores de temas, TeX → Unicode, fluxogramas               │
@@ -51,7 +51,7 @@ A ordem de tentativa é a mesma do Obsidian:
 
 ## Ferramentas embutidas (`core/src/dataview/`, `core/src/script/`, `core/src/calendar.rs`)
 
-Dataview, Templater e Calendar eram plugins e agora fazem parte do Ateliet. A lógica está no núcleo; `src/dv.rs`, `src/templater.rs` e `src/daily.rs` só desenham e aplicam o resultado.
+Dataview, Templater, Calendar e o Moodboard do Pictogrep eram plugins e agora fazem parte do Ateliet. A lógica está no núcleo; `src/dv.rs`, `src/templater.rs` e `src/daily.rs` só desenham e aplicam o resultado.
 
 - **Índice** (`dataview/index.rs`): cada nota vira uma página com frontmatter, campos inline (linha inteira `chave:: valor`, `[chave:: valor]` e `(chave:: valor)` fora de código, sob o nome original e o canônico, minúsculo e com `-`), tags (com as tags-pai em `file.tags`), links resolvidos na mesma ordem do Obsidian, back-links, itens de lista e tarefas (texto, status, filhos, seção, datas com emoji 📅 ✅ ➕ 🛫 ⏳), e `file.day` a partir do nome ou do campo `date`. O índice é construído em paralelo 3 s depois de o vault abrir, ou na primeira consulta, e os eventos do watcher do vault relêem só os caminhos alterados.
 - **Valores e expressões** (`value.rs`, `parse.rs`, `eval.rs`): os tipos do Dataview (texto, número, booleano, data, duração com partes de calendário, link, lista, objeto, função), a mesma ordenação entre tipos, campos com `-` no nome, `row["Nome com espaço"]`, `this`, indexação de listas que mapeia (`rows.file.link`), links que dão acesso aos campos da nota (`[[A]].status`), lambdas e cerca de 70 funções. `date(today)` e `dur(1 week)` são literais.
@@ -61,3 +61,7 @@ Dataview, Templater e Calendar eram plugins e agora fazem parte do Ateliet. A l�
 ## Storyboard (`core/src/board/`, `src/board_ui.rs`, `src/board_ui/`)
 
 - **Clip Studio** (`core/src/clipstudio.rs`): o arquivo é uma sequência de chunks depois de `CSFCHUNK`; `SQLi` é um banco SQLite (lido com rusqlite) com a árvore de camadas e `Exta` guarda os pixels em blocos zlib de 256×256 (plano alfa + BGRx), ligados ao banco por `Layer.LayerRenderMipmap → Mipmap → MipmapInfo → Offscreen.BlockData`. Pastas são achatadas (visibilidade, opacidade e máscaras descem), máscaras ativas são aplicadas, o papel vira cor, preenchimentos chapados vêm de `GradationFillInfo`. Os testes comparam pixel a pixel com o clip_to_psd quando `ATELIET_CLIP_SAMPLE` e `ATELIET_CLIP_REFERENCE` estão definidos.
+
+## Moodboards (`core/src/moodboard.rs`, `src/images_ui/moodboard.rs`)
+
+Eram o plugin Moodboard do Pictogrep. Os quadros continuam no formato e no lugar do plugin: com biblioteca compartilhada, `data/plugins/moodboard.json` da pasta do Pictogrep (as chaves `index`, `board:<id>` e `prefs`); sem ela, `.obsidian/ateliet/moodboard.json` no cofre. Uma imagem é guardada pelo id do Pictogrep (SHA-256 do caminho absoluto), então os quadros abrem nos dois apps. Cada gravação relê o arquivo e troca só as próprias chaves. O núcleo tem o documento, a geometria (rotação, caixas, alinhamento por guias, organizar, recorte) e a paleta; a interface desenha o quadro com o `Painter` do egui (imagens como malhas com UV, para girar, recortar e espelhar) e usa as prévias do modo imagens no tamanho em que aparecem.

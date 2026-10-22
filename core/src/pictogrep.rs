@@ -207,7 +207,7 @@ pub fn source_roots(home: &Home) -> Vec<PathBuf> {
     roots
 }
 
-fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }

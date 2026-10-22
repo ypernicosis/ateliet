@@ -143,6 +143,10 @@ pub struct Viewer {
 
 pub struct ImagesState {
     pub entries: Vec<ImageEntry>,
+    /// Bumped whenever `entries` is replaced.
+    entries_gen: u64,
+    /// The moodboards.
+    pub mb: moodboard::Moodboards,
     /// Whether the collections (left) and notes (right) panels are shown in
     /// image mode (the writing mode's sidebars are separate).
     pub panels: [bool; 2],
@@ -185,6 +189,8 @@ impl Default for ImagesState {
         ImagesState {
             panels: [true, true],
             entries: Vec::new(),
+            entries_gen: 0,
+            mb: moodboard::Moodboards::default(),
             index: Arc::new(Mutex::new(images::Index::new(MODEL_KEY, 512))),
             #[cfg(feature = "clip")]
             vision: Arc::new(Vision::default()),
@@ -318,6 +324,7 @@ impl ImagesState {
         if let Some(rx) = &self.scanning {
             if let Ok((entries, index)) = rx.try_recv() {
                 self.entries = entries;
+                self.entries_gen += 1;
                 *self.index.lock().unwrap() = index;
                 #[cfg(feature = "clip")]
                 self.vision.index(self.index.clone(), self.entries.clone(), self.root.join(".obsidian/ateliet/images/index.bin"), ctx.clone());
@@ -530,7 +537,8 @@ impl ImagesState {
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         let all = self.entries.len();
-        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none()).show(ui, p).clicked() {
+        if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none() && !self.mb.open).show(ui, p).clicked() {
+            self.close_moodboards();
             self.folder = None;
             self.collection = None;
             self.similar_to = None;
@@ -538,7 +546,8 @@ impl ImagesState {
         }
         if self.shared.is_some() {
             let n = self.entries.iter().filter(|e| e.origin == ateliet_core::images::Origin::Shared).count();
-            if kit::Row::new("Biblioteca compartilhada").icon(icons::LIBRARY_BIG).trailing(n.to_string()).selected(self.collection.as_deref() == Some("")).show(ui, p).on_hover_text("A pasta do Pictogrep: as mesmas imagens e coleções nos dois apps").clicked() {
+            if kit::Row::new("Biblioteca compartilhada").icon(icons::LIBRARY_BIG).trailing(n.to_string()).selected(self.collection.as_deref() == Some("") && !self.mb.open).show(ui, p).on_hover_text("A pasta do Pictogrep: as mesmas imagens e coleções nos dois apps").clicked() {
+                self.close_moodboards();
                 self.folder = None;
                 self.collection = Some(String::new());
                 self.similar_to = None;
@@ -574,7 +583,7 @@ impl ImagesState {
                         continue;
                     }
                 }
-                let r = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str())).show(ui, p);
+                let r = kit::Row::new(&name).icon(icons::FOLDER_CLOSED).depth(1).trailing(n.to_string()).selected(self.collection.as_deref() == Some(name.as_str()) && !self.mb.open).show(ui, p);
                 // pictures dropped on a collection join it
                 if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
                     let k = self.add_to_collection(&name, &idx);
@@ -584,6 +593,7 @@ impl ImagesState {
                     ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                 }
                 if r.clicked() {
+                    self.close_moodboards();
                     self.folder = None;
                     self.collection = Some(name.clone());
                     self.similar_to = None;
@@ -635,6 +645,27 @@ impl ImagesState {
                 self.col_edit = Some((None, String::new()));
             }
         }
+        // moodboards: the list, and each board
+        let boards = self.moodboard_list();
+        let open_board = self.open_board_id();
+        if kit::Row::new("Moodboards").icon(icons::LAYOUT_DASHBOARD).trailing(boards.len().to_string()).selected(self.mb.open && open_board.is_none()).show(ui, p).on_hover_text("Quadros de referência com as imagens da biblioteca").clicked() {
+            self.show_moodboards(None);
+        }
+        if self.mb.open {
+            for b in &boards {
+                let r = kit::Row::new(&b.name).icon(icons::FRAME).depth(1).trailing(b.count.to_string()).selected(open_board.as_deref() == Some(b.id.as_str())).show(ui, p);
+                // pictures dropped on a board go on it
+                if let Some(idx) = r.dnd_release_payload::<Vec<usize>>() {
+                    self.queue_add_to_board(&b.id, (*idx).clone());
+                }
+                if r.dnd_hover_payload::<Vec<usize>>().is_some() {
+                    ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                }
+                if r.clicked() {
+                    self.show_moodboards(Some(&b.id));
+                }
+            }
+        }
         ui.add_space(10.0);
         kit::section(ui, "Coleções", p);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -671,6 +702,7 @@ impl ImagesState {
                     ui.painter().rect_stroke(rect, 8.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                 }
                 if r.on_hover_text(&folder).clicked() {
+                    self.close_moodboards();
                     self.collection = None;
                     self.folder = Some(folder.clone());
                     self.similar_to = None;
@@ -684,6 +716,27 @@ impl ImagesState {
     /// The mosaic or the viewer (centre in image mode).
     pub fn center_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette, vault: &vault::Vault) -> Option<ImageAction> {
         self.poll(ui.ctx());
+        if self.mb.open {
+            // the board takes the whole centre (the tools float over it)
+            let mut action = None;
+            if self.mb.board_open() {
+                self.moodboard_ui(ui, p);
+            } else {
+                ui.horizontal(|ui| {
+                    if let Some(a) = panel_toggle(ui, self.panels, true, p) {
+                        action = Some(a);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if let Some(a) = panel_toggle(ui, self.panels, false, p) {
+                            action = Some(a);
+                        }
+                    });
+                });
+                ui.add_space(10.0);
+                self.moodboard_ui(ui, p);
+            }
+            return action;
+        }
         if self.viewer.is_some() {
             return self.viewer_ui(ui, p, vault);
         }
@@ -826,6 +879,19 @@ impl ImagesState {
                         action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
                         ui.close_menu();
                     }
+                    let boards = self.mb.boards.clone();
+                    ui.menu_button("Adicionar ao moodboard", |ui| {
+                        if boards.is_empty() {
+                            ui.label(RichText::new("Nenhum moodboard ainda").size(12.0).color(p.faint));
+                        }
+                        for b in &boards {
+                            if ui.button(&b.name).clicked() {
+                                let idx = self.dragged(i);
+                                self.queue_add_to_board(&b.id, idx);
+                                ui.close_menu();
+                            }
+                        }
+                    });
                     if self.shared.is_some() {
                         let names: Vec<String> = self.collections.iter().map(|c| c.0.clone()).collect();
                         ui.menu_button("Adicionar à coleção", |ui| {
