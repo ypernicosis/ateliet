@@ -15,6 +15,7 @@
 //! - `board`    — storyboards: file format, brushes, compositing, tracing
 
 pub mod css_theme;
+pub mod mermaid;
 pub mod metadata;
 pub mod pictogrep;
 pub mod pinterest;

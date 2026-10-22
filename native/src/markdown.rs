@@ -683,6 +683,103 @@ impl Default for Runs {
     }
 }
 
+/// A Mermaid flowchart drawn: boxes in their shapes, edges with arrows and
+/// labels, scaled down to the width when it is wider.
+fn mermaid_ui(ui: &mut egui::Ui, chart: &ateliet_core::mermaid::Chart, size: f32, p: crate::theme::Palette) {
+    use ateliet_core::mermaid::{Line, Shape};
+    let fs = size * 0.82;
+    let font = FontId::proportional(fs);
+    let measure = |t: &str| {
+        let g = ui.fonts(|f| f.layout_no_wrap(t.to_string(), font.clone(), p.text));
+        (g.size().x, g.size().y)
+    };
+    let lay = ateliet_core::mermaid::layout(chart, &measure);
+    let pad = 16.0;
+    let avail = ui.available_width() - 2.0 * pad;
+    let k = if lay.width > avail { (avail / lay.width).max(0.3) } else { 1.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), lay.height * k + 2.0 * pad), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 8.0, p.bg_secondary);
+    let ox = rect.left() + pad + (avail - lay.width * k).max(0.0) / 2.0;
+    let oy = rect.top() + pad;
+    let to = |x: f32, y: f32| egui::pos2(ox + x * k, oy + y * k);
+    let boxes: Vec<egui::Rect> = lay.boxes.iter().map(|b| egui::Rect::from_min_max(to(b.0, b.1), to(b.0 + b.2, b.1 + b.3))).collect();
+    let ink = p.muted;
+    // where the line between two centres leaves a box
+    let exit = |r: egui::Rect, toward: egui::Pos2| -> egui::Pos2 {
+        let c = r.center();
+        let d = toward - c;
+        if d.length() < 1e-3 {
+            return c;
+        }
+        let tx = if d.x.abs() > 1e-3 { (r.width() / 2.0) / d.x.abs() } else { f32::INFINITY };
+        let ty = if d.y.abs() > 1e-3 { (r.height() / 2.0) / d.y.abs() } else { f32::INFINITY };
+        c + d * tx.min(ty)
+    };
+    for e in &chart.edges {
+        let (a, b) = (boxes[e.from], boxes[e.to]);
+        let (pa, pb) = (exit(a, b.center()), exit(b, a.center()));
+        let w: f32 = match e.line { Line::Thick => 2.6, _ => 1.3 };
+        let st = Stroke::new(w, ink);
+        if e.line == Line::Dotted {
+            painter.extend(egui::Shape::dashed_line(&[pa, pb], st, 4.0, 3.0));
+        } else {
+            painter.line_segment([pa, pb], st);
+        }
+        if e.arrow {
+            let dir = (pb - pa).normalized();
+            let side = egui::vec2(-dir.y, dir.x);
+            let l = 9.0 * k.max(0.6);
+            painter.add(egui::Shape::convex_polygon(vec![pb, pb - dir * l + side * l * 0.45, pb - dir * l - side * l * 0.45], ink, Stroke::NONE));
+        }
+        if !e.label.is_empty() {
+            let mid = pa + (pb - pa) * 0.5;
+            let g = painter.layout_no_wrap(e.label.clone(), FontId::proportional(fs * 0.9 * k.max(0.7)), p.muted);
+            let r = egui::Rect::from_center_size(mid, g.size() + egui::vec2(8.0, 4.0));
+            painter.rect_filled(r, 4.0, p.bg_secondary);
+            painter.galley(r.center() - g.size() / 2.0, g, p.muted);
+        }
+    }
+    for (i, nd) in chart.nodes.iter().enumerate() {
+        let r = boxes[i];
+        let fill = p.bg;
+        let st = Stroke::new(1.3_f32, p.border_strong);
+        match nd.shape {
+            Shape::Diamond => {
+                let c = r.center();
+                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(c.x, r.top()), egui::pos2(r.right(), c.y), egui::pos2(c.x, r.bottom()), egui::pos2(r.left(), c.y)], fill, st));
+            }
+            Shape::Circle => {
+                painter.circle(r.center(), r.width().min(r.height()) / 2.0, fill, st);
+            }
+            Shape::Hexagon => {
+                let d = r.height() * 0.3;
+                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(r.left() + d, r.top()), egui::pos2(r.right() - d, r.top()), egui::pos2(r.right(), r.center().y), egui::pos2(r.right() - d, r.bottom()), egui::pos2(r.left() + d, r.bottom()), egui::pos2(r.left(), r.center().y)], fill, st));
+            }
+            Shape::Flag => {
+                let d = r.height() * 0.3;
+                painter.add(egui::Shape::convex_polygon(vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), egui::pos2(r.left() + d, r.center().y)], fill, st));
+            }
+            Shape::Round => {
+                painter.rect(r, 8.0 * k, fill, st, egui::StrokeKind::Inside);
+            }
+            Shape::Stadium | Shape::Cylinder => {
+                painter.rect(r, r.height() / 2.0, fill, st, egui::StrokeKind::Inside);
+            }
+            Shape::Subroutine => {
+                painter.rect(r, 2.0, fill, st, egui::StrokeKind::Inside);
+                painter.vline(r.left() + 6.0 * k, r.y_range(), st);
+                painter.vline(r.right() - 6.0 * k, r.y_range(), st);
+            }
+            Shape::Rect => {
+                painter.rect(r, 3.0, fill, st, egui::StrokeKind::Inside);
+            }
+        }
+        let g = painter.layout(nd.label.clone(), FontId::proportional(fs * k), p.text, f32::INFINITY);
+        painter.galley(r.center() - g.size() / 2.0, g, p.text);
+    }
+}
+
 /// A list bullet the height of a line of text at `size`.
 pub fn bullet(ui: &mut egui::Ui, size: f32, color: Color32, hollow: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size * 1.1, (size * 1.62).round()), Sense::hover());
@@ -1026,6 +1123,12 @@ impl<'h> Renderer<'h> {
                                 self.actions.push(Action::EditPage(id.clone()));
                             }
                         });
+                        return;
+                    }
+                }
+                if l == "mermaid" {
+                    if let Some(chart) = ateliet_core::mermaid::parse(text) {
+                        mermaid_ui(ui, &chart, size, p);
                         return;
                     }
                 }
