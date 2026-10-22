@@ -86,6 +86,8 @@ pub struct BoardEditor {
     rf: refs::RefState,
     ts: tools::ToolState,
     xo: export::ExportOpts,
+    /// The facing page's picture: its frame id, version and texture.
+    spread_tex: Option<(String, u64, egui::TextureHandle)>,
     /// The view mirrored (a check of proportions, not a change).
     mirror: bool,
 }
@@ -142,6 +144,7 @@ impl BoardEditor {
             rf: refs::RefState::default(),
             ts: tools::ToolState::default(),
             xo: export::ExportOpts::default(),
+            spread_tex: None,
             mirror: false,
         }
     }
@@ -399,6 +402,43 @@ impl BoardEditor {
         }
     }
 
+    /// The facing page of this page when the storyboard shows spreads, and
+    /// its offset from this page (canvas units).
+    fn spread(&self) -> Option<(usize, f32)> {
+        if !self.is_pages() {
+            return None;
+        }
+        let j = ateliet_core::board::pages::facing(&self.doc.board, self.frame, self.doc.frame_count())?;
+        let w = self.doc.width() as f32;
+        Some((j, if ateliet_core::board::pages::is_left(&self.doc.board, self.frame) { w } else { -w }))
+    }
+
+    fn draw_facing(&mut self, ui: &egui::Ui, painter: &egui::Painter, origin: egui::Pos2, j: usize, off: f32, p: crate::theme::Palette) {
+        let id = self.doc.frame_id(j);
+        let version = *self.versions.get(&id).unwrap_or(&0);
+        if self.spread_tex.as_ref().is_none_or(|t| t.0 != id || t.1 != version) {
+            // the page as printed: panels, balloons and paper included
+            let db = crate::fonts::book_fonts();
+            let (w, h, px) = ateliet_core::board::pages::page_image(&mut self.doc, &mut self.pics, &db, j, 1.0, false);
+            let img = image::RgbaImage::from_raw(w, h, px).unwrap_or_default();
+            let img = if img.width() > 1600 { image::DynamicImage::ImageRgba8(img).thumbnail(1600, 1600).to_rgba8() } else { img };
+            let img = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+            self.spread_tex = Some((id, version, ui.ctx().load_texture("board-facing", img, egui::TextureOptions::LINEAR)));
+        }
+        let r = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
+        painter.add(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) }.as_shape(r, 2.0));
+        if let Some((_, _, t)) = &self.spread_tex {
+            painter.image(t.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        // the other page is shown, not edited: a light veil and the spine
+        painter.rect_filled(r, 0.0, if p.dark { Color32::from_black_alpha(70) } else { Color32::from_white_alpha(70) });
+        let spine = if off > 0.0 { r.left() } else { r.right() };
+        painter.vline(spine, r.y_range(), egui::Stroke::new(1.0_f32, Color32::from_black_alpha(60)));
+        if ui.rect_contains_pointer(r) {
+            painter.text(r.center_top() + egui::vec2(0.0, 10.0), egui::Align2::CENTER_TOP, "Clique para desenhar nesta página", egui::FontId::proportional(11.0), p.faint);
+        }
+    }
+
     fn origin(&self, stage: egui::Rect) -> egui::Pos2 {
         if self.doc.infinite() {
             stage.center() + self.pan
@@ -412,10 +452,13 @@ impl BoardEditor {
         let stage = ui.available_rect_before_wrap();
         let resp = ui.allocate_rect(stage, Sense::click_and_drag());
         ui.painter().rect_filled(stage, 0.0, if p.dark { Color32::from_gray(22) } else { Color32::from_rgb(0xec, 0xec, 0xe9) });
+        let spread = self.spread();
         if self.fit && !self.doc.infinite() {
             let (w, h) = (self.doc.width() as f32, self.doc.height() as f32);
-            self.zoom = ((stage.width() - 60.0) / w).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
-            self.pan = egui::Vec2::ZERO;
+            // a spread fits both pages, the pair centred
+            let fw = if spread.is_some() { 2.0 * w } else { w };
+            self.zoom = ((stage.width() - 60.0) / fw).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
+            self.pan = egui::vec2(-spread.map(|s| s.1 / 2.0).unwrap_or(0.0) * self.zoom, 0.0);
         }
         if let Some((cx, cy, w, h)) = self.zoom_target.take() {
             self.zoom = ((stage.width() - 60.0) / w).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
@@ -452,6 +495,20 @@ impl BoardEditor {
             self.fit = false;
         }
         let origin = self.origin(stage);
+        // the facing page of a spread: a click there goes to it
+        if let Some((j, off)) = spread {
+            let fr = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
+            if resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| fr.contains(q)) {
+                self.finish_editing();
+                self.pg.sel_panel = None;
+                self.pg.sel_balloon = None;
+                self.frame = j;
+                // keep the pair where it is on screen
+                self.pan += egui::vec2(off * self.zoom, 0.0);
+                self.invalidate();
+                return toast;
+            }
+        }
         if !panning && self.playing.is_none() && matches!(self.tool, Tool::Panel | Tool::Balloon) && self.is_pages() {
             self.page_input(ui, &resp, origin);
         }
@@ -506,6 +563,9 @@ impl BoardEditor {
         if !self.doc.infinite() {
             let page = egui::Rect::from_min_size(origin, egui::vec2(cw, ch) * self.zoom);
             clip.add(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) }.as_shape(page, 2.0));
+        }
+        if let Some((j, off)) = spread {
+            self.draw_facing(ui, &clip, origin, j, off, p);
         }
         let (a0, a1) = (to_canvas(stage.min, self.zoom, origin), to_canvas(stage.max, self.zoom, origin));
         let view0 = egui::pos2(a0.x.min(a1.x), a0.y.min(a1.y));
