@@ -161,7 +161,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             let folder = app.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
             app.new_note(&folder);
         }
-        Cmd::NewStoryboard => app.new_board("animatic"),
+        Cmd::NewStoryboard => app.new_board_dlg = Some(crate::board_ui::NewBoard::new()),
         Cmd::Library => app.open_view("library", None),
         Cmd::Focus => app.toggle_focus(),
         Cmd::Manuscript => {

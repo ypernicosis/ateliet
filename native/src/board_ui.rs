@@ -14,11 +14,18 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod pages;
+pub use pages::NewBoard;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
     Brush(BrushKind),
     Hand,
     Picker,
+    /// Page kinds: cut, make and reshape panels.
+    Panel,
+    /// Page kinds: balloons, captions and sound effects.
+    Balloon,
 }
 
 enum Edit {
@@ -61,6 +68,9 @@ pub struct BoardEditor {
     thumbs: HashMap<String, (u64, egui::TextureHandle)>,
     versions: HashMap<String, u64>,
     pub error: Option<String>,
+    pg: pages::PageState,
+    /// A panel to zoom to (centre x, y, width, height).
+    zoom_target: Option<(f32, f32, f32, f32)>,
 }
 
 impl BoardEditor {
@@ -76,7 +86,15 @@ impl BoardEditor {
         Ok(Self::with(path, abs, doc))
     }
 
+    /// A new storyboard file from a document made elsewhere (a kind's start).
+    pub fn create_doc(path: &str, abs: PathBuf, mut doc: BoardDoc) -> Result<BoardEditor, String> {
+        let mut pics = Pictures::default();
+        doc.save(&abs, |d, i| compose::thumbnail_png(d, &mut pics, i))?;
+        Ok(Self::with(path, abs, doc))
+    }
+
     fn with(path: &str, abs: PathBuf, doc: BoardDoc) -> BoardEditor {
+        let pg = pages::PageState::new(doc.kind());
         let settings = BrushKind::ALL.iter().map(|k| (*k, BrushSettings::defaults(*k))).collect();
         BoardEditor {
             path: path.to_string(),
@@ -101,6 +119,8 @@ impl BoardEditor {
             thumbs: HashMap::new(),
             versions: HashMap::new(),
             error: None,
+            pg,
+            zoom_target: None,
         }
     }
 
@@ -337,6 +357,12 @@ impl BoardEditor {
             self.zoom = ((stage.width() - 60.0) / w).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
             self.pan = egui::Vec2::ZERO;
         }
+        if let Some((cx, cy, w, h)) = self.zoom_target.take() {
+            self.zoom = ((stage.width() - 60.0) / w).min((stage.height() - 60.0) / h).clamp(0.05, 8.0);
+            self.fit = false;
+            let size = egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom;
+            self.pan = size / 2.0 - egui::vec2(cx, cy) * self.zoom;
+        }
         let origin = self.origin(stage);
         let to_canvas = |pos: egui::Pos2, z: f32, o: egui::Pos2| egui::pos2((pos.x - o.x) / z, (pos.y - o.y) / z);
         // zoom with the wheel at the pointer
@@ -361,6 +387,9 @@ impl BoardEditor {
             self.fit = false;
         }
         let origin = self.origin(stage);
+        if !panning && self.playing.is_none() && matches!(self.tool, Tool::Panel | Tool::Balloon) && self.is_pages() {
+            self.page_input(ui, &resp, origin);
+        }
         // strokes, from every pointer event of the frame
         if !panning && self.playing.is_none() {
             if let Some(Tool::Brush(_)) = Some(self.tool) {
@@ -445,6 +474,9 @@ impl BoardEditor {
         if pending {
             ui.ctx().request_repaint();
         }
+        if self.is_pages() {
+            self.page_draw(ui, &clip, origin);
+        }
         // brush outline
         if let (Some(k), Some(ptr)) = (self.brush(), resp.hover_pos()) {
             if !panning {
@@ -461,6 +493,7 @@ impl BoardEditor {
     // ── panels ─────────────────────────────────────────────────────────────
 
     fn toolbar(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        let pages_kind = self.is_pages();
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             // tools: a segmented group
@@ -474,7 +507,12 @@ impl BoardEditor {
                     (Tool::Brush(BrushKind::Eraser), icons::ERASER, "Borracha (E)"),
                     (Tool::Hand, icons::HAND, "Mão (H, ou segure Espaço)"),
                     (Tool::Picker, icons::PIPETTE, "Conta-gotas (I)"),
+                    (Tool::Panel, icons::SQUARE_SPLIT_HORIZONTAL, "Quadros (J): arraste através de um quadro para cortá-lo; num espaço vazio, um quadro novo"),
+                    (Tool::Balloon, icons::MESSAGE_CIRCLE, "Balões (W): arraste ou clique e digite"),
                 ] {
+                    if matches!(t, Tool::Panel | Tool::Balloon) && !pages_kind {
+                        continue;
+                    }
                     let sel = self.tool == t;
                     let (rect, r) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), Sense::click());
                     if sel {
@@ -546,7 +584,12 @@ impl BoardEditor {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
+                if pages_kind && kit::icon_button(ui, icons::FILE_DOWN, "Exportar as páginas em PDF (tamanho de impressão, com sangria)", false, p).clicked() {
+                    self.export_pages_pdf();
+                }
+                if pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar esta página como PNG", false, p).clicked() {
+                    self.export_page_png();
+                } else if !pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
                     let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
                     let png = ateliet_core::board::tile::encode_png(&px, w, h);
                     let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -585,7 +628,12 @@ impl BoardEditor {
     fn frames_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let n = self.doc.frame_count();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(if self.doc.kind() == "animatic" { "Quadros" } else { "Páginas" }).font(kit::medium(13.0)).color(p.text));
+            let units = ateliet_core::board::pages::kind_info(self.doc.kind()).units;
+            let mut t = units.to_string();
+            if let Some(c) = t.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            ui.label(RichText::new(t).font(kit::medium(13.0)).color(p.text));
             ui.label(RichText::new(n.to_string()).size(12.0).color(p.faint));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -603,13 +651,14 @@ impl BoardEditor {
                 if kit::icon_button_sized(ui, icons::PLUS, "Novo quadro depois deste", false, p, 24.0, 14.0).clicked() {
                     let f = self.frame;
                     let mut new = 0;
-                    self.structure(|d| new = d.add_frame(f + 1));
+                    self.structure(|d| new = ateliet_core::board::pages::add_page(d, f + 1, "one"));
                     self.frame = new;
                     self.invalidate();
                 }
             });
         });
         ui.add_space(4.0);
+        if !self.is_pages() {
         ui.horizontal(|ui| {
             let playing = self.playing.is_some();
             if kit::button(ui, Some(if playing { icons::SQUARE } else { icons::PLAY }), if playing { "Parar" } else { "Reproduzir" }, p).clicked() {
@@ -618,6 +667,7 @@ impl BoardEditor {
             }
             ui.label(RichText::new(format!("{} qps", self.doc.fps())).size(12.0).color(p.faint));
         });
+        }
         ui.add_space(10.0);
         let mut go: Option<usize> = None;
         let mut swap: Option<(usize, usize)> = None;
@@ -681,6 +731,9 @@ impl BoardEditor {
         }
         if let Some(i) = go {
             if i != self.frame {
+                self.finish_editing();
+                self.pg.sel_panel = None;
+                self.pg.sel_balloon = None;
                 self.frame = i;
                 self.invalidate();
             }
@@ -866,6 +919,17 @@ impl BoardEditor {
             if k(egui::Key::Num0) {
                 self.fit = true;
             }
+            if self.is_pages() {
+                if k(egui::Key::J) {
+                    self.tool = Tool::Panel;
+                }
+                if k(egui::Key::W) {
+                    self.tool = Tool::Balloon;
+                }
+                if matches!(self.tool, Tool::Panel | Tool::Balloon) {
+                    self.page_keys(ui);
+                }
+            }
             if k(egui::Key::ArrowRight) && self.frame + 1 < self.doc.frame_count() {
                 self.frame += 1;
                 self.invalidate();
@@ -907,7 +971,12 @@ impl BoardEditor {
         ui.painter().rect_filled(right, 0.0, p.bg_secondary);
         ui.painter().vline(right.left() + 0.5, right.y_range(), egui::Stroke::new(1.0_f32, p.border));
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right.shrink2(egui::vec2(12.0, 12.0))), |ui| {
-            egui::ScrollArea::vertical().id_salt("layers").show(ui, |ui| self.layers_ui(ui, p));
+            egui::ScrollArea::vertical().id_salt("layers").show(ui, |ui| {
+                if self.is_pages() {
+                    self.page_ui(ui, p);
+                }
+                self.layers_ui(ui, p)
+            });
         });
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(center), |ui| {
             if let Some(t) = self.canvas_ui(ui, p) {

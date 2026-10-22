@@ -150,6 +150,7 @@ pub struct App {
     pub form: Option<crate::form::Form>,
     pub export: Option<crate::sc::export_ui::ExportDialog>,
     pub picker: Option<crate::sc::picker::Picker>,
+    pub new_board_dlg: Option<crate::board_ui::NewBoard>,
     pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
     pub sprint: Option<crate::sc::focus::Sprint>,
@@ -201,6 +202,7 @@ impl App {
             form: None,
             export: None,
             picker: None,
+            new_board_dlg: None,
             music: Default::default(),
             focus: None,
             sprint: None,
@@ -516,6 +518,31 @@ impl App {
     }
 
     /// A new storyboard (or infinite canvas) next to the open note.
+    /// A storyboard of a kind (pages, thumbnails, webtoon…) in the folder of the open note.
+    pub fn new_board_of(&mut self, o: ateliet_core::board::pages::KindOptions) {
+        let Some(v) = &self.vault else { return };
+        let folder = self.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
+        let name = match o.kind.as_str() {
+            "canvas" => "Canvas",
+            "name" => "Name",
+            "comic" => "HQ",
+            "thumbnails" => "Miniaturas",
+            "webtoon" => "Webtoon",
+            "presentation" => "Prancha",
+            _ => "Storyboard",
+        };
+        let base = if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") };
+        let path = v.available_path(&base, "storyboard");
+        let doc = ateliet_core::board::pages::board_for_kind(&o);
+        match crate::board_ui::BoardEditor::create_doc(&path, v.abs(&path), doc) {
+            Ok(_) => {
+                self.vault.as_mut().unwrap().rescan();
+                self.open(&path, true);
+            }
+            Err(e) => self.toast(format!("Não foi possível criar {path}: {e}")),
+        }
+    }
+
     pub fn new_board(&mut self, kind: &str) {
         let Some(v) = &self.vault else { return };
         let folder = self.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
@@ -850,6 +877,16 @@ impl eframe::App for App {
         self.form_ui(ctx);
         self.export_ui(ctx);
         self.picker_ui(ctx);
+        if let Some(d) = self.new_board_dlg.as_mut() {
+            match d.ui(ctx, self.palette) {
+                Some(Some(o)) => {
+                    self.new_board_dlg = None;
+                    self.new_board_of(o);
+                }
+                Some(None) => self.new_board_dlg = None,
+                None => {}
+            }
+        }
         panels::settings_window(self, ctx);
         self.templater.show_prompt(ctx, self.palette);
         panels::toasts(self, ctx);

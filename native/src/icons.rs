@@ -233,3 +233,7 @@ pub const SPLINE: &str = "\u{e38e}";
 pub const MAGNET: &str = "\u{e2b4}";
 pub const CORNER_DOWN_LEFT: &str = "\u{e0a5}";
 pub const MESSAGE_SQUARE_TEXT: &str = "\u{e579}";
+pub const PRESENTATION: &str = "\u{e4b2}";
+pub const INFINITY: &str = "\u{e1e6}";
+pub const BOOK_OPEN_TEXT: &str = "\u{e54e}";
+pub const SQUARE_SPLIT_HORIZONTAL: &str = "\u{e3b9}";

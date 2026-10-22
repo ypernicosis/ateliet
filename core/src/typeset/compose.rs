@@ -265,6 +265,19 @@ fn shape(db: &FontDb, font: FontId, text: &str, size: f32, spacing: f32) -> Shap
     Shaped { font, glyphs, map, w: pen }
 }
 
+/// A run of text shaped in a face (or the first that has all its
+/// characters): (face, glyphs from its start, glyph→text map, width), at
+/// `size` pt with `spacing` added after each glyph (in the same units).
+pub fn run(db: &FontDb, font: FontId, text: &str, size: f32, spacing: f32) -> (FontId, Vec<Glyph>, Vec<(u16, String)>, f32) {
+    let s = shape(db, font, text, size, spacing);
+    (s.font, s.glyphs, s.map, s.w)
+}
+
+/// The first family of a list that is installed (any face).
+pub fn first_font(db: &FontDb, families: &[&str], italic: bool, weight: u16) -> FontId {
+    families.iter().find_map(|f| db.find(f, italic, weight)).unwrap_or(0)
+}
+
 struct Line {
     words: Vec<Shaped>,
     w: f32,

@@ -103,6 +103,16 @@ pub fn render(page: &Page, db: &FontDb, pics: &[Picture], ppm: f32) -> (u32, u32
     (w as u32, h as u32, r.into_rgba())
 }
 
+/// Items over nothing (transparent), `w`×`h` units at `ppm` pixels a unit.
+pub fn render_layer(items: &[Item], w: f32, h: f32, db: &FontDb, pics: &[Picture], ppm: f32) -> (u32, u32, Vec<u8>) {
+    let pw = (w * ppm).round().max(1.0) as usize;
+    let ph = (h * ppm).round().max(1.0) as usize;
+    let mut r = Raster::new(pw, ph, 2);
+    let s = ppm as f64;
+    draw(&mut r, items, &[s, 0.0, 0.0, s, 0.0, 0.0], db, pics, 1.0);
+    (pw as u32, ph as u32, r.into_rgba())
+}
+
 /// A text item's glyph outlines, each edge in raster space.
 fn glyph_edges(it: &Item, m: &M, db: &FontDb) -> Vec<Edge> {
     let Item::Text { font, size, x, y, glyphs, .. } = it else { return Vec::new() };
