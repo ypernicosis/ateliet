@@ -12,7 +12,10 @@ path = "src/main.rs"
 # Search pictures by description (CLIP on ONNX Runtime, fetched at build time
 # like the web shell). `vision-dynamic` loads a system ONNX Runtime instead
 # (ORT_DYLIB_PATH); --no-default-features leaves image search by name only.
-default = ["vision"]
+default = ["vision", "audio"]
+# Play the vault's audio in the app (Trilha). On Linux it needs the ALSA
+# headers (libasound2-dev / alsa-lib-devel).
+audio = ["dep:rodio"]
 clip = ["dep:ureq"]
 vision = ["clip", "ateliet_core/ort-bundled"]
 vision-dynamic = ["clip", "ateliet_core/ort-dynamic"]
@@ -36,3 +39,4 @@ ureq = { version = "2", optional = true }
 trash = "5"
 arboard = { version = "3", default-features = false }
 ab_glyph = "0.2"
+rodio = { version = "0.21", optional = true, default-features = false, features = ["playback", "mp3", "flac", "vorbis", "wav", "symphonia-isomp4", "symphonia-aac"] }

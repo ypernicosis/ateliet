@@ -65,6 +65,9 @@ impl Binder {
                 if kit::icon_button_sized(ui, icons::WAYPOINTS, "Enredo", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::View("enredo".into(), Some(book.path.clone())));
                 }
+                if kit::icon_button_sized(ui, icons::MUSIC, "Trilha", false, p, 24.0, 14.0).clicked() {
+                    acts.push(Action::View("trilha".into(), Some(book.path.clone())));
+                }
                 if kit::icon_button_sized(ui, icons::USERS, "Elenco", false, p, 24.0, 14.0).clicked() {
                     acts.push(Action::View("cast".into(), Some(book.path.clone())));
                 }

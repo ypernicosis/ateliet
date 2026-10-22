@@ -14,6 +14,7 @@ pub mod mapa;
 pub mod mundo;
 pub mod sheet;
 pub mod stats;
+pub mod trilha;
 
 use once_cell::sync::Lazy;
 use regex::Regex;

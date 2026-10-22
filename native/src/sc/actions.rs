@@ -54,7 +54,7 @@ impl App {
                 self.right_tab = crate::app::RightTab::Manuscript;
                 self.binder.book = book;
             }
-            "cast" | "enredo" | "mundo" => {
+            "cast" | "enredo" | "mundo" | "trilha" => {
                 if let Some(b) = book {
                     self.open(&format!("scriptorium:{view}:{b}"), true);
                 }
@@ -204,6 +204,12 @@ impl App {
                 }
             }
             Action::Toast(t) => self.toast(t),
+            Action::Music(cmd) => {
+                let (Some(v), Some(sc)) = (&self.vault, &self.sc) else { return };
+                let ix = v.index.read().unwrap();
+                let resolve = |t: &str, s: &str| v.resolve(t, s);
+                self.music.run(cmd, &v.root, &ix, &sc.author(), &resolve);
+            }
             Action::OpenLink(t, source, nt) => {
                 let target = self.vault.as_ref().and_then(|v| v.resolve(t.split('#').next().unwrap_or(&t), &source));
                 match target {
@@ -326,6 +332,70 @@ impl App {
         }
     }
 
+    /// The music: what plays, the diary of the chapter being written, the app's answers.
+    pub fn music_tick(&mut self, ctx: &eframe::egui::Context) {
+        if let Some(sc) = self.sc.as_mut() {
+            if !self.music.app_ok && sc.settings.data["musicaApp"] == "ok" {
+                self.music.app_ok = true;
+            } else if self.music.app_ok && sc.settings.data["musicaApp"] != "ok" {
+                sc.settings.set("musicaApp", json!("ok"));
+            }
+            self.music.diary = sc.settings.data["diarioTrilha"] != false;
+        }
+        let (Some(v), Some(sc)) = (&self.vault, &self.sc) else { return };
+        // a chapter being written
+        if let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none()) {
+            if let Some(e) = t.last_edit.filter(|e| self.music.last_edit.is_none_or(|m| *e > m)) {
+                let is_ch = v.index.read().unwrap().page(&t.path).is_some_and(|p| book::kind(p) == "capitulo");
+                if is_ch {
+                    self.music.last_edit = Some(e);
+                    self.music.last_chapter = Some(t.path.clone());
+                }
+            }
+        }
+        {
+            let ix = v.index.read().unwrap();
+            self.music.tick(ctx, &v.root, &ix, &sc.author());
+        }
+        let written = std::mem::take(&mut self.music.written);
+        if !written.is_empty() {
+            v.index.write().unwrap().update(&written);
+        }
+        for t in std::mem::take(&mut self.music.toasts) {
+            self.toast(t);
+        }
+        if let Some((b, list)) = self.music.playlists.take() {
+            let items = list.into_iter().map(|(id, name)| (name.clone(), format!("{id}\t{name}"), String::new())).collect();
+            self.picker = Some(crate::sc::picker::Picker::new("Qual playlist é a trilha deste livro?", items, crate::sc::picker::Purpose::Playlist(b), crate::icons::MUSIC));
+        }
+    }
+
+    /// "Escrever ouvindo…": pick a track of the current book (themes of this chapter first).
+    pub fn write_with(&mut self) {
+        let Some(b) = self.current_book() else {
+            self.toast("Abra um capítulo ou escolha um livro na Biblioteca.");
+            return;
+        };
+        let (Some(v), Some(_)) = (&self.vault, &self.sc) else { return };
+        let data = ateliet_core::scriptorium::trilha::load(&v.root, &b);
+        let ch = self.active_path().filter(|p| v.index.read().unwrap().page(p).is_some_and(|pg| book::kind(pg) == "capitulo"));
+        let fm = ch.as_ref().and_then(|c| v.index.read().unwrap().page(c).map(|pg| pg.yaml.clone())).unwrap_or(Json::Null);
+        let themes = ch.as_ref().map(|c| ateliet_core::scriptorium::trilha::theme_keys_for_chapter(&data, c, &fm)).unwrap_or_default();
+        let mut items: Vec<(String, String, String)> = data["faixas"].as_array().into_iter().flatten().map(|t| {
+            let k = t["k"].as_str().unwrap_or("").to_string();
+            let star = if themes.contains(&k) { "★ " } else { "" };
+            (format!("{star}{}", t["nome"].as_str().unwrap_or("")), k, t["artista"].as_str().unwrap_or("").to_string())
+        }).collect();
+        if items.is_empty() {
+            self.toast("A trilha deste livro está vazia: adicione faixas na tela Trilha.");
+            self.open_view("trilha", Some(b.path));
+            return;
+        }
+        items.sort_by_key(|x| !x.0.starts_with('★'));
+        let title = if ch.is_some() { "Escrever este capítulo ouvindo… (★ = tema dele)" } else { "Tocar…" };
+        self.picker = Some(crate::sc::picker::Picker::new(title, items, crate::sc::picker::Purpose::WriteWith(b.path, ch), crate::icons::MUSIC));
+    }
+
     pub fn picker_ui(&mut self, ctx: &eframe::egui::Context) {
         let p = self.palette;
         let Some(pk) = self.picker.as_mut() else { return };
@@ -335,6 +405,21 @@ impl App {
             if let Some(v) = chosen {
                 let target = match &pk.purpose {
                     crate::sc::picker::Purpose::Portrait(s) | crate::sc::picker::Purpose::Gallery(s) | crate::sc::picker::Purpose::Person(s, _) => s.clone(),
+                    crate::sc::picker::Purpose::Playlist(b) => {
+                        let (pid, name) = v.split_once('\t').unwrap_or((v.as_str(), ""));
+                        if let (Some(vault), Some(sc)) = (&self.vault, &self.sc) {
+                            let ix = vault.index.read().unwrap();
+                            if let Some(book) = book::book_by_path(&ix, b, &sc.author()) {
+                                self.music.import(&vault.root, &ix, &book, pid, name);
+                            }
+                        }
+                        return;
+                    }
+                    crate::sc::picker::Purpose::WriteWith(b, ch) => {
+                        let (b, ch) = (b.clone(), ch.clone());
+                        self.sc_apply(Action::Music(crate::music::Cmd::Play(b, v, ch)));
+                        return;
+                    }
                 };
                 if let Some(crate::sc::View::Sheet(s)) = self.tabs.iter_mut().find(|t| t.path == target).and_then(|t| t.view.as_mut()) {
                     s.picked(&pk.purpose, &v);

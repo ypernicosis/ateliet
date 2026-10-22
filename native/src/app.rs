@@ -145,6 +145,7 @@ pub struct App {
     pub form: Option<crate::form::Form>,
     pub export: Option<crate::sc::export_ui::ExportDialog>,
     pub picker: Option<crate::sc::picker::Picker>,
+    pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
     pub sprint: Option<crate::sc::focus::Sprint>,
     pub focus_restore: (bool, bool),
@@ -194,6 +195,7 @@ impl App {
             form: None,
             export: None,
             picker: None,
+            music: Default::default(),
             focus: None,
             sprint: None,
             focus_restore: (true, true),
@@ -433,6 +435,16 @@ impl App {
             }
             return;
         }
+        if let Some(crate::sc::View::Trilha(tv)) = t.view.as_mut() {
+            let saved = {
+                let ix = v.index.read().unwrap();
+                tv.save(&v.root, &ix, &self.sc.as_ref().map(|s| s.author()).unwrap_or_default())
+            };
+            if let Some(p) = saved {
+                v.index.write().unwrap().update(&[p]);
+            }
+            return;
+        }
         if let Some(crate::sc::View::Mapa(m)) = t.view.as_mut() {
             if let Some(p) = m.save(&v.root) {
                 v.index.write().unwrap().update(&[p]);
@@ -607,6 +619,10 @@ impl App {
                 }
             }
             Action::ToggleTaskIn(path, line, c) => self.toggle_task(&path, line, c),
+            Action::Play(src) => {
+                let source = self.active_path().unwrap_or_default();
+                self.sc_apply(crate::sc::Action::Music(crate::music::Cmd::PlaySrc(src, source)));
+            }
         }
     }
 
@@ -790,6 +806,7 @@ impl eframe::App for App {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         self.finish_templates();
+        self.music_tick(ctx);
         commands::shortcuts(self, ctx);
 
         self.sprint_tick();
@@ -827,6 +844,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if let (Some(v), Some(sc)) = (&self.vault, &self.sc) {
+            let ix = v.index.read().unwrap();
+            self.music.flush(&v.root, &ix, &sc.author());
+        }
         if let Some(sc) = self.sc.as_mut() {
             sc.settings.save();
         }
@@ -929,7 +950,7 @@ impl App {
             if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
                 let acts = {
                     let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };
-                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p, dv: &self.dv_settings };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut self.caches, palette: p, dv: &self.dv_settings, music: &self.music };
                     match self.tabs[self.active].view.as_mut().unwrap() {
                         crate::sc::View::Library(l) => l.ui(ui, &mut cx),
                         crate::sc::View::Cast(c) => c.ui(ui, &mut cx),
@@ -937,6 +958,7 @@ impl App {
                         crate::sc::View::Enredo(e) => e.ui(ui, &mut cx),
                         crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
                         crate::sc::View::Mapa(m) => m.ui(ui, &mut cx),
+                        crate::sc::View::Trilha(t) => t.ui(ui, &mut cx),
                     }
                 };
                 // a map can walk into its submaps: the tab follows

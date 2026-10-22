@@ -130,7 +130,7 @@ pub fn note_name(path: &str) -> String {
     path.rsplit('/').next().unwrap_or(path).trim_end_matches(".md").to_string()
 }
 
-pub(super) fn truncated(ui: &egui::Ui, text: &str, font: egui::FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+pub(crate) fn truncated(ui: &egui::Ui, text: &str, font: egui::FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: font, color, ..Default::default() });
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(8.0));
     ui.fonts(|f| f.layout_job(job))

@@ -16,6 +16,7 @@ mod kit;
 mod images_ui;
 mod live;
 mod markdown;
+mod music;
 mod panels;
 mod sc;
 mod templater;

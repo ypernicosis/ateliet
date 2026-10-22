@@ -460,7 +460,7 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
                 let active = app.active_path();
                 let acts = {
                     let (Some(v), Some(sc)) = (app.vault.as_ref(), app.sc.as_mut()) else { return };
-                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut app.caches, palette: app.palette, dv: &app.dv_settings };
+                    let mut cx = crate::sc::library::Cx { vault: v, sc, caches: &mut app.caches, palette: app.palette, dv: &app.dv_settings, music: &app.music };
                     app.binder.ui(ui, &mut cx, active.as_deref())
                 };
                 for a in acts {
@@ -677,6 +677,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             Some(crate::sc::View::Enredo(_)) => icons::WAYPOINTS,
                             Some(crate::sc::View::Mundo(_)) => icons::GLOBE,
                             Some(crate::sc::View::Mapa(_)) => icons::MAP,
+                            Some(crate::sc::View::Trilha(_)) => icons::MUSIC,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
                             None => icons::FILE_TEXT,
@@ -801,6 +802,7 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
             if app.templater.running > 0 {
                 ui.label(small("Executando modelo…".into()));
             }
+            mini_player(app, ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 if let Some(s) = app.sprint.as_ref() {
@@ -829,6 +831,73 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
             });
         });
     });
+}
+
+/// What plays, with play/pause and next; its menu writes with music or opens the soundtrack.
+fn mini_player(app: &mut App, ui: &mut egui::Ui) {
+    let p = app.palette;
+    let now = app.music.now.clone();
+    let mut cmd = None;
+    let mut write = false;
+    let mut open = false;
+    ui.spacing_mut().item_spacing.x = 4.0;
+    let menu = |ui: &mut egui::Ui, write: &mut bool, open: &mut bool| {
+        if kit::menu_item(ui, icons::PEN_LINE, "Escrever ouvindo…", p) {
+            *write = true;
+            ui.close_menu();
+        }
+        if kit::menu_item(ui, icons::MUSIC, "Abrir a Trilha do livro", p) {
+            *open = true;
+            ui.close_menu();
+        }
+    };
+    if now.some() {
+        if kit::icon_button_sized(ui, icons::SKIP_BACK, "Anterior", false, p, 20.0, 12.0).clicked() {
+            cmd = Some(crate::music::Cmd::Previous);
+        }
+        let g = if now.playing { icons::PAUSE } else { icons::PLAY };
+        if kit::icon_button_sized(ui, g, if now.playing { "Pausar" } else { "Tocar" }, false, p, 20.0, 12.0).clicked() {
+            cmd = Some(crate::music::Cmd::PlayPause);
+        }
+        if kit::icon_button_sized(ui, icons::SKIP_FORWARD, "Próxima", false, p, 20.0, 12.0).clicked() {
+            cmd = Some(crate::music::Cmd::Next);
+        }
+        let lab = if now.artist.is_empty() { now.name.clone() } else { format!("{} — {}", now.name, now.artist) };
+        let g = crate::sc::enredo_ui::truncated(ui, &lab, egui::FontId::proportional(11.5), if now.playing { p.text } else { p.faint }, 280.0);
+        let r = ui.add(egui::Label::new(g).sense(egui::Sense::click()));
+        if now.dur > 0.0 {
+            let f = (now.pos / now.dur).clamp(0.0, 1.0) as f32;
+            let y = r.rect.bottom() + 1.0;
+            ui.painter().line_segment([egui::pos2(r.rect.left(), y), egui::pos2(r.rect.right(), y)], egui::Stroke::new(1.5_f32, p.border));
+            ui.painter().line_segment([egui::pos2(r.rect.left(), y), egui::pos2(r.rect.left() + r.rect.width() * f, y)], egui::Stroke::new(1.5_f32, p.accent_strong));
+        }
+        r.context_menu(|ui| menu(ui, &mut write, &mut open));
+        if r.clicked() {
+            open = true;
+        }
+    } else {
+        let r = kit::icon_button_sized(ui, icons::MUSIC, "Música para escrever", false, p, 20.0, 12.0);
+        let id = ui.make_persistent_id("mini-player-menu");
+        if r.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(id));
+        }
+        egui::popup_above_or_below_widget(ui, id, &r, egui::AboveOrBelow::Above, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+            ui.set_min_width(220.0);
+            menu(ui, &mut write, &mut open);
+        });
+    }
+    if let Some(c) = cmd {
+        app.sc_apply(crate::sc::Action::Music(c));
+    }
+    if write {
+        app.write_with();
+    }
+    if open {
+        match app.current_book() {
+            Some(b) => app.open_view("trilha", Some(b.path)),
+            None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),
+        }
+    }
 }
 
 pub fn empty_state(app: &mut App, ui: &mut egui::Ui) {

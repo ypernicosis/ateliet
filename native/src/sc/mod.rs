@@ -12,6 +12,7 @@ pub mod enredo_st;
 pub mod enredo_ui;
 pub mod picker;
 pub mod sheet_ui;
+pub mod trilha_ui;
 pub mod export_ui;
 pub mod focus;
 pub mod library;
@@ -78,6 +79,7 @@ pub enum Action {
     /// (target, source note, new tab)
     OpenLink(String, String, bool),
     Toast(String),
+    Music(crate::music::Cmd),
 }
 
 impl Sc {
@@ -172,6 +174,7 @@ pub enum View {
     Enredo(Box<enredo_ui::EnredoView>),
     Mundo(Box<mundo_ui::MundoView>),
     Mapa(Box<mapa_ui::MapaView>),
+    Trilha(Box<trilha_ui::TrilhaView>),
 }
 
 impl View {
@@ -183,6 +186,7 @@ impl View {
             View::Enredo(e) => e.title(),
             View::Mundo(m) => m.title(),
             View::Mapa(m) => m.title(),
+            View::Trilha(t) => t.title(),
         }
     }
 
@@ -192,6 +196,9 @@ impl View {
             _ => {
                 if let Some(b) = path.strip_prefix("scriptorium:mundo:") {
                     return Some(View::Mundo(Box::new(mundo_ui::MundoView::new(b))));
+                }
+                if let Some(b) = path.strip_prefix("scriptorium:trilha:") {
+                    return Some(View::Trilha(Box::new(trilha_ui::TrilhaView::new(b))));
                 }
                 if let Some(b) = path.strip_prefix("scriptorium:enredo:") {
                     return Some(View::Enredo(Box::new(enredo_ui::EnredoView::new(b))));

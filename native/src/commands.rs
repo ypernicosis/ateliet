@@ -36,6 +36,7 @@ pub enum Cmd {
     Manuscript,
     Enredo,
     Mundo,
+    Trilha,
     NewBook,
     NewChapter,
     NewCharacter,
@@ -70,6 +71,7 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Manuscript, "scriptorium-omena:abrir-manuscrito", "Scriptorium: Painel do manuscrito (capítulos)"),
     (Cmd::Enredo, "scriptorium-omena:abrir-enredo", "Scriptorium: Enredo (tramas, escaleta, cronologia)"),
     (Cmd::Mundo, "scriptorium-omena:abrir-mundo", "Scriptorium: Mundo (códice, tempo, genealogias, línguas)"),
+    (Cmd::Trilha, "scriptorium-omena:abrir-trilha", "Scriptorium: Trilha sonora do livro"),
     (Cmd::NewBook, "scriptorium-omena:novo-livro", "Scriptorium: Novo livro"),
     (Cmd::NewChapter, "scriptorium-omena:novo-capitulo", "Scriptorium: Novo capítulo"),
     (Cmd::NewCharacter, "scriptorium-omena:novo-personagem", "Scriptorium: Novo personagem"),
@@ -160,6 +162,10 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             let b = app.current_book().map(|b| b.path);
             app.open_view("binder", b);
         }
+        Cmd::Trilha => match app.current_book() {
+            Some(b) => app.open_view("trilha", Some(b.path)),
+            None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),
+        },
         Cmd::Mundo => match app.current_book() {
             Some(b) => app.open_view("mundo", Some(b.path)),
             None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),

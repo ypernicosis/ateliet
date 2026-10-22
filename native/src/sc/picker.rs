@@ -12,6 +12,10 @@ pub enum Purpose {
     Gallery(String),
     /// (sheet path, list key)
     Person(String, String),
+    /// A playlist of the Music app for a book's soundtrack (book path).
+    Playlist(String),
+    /// "Escrever ouvindo…": a track of the book (book path, chapter).
+    WriteWith(String, Option<String>),
 }
 
 #[derive(Clone, Debug)]

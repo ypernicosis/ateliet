@@ -513,6 +513,8 @@ pub enum Action {
     ToggleTask(usize, char),
     /// A task shown by a query: (note, line, current status).
     ToggleTaskIn(String, usize, char),
+    /// Play a link or an audio file of the vault (a `playlist` block).
+    Play(String),
 }
 
 /// What the renderer needs from the app.
@@ -907,6 +909,26 @@ impl<'h> Renderer<'h> {
                 if l == "dataview" || l == "dataviewjs" {
                     let res = self.host.query(&l, text);
                     crate::dv::render(self, ui, &res);
+                    return;
+                }
+                if l == "playlist" {
+                    let lines: Vec<String> = text.lines().map(String::from).collect();
+                    let items = ateliet_core::scriptorium::trilha::playlist_items(&lines);
+                    egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if items.is_empty() {
+                            ui.label(egui::RichText::new("Playlist vazia. Cole links do Spotify, Apple Music, YouTube, SoundCloud ou [[áudio.mp3]] do cofre, um por linha.").size(size * 0.85).color(p.faint));
+                        }
+                        for (title, src) in items {
+                            let local = !src.starts_with("http");
+                            let name = if !title.is_empty() { title.clone() } else if local { src.trim_start_matches('!').trim_start_matches("[[").trim_end_matches("]]").to_string() } else { src.clone() };
+                            let kind = if local { "áudio do cofre".to_string() } else { ateliet_core::scriptorium::trilha::service(&src).map(|s| format!("abrir no {s}")).unwrap_or_else(|| "abrir".into()) };
+                            let r = crate::kit::Row::new(&name).icon(if local { crate::icons::PLAY } else { crate::icons::MUSIC }).trailing(kind).show(ui, p);
+                            if r.clicked() {
+                                self.actions.push(Action::Play(src.clone()));
+                            }
+                        }
+                    });
                     return;
                 }
                 egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {

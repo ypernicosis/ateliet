@@ -22,6 +22,7 @@ pub struct Cx<'a> {
     pub caches: &'a mut Caches,
     pub palette: Palette,
     pub dv: &'a ateliet_core::dataview::Settings,
+    pub music: &'a crate::music::Music,
 }
 
 /// The cover: the book's picture (`capa`) or a plain coloured board with the title.
@@ -180,6 +181,9 @@ impl Library {
                             }
                             if kit::button(ui, Some(icons::WAYPOINTS), "Enredo", p).clicked() {
                                 acts.push(Action::View("enredo".into(), Some(b.path.clone())));
+                            }
+                            if kit::button(ui, Some(icons::MUSIC), "Trilha", p).clicked() {
+                                acts.push(Action::View("trilha".into(), Some(b.path.clone())));
                             }
                             if kit::button(ui, Some(icons::USERS), "Elenco", p).clicked() {
                                 acts.push(Action::View("cast".into(), Some(b.path.clone())));

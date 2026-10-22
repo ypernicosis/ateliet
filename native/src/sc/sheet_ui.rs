@@ -152,6 +152,7 @@ impl SheetView {
                 l.push(json!(value));
                 self.sheet.fm.insert(list.clone(), Json::Array(l));
             }
+            _ => return,
         }
         self.changed();
     }
