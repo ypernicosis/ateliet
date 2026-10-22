@@ -47,6 +47,8 @@ pub enum Cmd {
     ContinueBook,
     ExportBook,
     Focus,
+    Back,
+    Forward,
 }
 
 const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -86,6 +88,8 @@ const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::ContinueBook, "scriptorium-omena:continuar", "Scriptorium: Continuar escrevendo"),
     (Cmd::ExportBook, "scriptorium-omena:exportar", "Scriptorium: Exportar livro…"),
     (Cmd::Focus, "scriptorium-omena:modo-foco", "Scriptorium: Alternar modo foco"),
+    (Cmd::Back, "app:go-back", "Voltar"),
+    (Cmd::Forward, "app:go-forward", "Avançar"),
 ];
 
 fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
@@ -101,6 +105,8 @@ fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
         Cmd::NewFromTemplate => KeyboardShortcut::new(Modifiers::ALT, Key::N),
         Cmd::Settings => KeyboardShortcut::new(cmd, Key::Comma),
         Cmd::ImageMode => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::I),
+        Cmd::Back => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowLeft),
+        Cmd::Forward => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowRight),
         _ => return None,
     })
 }
@@ -166,6 +172,8 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::NewStoryboard => app.new_board_dlg = Some(crate::board_ui::NewBoard::new()),
         Cmd::Library => app.open_view("library", None),
         Cmd::Focus => app.toggle_focus(),
+        Cmd::Back => app.go_history(true),
+        Cmd::Forward => app.go_history(false),
         Cmd::Manuscript => {
             let b = app.current_book().map(|b| b.path);
             app.open_view("binder", b);

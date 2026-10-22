@@ -40,6 +40,9 @@ pub struct Tab {
     pub board: Option<Box<crate::board_ui::BoardEditor>>,
     /// A Scriptorium screen (the library…) instead of a note.
     pub view: Option<crate::sc::View>,
+    /// Paths this tab showed before (back) and after going back (forward).
+    pub back: Vec<String>,
+    pub fwd: Vec<String>,
 }
 
 impl Tab {
@@ -151,6 +154,8 @@ pub struct App {
     pub export: Option<crate::sc::export_ui::ExportDialog>,
     pub picker: Option<crate::sc::picker::Picker>,
     pub new_board_dlg: Option<crate::board_ui::NewBoard>,
+    /// Set while going back (true) or forward (false) in a tab's history.
+    nav: Option<bool>,
     pub updater: crate::update::Updater,
     pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
@@ -204,6 +209,7 @@ impl App {
             export: None,
             picker: None,
             new_board_dlg: None,
+            nav: None,
             updater: crate::update::Updater::new(),
             music: Default::default(),
             focus: None,
@@ -309,13 +315,12 @@ impl App {
                 self.active = i;
                 return;
             }
-            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view) };
+            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
             if new_tab || self.tabs.is_empty() {
                 self.tabs.push(tab);
                 self.active = self.tabs.len() - 1;
             } else {
-                self.save_tab(self.active);
-                self.tabs[self.active] = tab;
+                self.replace_active(tab);
             }
             self.save_session();
             return;
@@ -355,13 +360,12 @@ impl App {
                 _ => None,
             };
             if let Some(view) = view {
-                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view) };
+                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
                 } else {
-                    self.save_tab(self.active);
-                    self.tabs[self.active] = tab;
+                    self.replace_active(tab);
                 }
                 self.recent.retain(|p| p != path);
                 self.recent.insert(0, path.to_string());
@@ -370,19 +374,53 @@ impl App {
             }
         }
         let text = if is_board { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: None };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: None, back: Vec::new(), fwd: Vec::new() };
         tab.board = board;
         if new_tab || self.tabs.is_empty() {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
         } else {
-            self.save_tab(self.active);
-            self.tabs[self.active] = tab;
+            self.replace_active(tab);
         }
         self.recent.retain(|p| p != path);
         self.recent.insert(0, path.to_string());
         self.recent.truncate(30);
         self.save_session();
+    }
+
+    /// Show `tab` in place of the active one; the history moves along.
+    fn replace_active(&mut self, mut tab: Tab) {
+        self.save_tab(self.active);
+        let old = &mut self.tabs[self.active];
+        let (mut back, mut fwd) = (std::mem::take(&mut old.back), std::mem::take(&mut old.fwd));
+        match self.nav.take() {
+            // going back: the page left goes to forward
+            Some(true) => fwd.push(old.path.clone()),
+            Some(false) => back.push(old.path.clone()),
+            None => {
+                back.push(old.path.clone());
+                fwd.clear();
+            }
+        }
+        back.truncate(100);
+        tab.back = back;
+        tab.fwd = fwd;
+        self.tabs[self.active] = tab;
+    }
+
+    /// Back (or forward) in the active tab's history.
+    pub fn go_history(&mut self, back: bool) {
+        let Some(t) = self.tabs.get_mut(self.active) else { return };
+        let list = if back { &mut t.back } else { &mut t.fwd };
+        let Some(path) = list.pop() else { return };
+        if self.tabs.iter().any(|t| t.path == path) {
+            // shown in another tab already: go there
+            self.open(&path, false);
+            return;
+        }
+        self.nav = Some(back);
+        self.open(&path, false);
+        self.nav = None;
     }
 
     /// Follow a link from the active note; a missing note is created.
@@ -888,6 +926,11 @@ impl eframe::App for App {
             return;
         }
         // changes on disk
+        // the mouse's back and forward buttons
+        let (mb, mf) = ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
+        if mb || mf {
+            self.go_history(mb);
+        }
         let changed = self.vault.as_mut().unwrap().poll_changes();
         if !changed.is_empty() {
             let v = self.vault.as_ref().unwrap();
