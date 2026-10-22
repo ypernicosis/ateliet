@@ -756,6 +756,114 @@ pub fn pages_pdf(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, db: &F
     crate::typeset::pdf::write(&pages, db, &pictures, &crate::typeset::pdf::Meta { title: title.into(), author: String::new(), lang: String::new() })
 }
 
+/// The shots on A4 landscape pages (six a page, three columns), each with
+/// its number, shot and notes: the presentation board.
+pub fn presentation_pdf(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, db: &FontDb, title: &str, per_page: usize) -> Result<Vec<u8>, String> {
+    let (pw, ph, m) = (297.0f32, 210.0f32, 12.0f32);
+    let per = per_page.clamp(1, 12);
+    let cols = if per <= 4 { 2 } else { 3 };
+    let rows = per.div_ceil(cols);
+    let n = doc.frame_count();
+    let count = n.div_ceil(per).max(1);
+    let aspect = doc.height() as f32 / doc.width().max(1) as f32;
+    let gap = 7.0;
+    let cw = (pw - 2.0 * m - gap * (cols as f32 - 1.0)) / cols as f32;
+    let head = 12.0;
+    let ch = (ph - 2.0 * m - head - gap * (rows as f32 - 1.0)) / rows as f32;
+    // the picture takes what the notes leave
+    let notes_h = 22.0f32.min(ch * 0.45);
+    let (mut iw, mut ih) = (cw, cw * aspect);
+    if ih > ch - notes_h {
+        ih = ch - notes_h;
+        iw = ih / aspect;
+    }
+    let ink = [0x22, 0x22, 0x22];
+    let muted = [0x77, 0x77, 0x77];
+    let sans = compose::first_font(db, &["Inter", "Helvetica Neue", "Arial"], false, 400);
+    let sans_b = compose::first_font(db, &["Inter", "Helvetica Neue", "Arial"], false, 600);
+    let mut pages = Vec::new();
+    let mut pictures = Vec::new();
+    let label = |text: &str, font, size: f32, x: f32, y: f32, color: [u8; 3]| -> Item {
+        let (f, glyphs, map, _) = compose::run(db, font, text, size, 0.0);
+        Item::Text { font: f, size, x, y, color, glyphs, text: text.to_string(), map }
+    };
+    for pg in 0..count {
+        let mut page = crate::typeset::Page::new(pw, ph, pg + 1, crate::typeset::PageKind::Fixed, [255, 255, 255]);
+        page.items.push(label(title, sans_b, 11.0, m, m + 5.0, ink));
+        let pn = format!("{} / {}", pg + 1, count);
+        let w = compose::run(db, sans, &pn, 9.0, 0.0).3;
+        page.items.push(label(&pn, sans, 9.0, pw - m - w, m + 5.0, muted));
+        for k in 0..per {
+            let i = pg * per + k;
+            if i >= n {
+                break;
+            }
+            let (c, r) = (k % cols, k / cols);
+            let x = m + c as f32 * (cw + gap);
+            let y = m + head + r as f32 * (ch + gap);
+            let (w0, h0, px) = super::compose::frame_image(doc, pics, i, 900, true);
+            pictures.push(crate::typeset::Picture { w: w0, h: h0, rgba: px, jpeg: None });
+            page.items.push(Item::Image { pic: pictures.len() - 1, x, y, w: iw, h: ih });
+            page.items.push(Item::Path { polys: vec![vec![(x, y), (x + iw, y), (x + iw, y + ih), (x, y + ih)]], fill: None, fill_alpha: 1.0, stroke: Some(Pen { width: 0.2, color: [0xbb, 0xbb, 0xbb], dash: None }) });
+            let f = doc.frame(i).clone();
+            let notes = &f["notes"];
+            let name = f["name"].as_str().filter(|s| !s.is_empty()).map(String::from).unwrap_or_else(|| (i + 1).to_string());
+            let shot = notes["shot"].as_str().unwrap_or("");
+            let head_line = if shot.is_empty() { name } else { format!("{name}  ·  {shot}") };
+            let ty = y + ih + 4.2;
+            page.items.push(label(&head_line, sans_b, 8.5, x, ty, ink));
+            let secs = num(&f["duration"], 24.0) / doc.fps().max(1) as f32;
+            let t = format!("{:.1} s", secs).replace('.', ",");
+            let tw = compose::run(db, sans, &t, 8.0, 0.0).3;
+            page.items.push(label(&t, sans, 8.0, x + cw - tw, ty, muted));
+            let mut body = Vec::new();
+            for (k2, pre) in [("action", ""), ("dialogue", "— "), ("camera", "Câmera: "), ("sound", "Som: ")] {
+                if let Some(v) = notes[k2].as_str().filter(|v| !v.trim().is_empty()) {
+                    body.push(format!("{pre}{}", v.trim()));
+                }
+            }
+            if !body.is_empty() {
+                page.items.extend(compose::text_box(
+                    &compose::TextBox { x, y: ty + 1.5, w: cw, h: (y + ch) - (ty + 1.5), text: &body.join("\n"), font: "Inter", kind: "sans", size: 7.5, color: [0x44, 0x44, 0x44], align: "left", valign: "top", lh: 1.3, weight: 400, italic: false, spacing: 0.0, stroke: 0.0, stroke_color: [255; 3], vertical: false, upper: false },
+                    db,
+                ));
+            }
+        }
+        pages.push(page);
+    }
+    crate::typeset::pdf::write(&pages, db, &pictures, &crate::typeset::pdf::Meta { title: title.into(), author: String::new(), lang: "pt-BR".into() })
+}
+
+/// A webtoon's parts cut into upload-sized slices (trailing blank paper
+/// left out): (part, slice number, w, h, rgba).
+pub fn webtoon_slices(doc: &mut BoardDoc, pics: &mut super::compose::Pictures, db: &FontDb) -> Vec<(usize, usize, u32, u32, Vec<u8>)> {
+    let slice = num(&doc.board["page"]["slice"], 1280.0).max(100.0) as u32;
+    let mut out = Vec::new();
+    for i in 0..doc.frame_count() {
+        let (w, h, px) = page_image(doc, pics, db, i, 1.0, false);
+        let paper = [px[0], px[1], px[2]];
+        let blank = |y: u32| (0..w).step_by(4).all(|x| {
+            let k = ((y * w + x) * 4) as usize;
+            (px[k] as i32 - paper[0] as i32).abs() + (px[k + 1] as i32 - paper[1] as i32).abs() + (px[k + 2] as i32 - paper[2] as i32).abs() <= 12
+        });
+        let mut end = h;
+        while end > 1 && blank(end - 1) {
+            end -= 1;
+        }
+        end = (end + 40).min(h);
+        let mut y = 0;
+        let mut k = 1;
+        while y < end {
+            let sh = slice.min(end - y);
+            let start = (y * w * 4) as usize;
+            out.push((i, k, w, sh, px[start..start + (sh * w * 4) as usize].to_vec()));
+            y += slice;
+            k += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -795,6 +903,25 @@ mod tests {
         assert!(px[i] < 80, "border pixel {:?}", &px[i..i + 4]);
         let pdf = pages_pdf(&mut d, &mut pics, &db, "HQ").unwrap();
         assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn presentation_and_slices() {
+        let mut d = board_for_kind(&KindOptions::defaults("presentation"));
+        for i in 1..8 {
+            d.add_frame(i);
+        }
+        d.board["frames"][0]["notes"]["action"] = json!("Ana atravessa o deserto.");
+        let db = FontDb::new(&[include_bytes!("../../../native/assets/fonts/Inter-Regular.ttf")]);
+        let mut pics = super::super::compose::Pictures::default();
+        let pdf = presentation_pdf(&mut d, &mut pics, &db, "Prancha", 6).unwrap();
+        assert!(pdf.starts_with(b"%PDF"));
+        let mut o = KindOptions::defaults("webtoon");
+        o.slices = 3;
+        let mut w = board_for_kind(&o);
+        let s = webtoon_slices(&mut w, &mut pics, &db);
+        // an empty strip keeps only its first slice (blank paper is left out)
+        assert_eq!(s.len(), 1);
     }
 
     #[test]

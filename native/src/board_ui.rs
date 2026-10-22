@@ -584,8 +584,14 @@ impl BoardEditor {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
+                let kind = self.doc.kind().to_string();
+                if kind == "webtoon" && kit::icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, "Exportar em fatias para envio (PNG)", false, p).clicked() {
+                    self.export_webtoon_slices();
+                }
                 if pages_kind && kit::icon_button(ui, icons::FILE_DOWN, "Exportar as páginas em PDF (tamanho de impressão, com sangria)", false, p).clicked() {
                     self.export_pages_pdf();
+                } else if !pages_kind && kind != "canvas" && kit::icon_button(ui, icons::FILE_DOWN, "Prancha em PDF (A4 deitado, seis planos por página, com as notas)", false, p).clicked() {
+                    self.export_presentation_pdf();
                 }
                 if pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar esta página como PNG", false, p).clicked() {
                     self.export_page_png();
@@ -974,6 +980,8 @@ impl BoardEditor {
             egui::ScrollArea::vertical().id_salt("layers").show(ui, |ui| {
                 if self.is_pages() {
                     self.page_ui(ui, p);
+                } else if self.doc.kind() != "canvas" {
+                    self.notes_ui(ui, p);
                 }
                 self.layers_ui(ui, p)
             });

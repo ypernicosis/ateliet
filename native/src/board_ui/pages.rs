@@ -692,6 +692,72 @@ impl BoardEditor {
     }
 }
 
+impl BoardEditor {
+    /// The shot's notes (animatic, presentation board): shot, camera,
+    /// action, dialogue, sound, and its length.
+    pub(super) fn notes_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        let f = self.frame;
+        ui.label(RichText::new("Plano").font(kit::medium(13.0)).color(p.text));
+        ui.add_space(4.0);
+        let fps = self.doc.fps().max(1) as f32;
+        let mut secs = num(&self.doc.frame(f)["duration"], 24.0) / fps;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Duração").size(12.0).color(p.muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.add(egui::DragValue::new(&mut secs).range(0.04..=600.0).speed(0.05).max_decimals(2).suffix(" s")).changed() {
+                    self.doc.board["frames"][f]["duration"] = json!((secs * fps).round().max(1.0));
+                    self.dirty = true;
+                    self.last_change = Some(Instant::now());
+                }
+            });
+        });
+        let w = ui.available_width();
+        for (k, label, rows) in [("shot", "Enquadramento", 1), ("camera", "Câmera", 1), ("action", "Ação", 3), ("dialogue", "Diálogo", 2), ("sound", "Som", 1)] {
+            ui.label(RichText::new(label).size(12.0).color(p.muted));
+            let mut v = self.doc.frame(f)["notes"][k].as_str().unwrap_or("").to_string();
+            let te = if rows > 1 { egui::TextEdit::multiline(&mut v).desired_rows(rows).desired_width(w) } else { egui::TextEdit::singleline(&mut v).desired_width(w) };
+            if ui.add(te).changed() {
+                if !self.doc.board["frames"][f]["notes"].is_object() {
+                    self.doc.board["frames"][f]["notes"] = json!({});
+                }
+                self.doc.board["frames"][f]["notes"][k] = json!(v);
+                self.dirty = true;
+                self.last_change = Some(Instant::now());
+            }
+        }
+        ui.add_space(8.0);
+        kit::hairline(ui, p);
+        ui.add_space(8.0);
+    }
+
+    pub(super) fn export_presentation_pdf(&mut self) {
+        let db = crate::fonts::book_fonts();
+        let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let out = self.abs.with_file_name(format!("{stem} - prancha.pdf"));
+        self.error = Some(match pg::presentation_pdf(&mut self.doc, &mut self.pics, &db, &stem, 6).and_then(|b| std::fs::write(&out, b).map_err(|e| e.to_string())) {
+            Ok(()) => format!("Prancha em PDF: {}", out.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()),
+            Err(e) => format!("Não foi possível exportar: {e}"),
+        });
+    }
+
+    pub(super) fn export_webtoon_slices(&mut self) {
+        let db = crate::fonts::book_fonts();
+        let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let dir = self.abs.with_file_name(format!("{stem} - fatias"));
+        let _ = std::fs::create_dir_all(&dir);
+        let slices = pg::webtoon_slices(&mut self.doc, &mut self.pics, &db);
+        let parts = self.doc.frame_count();
+        let mut n = 0;
+        for (part, k, w, h, px) in slices {
+            let name = if parts > 1 { format!("{stem} parte {} {k:02}.png", part + 1) } else { format!("{stem} {k:02}.png") };
+            if std::fs::write(dir.join(name), ateliet_core::board::tile::encode_png(&px, w, h)).is_ok() {
+                n += 1;
+            }
+        }
+        self.error = Some(format!("{n} fatias em {}", dir.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()));
+    }
+}
+
 /// Choosing what kind of storyboard to make, with its options.
 pub struct NewBoard {
     pub o: pg::KindOptions,
