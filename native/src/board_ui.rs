@@ -14,6 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod export;
 mod pages;
 mod refs;
 mod timeline;
@@ -84,6 +85,7 @@ pub struct BoardEditor {
     tl: timeline::TimelineState,
     rf: refs::RefState,
     ts: tools::ToolState,
+    xo: export::ExportOpts,
     /// The view mirrored (a check of proportions, not a change).
     mirror: bool,
 }
@@ -139,6 +141,7 @@ impl BoardEditor {
             tl: timeline::TimelineState::default(),
             rf: refs::RefState::default(),
             ts: tools::ToolState::default(),
+            xo: export::ExportOpts::default(),
             mirror: false,
         }
     }
@@ -718,18 +721,7 @@ impl BoardEditor {
         } else if !pages_kind && kind != "canvas" && kit::icon_button(ui, icons::FILE_DOWN, "Prancha em PDF (A4 deitado, seis planos por página, com as notas)", false, p).clicked() {
             self.export_presentation_pdf();
         }
-        if pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar esta página como PNG", false, p).clicked() {
-            self.export_page_png();
-        } else if !pages_kind && kit::icon_button(ui, icons::DOWNLOAD, "Exportar este quadro como PNG", false, p).clicked() {
-            let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, self.frame, 0, true);
-            let png = ateliet_core::board::tile::encode_png(&px, w, h);
-            let stem = self.abs.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            let out = self.abs.with_file_name(format!("{stem} - {}.png", self.frame + 1));
-            match std::fs::write(&out, png) {
-                Ok(()) => self.error = Some(format!("Exportado: {}", out.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())),
-                Err(e) => self.error = Some(e.to_string()),
-            }
-        }
+        self.export_menu(ui, p);
         ui.add_space(6.0);
         ui.label(RichText::new(format!("{:.0}%", self.zoom * 100.0)).size(12.0).color(p.faint));
         if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {

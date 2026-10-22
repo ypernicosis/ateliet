@@ -6,6 +6,7 @@
 pub mod brush;
 pub mod compose;
 pub mod doc;
+pub mod export;
 pub mod pages;
 pub mod paint;
 pub mod tile;
