@@ -214,4 +214,4 @@ file-search
  trees pentagon ruler scaling image-down rotate-cw
 message-circle zap shapes sunset chevrons-up chevrons-down file-down spline magnet corner-down-left message-square-text
 presentation infinity book-open-text square-split-horizontal
-circle-arrow-down
+circle-arrow-down shuffle

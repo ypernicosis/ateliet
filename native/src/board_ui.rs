@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod pages;
+mod refs;
 mod timeline;
 pub use pages::NewBoard;
 
@@ -73,6 +74,7 @@ pub struct BoardEditor {
     /// A panel to zoom to (centre x, y, width, height).
     zoom_target: Option<(f32, f32, f32, f32)>,
     tl: timeline::TimelineState,
+    rf: refs::RefState,
     /// The view mirrored (a check of proportions, not a change).
     mirror: bool,
 }
@@ -126,6 +128,7 @@ impl BoardEditor {
             pg,
             zoom_target: None,
             tl: timeline::TimelineState::default(),
+            rf: refs::RefState::default(),
             mirror: false,
         }
     }
@@ -867,6 +870,9 @@ impl BoardEditor {
                             }
                         }
                     });
+                    if kind == "trace" && self.trace_props(ui, id, p) {
+                        changed_props = true;
+                    }
                     ui.horizontal(|ui| {
                         let mut name = l["name"].as_str().unwrap_or_default().to_string();
                         if ui.add(egui::TextEdit::singleline(&mut name).desired_width((ui.available_width() - 90.0).max(60.0)).margin(egui::Margin::symmetric(8, 4))).changed() {
@@ -987,6 +993,15 @@ impl BoardEditor {
                 self.frame -= 1;
                 self.invalidate();
             }
+            // Alt+← / Alt+→: the reference beside the drawing
+            let alt = |key| ui.input(|i| i.key_pressed(key) && i.modifiers.alt && !i.modifiers.command);
+            if alt(egui::Key::ArrowRight) {
+                self.step_ref(1);
+            }
+            if alt(egui::Key::ArrowLeft) {
+                self.step_ref(-1);
+            }
+            self.trace_keys(ui);
         }
         // autosave two seconds after the last change
         if self.dirty && self.active.is_none() && self.last_change.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
@@ -1021,6 +1036,9 @@ impl BoardEditor {
         ui.painter().vline(right.left() + 0.5, right.y_range(), egui::Stroke::new(1.0_f32, p.border));
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(right.shrink2(egui::vec2(12.0, 12.0))), |ui| {
             egui::ScrollArea::vertical().id_salt("layers").show(ui, |ui| {
+                if self.doc.kind() != "canvas" {
+                    self.refs_ui(ui, p);
+                }
                 if self.is_pages() {
                     self.page_ui(ui, p);
                 } else if self.doc.kind() != "canvas" {

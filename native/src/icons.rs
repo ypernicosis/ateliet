@@ -238,3 +238,4 @@ pub const INFINITY: &str = "\u{e1e6}";
 pub const BOOK_OPEN_TEXT: &str = "\u{e54e}";
 pub const SQUARE_SPLIT_HORIZONTAL: &str = "\u{e3b9}";
 pub const CIRCLE_ARROW_DOWN: &str = "\u{e07c}";
+pub const SHUFFLE: &str = "\u{e161}";
