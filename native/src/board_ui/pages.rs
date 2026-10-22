@@ -761,11 +761,13 @@ impl BoardEditor {
 /// Choosing what kind of storyboard to make, with its options.
 pub struct NewBoard {
     pub o: pg::KindOptions,
+    /// A Clip Studio file to open as the new storyboard instead.
+    pub clip: Option<std::path::PathBuf>,
 }
 
 impl NewBoard {
     pub fn new() -> NewBoard {
-        NewBoard { o: pg::KindOptions::defaults("animatic") }
+        NewBoard { o: pg::KindOptions::defaults("animatic"), clip: None }
     }
 
     /// Some(Some(options)) to create, Some(None) to cancel.
@@ -894,6 +896,14 @@ impl NewBoard {
                 if kit::button(ui, None, "Cancelar", p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                     out = Some(None);
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if kit::button(ui, Some(icons::FOLDER_CLOSED), "Abrir do Clip Studio (.clip)…", p).on_hover_text("O arquivo vira o primeiro quadro, no tamanho dele, com as camadas, nomes, opacidade, modos e recortes").clicked() {
+                        if let Some(f) = rfd::FileDialog::new().add_filter("Clip Studio", &["clip"]).pick_file() {
+                            self.clip = Some(f);
+                            out = Some(Some(self.o.clone()));
+                        }
+                    }
+                });
             });
         });
         out

@@ -4,6 +4,7 @@
 //! the files the web editor writes.
 
 pub mod brush;
+pub mod clip;
 pub mod compose;
 pub mod doc;
 pub mod export;

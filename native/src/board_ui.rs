@@ -793,6 +793,7 @@ impl BoardEditor {
         ui.add_space(10.0);
         let mut go: Option<usize> = None;
         let mut swap: Option<(usize, usize)> = None;
+        let mut clip_into: Option<(usize, bool)> = None;
         let mut made_thumb = false;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for i in 0..n {
@@ -843,10 +844,22 @@ impl BoardEditor {
                         swap = Some((i, i + 1));
                         ui.close_menu();
                     }
+                    if kit::menu_item(ui, icons::FOLDER_CLOSED, "Importar .clip neste quadro…", p) {
+                        clip_into = Some((i, false));
+                        ui.close_menu();
+                    }
+                    if kit::menu_item(ui, icons::PLUS, "Importar .clip num quadro novo…", p) {
+                        clip_into = Some((i, true));
+                        ui.close_menu();
+                    }
                 });
                 ui.add_space(6.0);
             }
         });
+        if let Some((i, new_frame)) = clip_into {
+            self.frame = i;
+            self.import_clip(new_frame);
+        }
         if let Some((a, b)) = swap {
             self.structure(|d| d.move_frame(a, b));
             self.frame = b;

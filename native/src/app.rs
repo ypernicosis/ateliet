@@ -545,6 +545,29 @@ impl App {
         }
     }
 
+    /// A Clip Studio file as a new storyboard beside the active note.
+    pub fn new_board_from_clip(&mut self, file: &std::path::Path) {
+        let Some(v) = &self.vault else { return };
+        let read = std::fs::read(file).map_err(|e| e.to_string()).and_then(|b| ateliet_core::clipstudio::read(&b));
+        let clip = match read {
+            Ok(c) => c,
+            Err(e) => return self.toast(format!("Não foi possível ler o arquivo: {e}")),
+        };
+        let folder = self.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
+        let name = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Storyboard".into());
+        let base = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+        let path = v.available_path(&base, "storyboard");
+        let (doc, approx) = ateliet_core::board::clip::board_from_clip(&clip, 24);
+        match crate::board_ui::BoardEditor::create_doc(&path, v.abs(&path), doc) {
+            Ok(_) => {
+                self.vault.as_mut().unwrap().rescan();
+                self.open(&path, true);
+                self.toast(format!("{} camadas importadas.{}", clip.layers.len(), ateliet_core::board::clip::summary(&clip, &approx)));
+            }
+            Err(e) => self.toast(format!("Não foi possível criar {path}: {e}")),
+        }
+    }
+
     pub fn new_board(&mut self, kind: &str) {
         let Some(v) = &self.vault else { return };
         let folder = self.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
@@ -887,8 +910,12 @@ impl eframe::App for App {
         if let Some(d) = self.new_board_dlg.as_mut() {
             match d.ui(ctx, self.palette) {
                 Some(Some(o)) => {
+                    let clip = d.clip.take();
                     self.new_board_dlg = None;
-                    self.new_board_of(o);
+                    match clip {
+                        Some(f) => self.new_board_from_clip(&f),
+                        None => self.new_board_of(o),
+                    }
                 }
                 Some(None) => self.new_board_dlg = None,
                 None => {}

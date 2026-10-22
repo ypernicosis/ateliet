@@ -79,6 +79,31 @@ impl BoardEditor {
         self.written("PNG animado (toca nas notas)", &out, r);
     }
 
+    /// A Clip Studio file into this frame (on top, centred) or a new frame after it.
+    pub(super) fn import_clip(&mut self, new_frame: bool) {
+        let Some(f) = rfd::FileDialog::new().add_filter("Clip Studio", &["clip"]).pick_file() else { return };
+        let clip = match std::fs::read(&f).map_err(|e| e.to_string()).and_then(|b| ateliet_core::clipstudio::read(&b)) {
+            Ok(c) => c,
+            Err(e) => {
+                self.error = Some(format!("Não foi possível ler o arquivo: {e}"));
+                return;
+            }
+        };
+        let dx = (self.doc.width() as i32 - clip.width as i32) / 2;
+        let dy = (self.doc.height() as i32 - clip.height as i32) / 2;
+        let at_frame = self.frame;
+        let mut approx = Vec::new();
+        let mut target = at_frame;
+        self.structure(|d| {
+            target = if new_frame { d.add_frame(at_frame + 1) } else { at_frame };
+            let at = d.frame_layers(target).len();
+            approx = ateliet_core::board::clip::add_layers(d, &clip, target, at, false, dx, dy);
+        });
+        self.frame = target;
+        self.invalidate();
+        self.error = Some(format!("{} camadas importadas.{}", clip.layers.len(), ateliet_core::board::clip::summary(&clip, &approx)));
+    }
+
     /// The export button and its menu.
     pub(super) fn export_menu(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         let r = kit::icon_button(ui, icons::DOWNLOAD, "Exportar imagens", false, p);
