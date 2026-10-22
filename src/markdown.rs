@@ -651,7 +651,7 @@ impl Runs {
     /// Lay out and draw; returns the action of a clicked link.
     pub fn show(self, ui: &mut egui::Ui) -> Option<Action> {
         let w = ui.available_width();
-        self.show_width(ui, w)
+        self.show_aligned(ui, w, crate::align::current())
     }
 
     /// Table cells: their natural width up to a limit (a grid starts narrow).
@@ -660,12 +660,17 @@ impl Runs {
     }
 
     pub fn show_width(self, ui: &mut egui::Ui, width: f32) -> Option<Action> {
+        self.show_aligned(ui, width, crate::align::TextAlign::Left)
+    }
+
+    /// Laid out with the note's alignment (justified, centred, to the right).
+    pub fn show_aligned(self, ui: &mut egui::Ui, width: f32, align: crate::align::TextAlign) -> Option<Action> {
         if self.is_empty() {
             return None;
         }
         let mut job = self.job;
         job.wrap.max_width = width;
-        let galley = ui.fonts(|f| f.layout_job(job));
+        let galley = ui.fonts(|f| crate::align::layout(f, job, width, align));
         let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::click());
         let hover_link = resp.hover_pos().and_then(|p| {
             let c = galley.cursor_from_pos(p - rect.min).ccursor.index;

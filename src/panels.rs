@@ -1008,6 +1008,22 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 if let Some(t) = app.tabs.get_mut(app.active) {
                     if t.view.is_none() && t.board.is_none() {
                         focus = kit::icon_button(ui, icons::FOCUS, "Modo foco", false, p).clicked();
+                        // the note's alignment, kept in its frontmatter
+                        let cur = crate::align::TextAlign::of_note(&t.text);
+                        let ar = icon_button(ui, cur.icon(), "Alinhamento do texto", false, p);
+                        let aid = ui.make_persistent_id("note-align");
+                        if ar.clicked() {
+                            ui.memory_mut(|m| m.toggle_popup(aid));
+                        }
+                        egui::popup::popup_above_or_below_widget(ui, aid, &ar, egui::AboveOrBelow::Below, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                            ui.set_min_width(200.0);
+                            for a in crate::align::ALL {
+                                if kit::menu_entry(ui, a.icon(), a.label(), if a == cur { "✓" } else { "" }, true, false, p) && a != cur {
+                                    t.text = a.set_on(&t.text);
+                                    t.last_edit = Some(std::time::Instant::now());
+                                }
+                            }
+                        });
                         let (g, tip) = if t.mode == Mode::Edit { (icons::BOOK_OPEN, "Modo leitura (Ctrl+E)") } else { (icons::PENCIL, "Modo edição (Ctrl+E)") };
                         if icon_button(ui, g, tip, false, p).clicked() {
                             t.mode = if t.mode == Mode::Edit { Mode::Read } else { Mode::Edit };

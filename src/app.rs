@@ -1538,6 +1538,7 @@ impl App {
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
+            crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
             let max_w = if readable && centered { 46.0 * size } else { f32::INFINITY };
             let pad = if centered { 32.0 } else { 14.0 };
             egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
@@ -1626,6 +1627,7 @@ impl App {
                     });
                 });
             });
+            crate::align::set_current(crate::align::TextAlign::Left);
         }
     }
 }
