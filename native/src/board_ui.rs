@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod export;
+mod focus;
 mod pages;
 mod refs;
 mod timeline;
@@ -81,6 +82,8 @@ pub struct BoardEditor {
     pub error: Option<String>,
     /// A storyboard to open in a tab (vault path), made from this one.
     pub open: Option<String>,
+    /// Tab (false) or Shift+Tab (true), taken from the raw input by the app.
+    pub tab_pressed: Option<bool>,
     pg: pages::PageState,
     /// A panel to zoom to (centre x, y, width, height).
     zoom_target: Option<(f32, f32, f32, f32)>,
@@ -88,6 +91,7 @@ pub struct BoardEditor {
     rf: refs::RefState,
     ts: tools::ToolState,
     xo: export::ExportOpts,
+    fx: focus::FocusState,
     /// The facing page's picture: its frame id, version and texture.
     spread_tex: Option<(String, u64, egui::TextureHandle)>,
     /// The view mirrored (a check of proportions, not a change).
@@ -141,12 +145,14 @@ impl BoardEditor {
             versions: HashMap::new(),
             error: None,
             open: None,
+            tab_pressed: None,
             pg,
             zoom_target: None,
             tl: timeline::TimelineState::default(),
             rf: refs::RefState::default(),
             ts: tools::ToolState::default(),
             xo: export::ExportOpts::default(),
+            fx: focus::FocusState::default(),
             spread_tex: None,
             mirror: false,
         }
@@ -785,6 +791,10 @@ impl BoardEditor {
             self.export_presentation_pdf();
         }
         self.export_menu(ui, p);
+        if kit::icon_button(ui, icons::FOCUS, "Modo foco (Tab): só o desenho e a referência", false, p).clicked() {
+            self.fx.on = true;
+            self.fit = true;
+        }
         if self.doc.kind() == "thumbnails" && kit::icon_button(ui, icons::CLAPPERBOARD, "Virar animatic: cada quadro, na ordem de leitura, vira um plano de um storyboard novo", false, p).clicked() {
             self.thumbnails_to_animatic();
         }
@@ -1122,8 +1132,9 @@ impl BoardEditor {
     /// The whole editor; returns a message to show, if any.
     pub fn ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) -> Option<String> {
         self.tick(ui.ctx());
-        // keys (when no text field has focus)
-        if ui.ctx().memory(|m| m.focused().is_none()) {
+        // keys (when no text field takes the keyboard; Tab moving the focus
+        // between buttons does not count)
+        if !ui.ctx().wants_keyboard_input() {
             let k = |key| ui.input(|i| i.key_pressed(key) && i.modifiers.is_none());
             if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z))) {
                 self.redo();
@@ -1187,6 +1198,7 @@ impl BoardEditor {
             }
             self.trace_keys(ui);
             self.tool_keys(ui);
+            self.focus_keys(ui);
         }
         // autosave two seconds after the last change
         if self.dirty && self.active.is_none() && self.ts.float.is_none() && self.last_change.is_some_and(|t| t.elapsed() > Duration::from_secs(2)) {
@@ -1194,6 +1206,13 @@ impl BoardEditor {
         }
         if self.dirty {
             ui.ctx().request_repaint_after(Duration::from_millis(600));
+        }
+        if self.fx.on {
+            let mut toast = self.focus_ui(ui, p);
+            if let Some(e) = self.error.take() {
+                toast = Some(e);
+            }
+            return toast;
         }
         // the toolbar wraps inside the panel; the rest is laid out from the panel's own rect
         let full = ui.available_rect_before_wrap();

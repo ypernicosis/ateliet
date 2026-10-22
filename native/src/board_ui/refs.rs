@@ -16,6 +16,10 @@ pub(super) struct RefState {
     pub current: usize,
     /// Q held: the drawing without the trace.
     pub peek: bool,
+    /// The reference view's zoom (1 = fitted) and pan, for the picture `view_of`.
+    pub zoom: f32,
+    pub pan: egui::Vec2,
+    pub view_of: String,
 }
 
 impl BoardEditor {
@@ -24,7 +28,7 @@ impl BoardEditor {
     }
 
     /// The reference of this frame (or the one chosen in the panel).
-    fn shown_ref(&self) -> Option<(usize, Value)> {
+    pub(super) fn shown_ref(&self) -> Option<(usize, Value)> {
         let refs = self.references();
         if refs.is_empty() {
             return None;
@@ -34,7 +38,7 @@ impl BoardEditor {
         Some((i, refs[i].clone()))
     }
 
-    fn ref_texture(&mut self, ctx: &egui::Context, r: &Value) -> Option<(egui::TextureId, egui::Vec2)> {
+    pub(super) fn ref_texture(&mut self, ctx: &egui::Context, r: &Value) -> Option<(egui::TextureId, egui::Vec2)> {
         let id = r["id"].as_str().unwrap_or("").to_string();
         if !self.rf.tex.contains_key(&id) {
             let img = self.doc.reference_bytes(r["path"].as_str().unwrap_or("")).and_then(|b| image::load_from_memory(&b).ok()).map(|i| {

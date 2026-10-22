@@ -820,6 +820,24 @@ thread_local! {
 }
 
 impl eframe::App for App {
+    /// Tab in a storyboard toggles its focus mode (Shift+Tab hides the
+    /// timeline) instead of walking egui's focus through the buttons.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) else { return };
+        raw.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
+                if *pressed {
+                    b.tab_pressed = Some(modifiers.shift);
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if !self.themed {
             self.palette = theme::apply(ctx, &self.appearance);
