@@ -136,6 +136,7 @@ pub struct App {
     pub ctx: Option<egui::Context>,
     /// The shared library being copied (Settings → Images).
     pub copy_job: Option<crate::settings_pages::CopyJob>,
+    pub theme_browser: crate::settings_pages::ThemeBrowser,
     /// A split: the path of the tab in the other pane, and whether that pane is on the right.
     pub split: Option<String>,
     pub split_right: bool,
@@ -203,6 +204,7 @@ impl App {
             templater_settings: TemplaterSettings::default(),
             ctx: None,
             copy_job: None,
+            theme_browser: crate::settings_pages::ThemeBrowser::new(),
             split: None,
             split_right: true,
             templater: Templater::default(),
@@ -1131,6 +1133,7 @@ impl App {
     fn image_mode(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         let mut moves: Option<(Vec<String>, String)> = None;
+        let mut dropped: Vec<String> = Vec::new();
         if let Some(n) = self.images.notice.take() {
             self.toast(n);
         }
@@ -1178,7 +1181,25 @@ impl App {
                     self.apply(a);
                 }
             }
+            // pictures dragged from the library or the viewer go into the note
+            let panel = ui.max_rect();
+            if egui::DragAndDrop::has_payload_of_type::<Vec<usize>>(ctx) && ui.rect_contains_pointer(panel) {
+                ui.painter().rect_stroke(panel.shrink(2.0), 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                if ctx.input(|i| i.pointer.any_released()) {
+                    if let Some(idx) = egui::DragAndDrop::take_payload::<Vec<usize>>(ctx) {
+                        dropped = self.images.keys_of(&idx);
+                    }
+                }
+            }
         });
+        if !dropped.is_empty() {
+            if self.tabs.is_empty() {
+                let folder = self.images.folder.clone().filter(|f| !std::path::Path::new(f).is_absolute()).unwrap_or_default();
+                self.new_note(&folder);
+                self.ask = None;
+            }
+            self.insert_pictures(&dropped);
+        }
         let mut act = None;
         egui::CentralPanel::default().frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin { left: 18, right: 18, top: 14, bottom: 10 })).show(ctx, |ui| {
             if let Some(v) = &self.vault {
@@ -1195,8 +1216,25 @@ impl App {
             }
             Some(crate::images_ui::ImageAction::OpenNote(n)) => self.open(&n, false),
             Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) => self.move_pictures(keys, &folder),
+            Some(crate::images_ui::ImageAction::CollectionNote(folder)) => self.collection_note(&folder),
             None => {}
         }
+    }
+
+    /// The note of a picture folder, `<folder>/<folder>.md`, made with a
+    /// heading when it doesn't exist yet.
+    fn collection_note(&mut self, folder: &str) {
+        let Some(v) = &self.vault else { return };
+        let name = folder.rsplit('/').next().unwrap_or(folder);
+        let path = format!("{folder}/{name}.md");
+        if !v.abs(&path).exists() {
+            if let Err(e) = v.write(&path, &format!("# {name}\n\n")) {
+                self.toast(format!("Não foi possível criar a nota: {e}"));
+                return;
+            }
+            self.vault.as_mut().unwrap().rescan();
+        }
+        self.open(&path, false);
     }
 
     /// A picture key as a vault path: one outside the vault is copied into the
@@ -1313,6 +1351,10 @@ impl App {
                     b = end;
                 }
             }
+        }
+        // a picture is a block: never split a line, go to its end
+        if b > 0 && !t.text[..b].ends_with('\n') {
+            b = t.text[b..].find('\n').map(|j| b + j).unwrap_or(t.text.len());
         }
         let prefix = if b > 0 && !t.text[..b].ends_with('\n') { "\n" } else { "" };
         t.text.insert_str(b, &format!("{prefix}{embeds}"));

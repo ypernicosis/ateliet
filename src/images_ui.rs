@@ -162,6 +162,8 @@ pub enum ImageAction {
     MoveTo(Vec<String>, String),
     NewNote(Vec<String>),
     OpenNote(String),
+    /// Open (creating it if missing) the note of a vault folder: `<folder>/<folder>.md`.
+    CollectionNote(String),
 }
 
 impl ImagesState {
@@ -410,6 +412,11 @@ impl ImagesState {
     }
 
     /// The pictures a drag carries: the selection when the dragged one is in it.
+    /// The keys of dragged pictures (indices into the library).
+    pub fn keys_of(&self, idx: &[usize]) -> Vec<String> {
+        idx.iter().filter_map(|&i| self.entries.get(i)).map(|e| e.key.clone()).collect()
+    }
+
     fn dragged(&self, i: usize) -> Vec<usize> {
         if self.selection.contains(&i) { self.selection.iter().copied().collect() } else { vec![i] }
     }
@@ -620,6 +627,15 @@ impl ImagesState {
                 }
                 if kit::quiet(ui, None, "Limpar", p).clicked() {
                     self.selection.clear();
+                }
+            }
+            if let Some(f) = self.folder.clone().filter(|f| !f.is_empty() && !Path::new(f).is_absolute()) {
+                if self.selection.is_empty() {
+                    ui.add_space(8.0);
+                    let name = f.rsplit('/').next().unwrap_or(&f).to_string();
+                    if kit::button(ui, Some(icons::FILE_TEXT), "Nota da coleção", p).on_hover_text(format!("{f}/{name}.md: o que esta pasta reúne")).clicked() {
+                        action = Some(ImageAction::CollectionNote(f));
+                    }
                 }
             }
             if self.scanning.is_some() {
@@ -838,6 +854,18 @@ impl ImagesState {
                     action = Some(ImageAction::Insert(vec![e.key.clone()]));
                 }
                 ui.add_space(6.0);
+                // drag this onto the note beside (or onto a collection)
+                let (hr, handle) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), Sense::drag());
+                ui.painter().rect_filled(hr, 6.0, if handle.hovered() || handle.dragged() { p.bg_hover } else { Color32::TRANSPARENT });
+                ui.painter().text(hr.center(), egui::Align2::CENTER_CENTER, icons::GRIP_VERTICAL, kit::icon_font(15.0), if handle.hovered() { p.text } else { p.muted });
+                if handle.drag_started() {
+                    handle.dnd_set_drag_payload(vec![v.idx]);
+                }
+                if handle.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                } else {
+                    handle.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("Arraste para a nota ou para uma coleção");
+                }
                 if kit::icon_button(ui, icons::SCAN_SEARCH, "Tamanho real (1)", false, p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Num1)) {
                     v.fit = false;
                     v.zoom = 1.0;
