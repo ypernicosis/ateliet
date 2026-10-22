@@ -345,6 +345,7 @@ dependencies = [
  "ttf-parser",
  "unicode-normalization",
  "ureq 2.12.1",
+ "url",
  "walkdir",
 ]
 

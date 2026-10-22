@@ -18,6 +18,8 @@ const MODEL_KEY: &str = "clip-vit-base-patch32-q8";
 const THUMB: u32 = 240;
 const THUMB_LARGE: u32 = 480;
 
+mod pinterest;
+
 pub fn thumb_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("ateliet").join("thumbnails")
 }
@@ -112,6 +114,7 @@ pub struct ImagesState {
     pub collection: Option<String>,
     /// Shared collections: (name, members' absolute paths).
     collections: Vec<(String, HashSet<String>)>,
+    pin: pinterest::PinState,
 }
 
 impl Default for ImagesState {
@@ -136,6 +139,7 @@ impl Default for ImagesState {
             shared: None,
             collection: None,
             collections: Vec::new(),
+            pin: pinterest::PinState::default(),
         }
     }
 }
@@ -368,7 +372,17 @@ impl ImagesState {
     /// The collections column (left side in image mode).
     pub fn collections_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
         self.poll(ui.ctx());
-        ui.label(RichText::new("Imagens").font(kit::medium(13.5)).color(p.text));
+        self.pin_tick(ui.ctx());
+        self.pin_ui(ui.ctx(), p);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Imagens").font(kit::medium(13.5)).color(p.text));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let running = self.pin.downloads.snapshot().state == "running";
+                if kit::icon_button_sized(ui, icons::DOWNLOAD, if running { "Baixando do Pinterest…" } else { "Trazer do Pinterest" }, running, p, 24.0, 13.0).clicked() {
+                    self.pin.open = true;
+                }
+            });
+        });
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
         let all = self.entries.len();
