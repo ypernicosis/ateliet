@@ -2,6 +2,7 @@
 name = "ateliet-native"
 version = "0.1.0"
 description = "Ateliet with a native interface (egui): no web view, no GTK"
+build = "build.rs"
 edition = "2021"
 
 [[bin]]

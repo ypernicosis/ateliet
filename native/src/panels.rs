@@ -109,6 +109,25 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
                 if icon_button(ui, icons::SETTINGS, "Configurações", app.settings_open, p).clicked() {
                     app.settings_open = !app.settings_open;
                 }
+                let up = app.updater.available();
+                let tip = match app.updater.state {
+                    crate::update::State::Ready => "O Ateliet foi atualizado: reinicie para usar a versão nova".to_string(),
+                    crate::update::State::Building => format!("Atualizando: {}…", app.updater.step),
+                    _ => match &app.updater.status {
+                        Some(s) if s.available => format!("Atualizar o Ateliet ({} {})", s.behind, if s.behind == 1 { "commit novo" } else { "commits novos" }),
+                        _ => "Atualizar o Ateliet".into(),
+                    },
+                };
+                let r = icon_button(ui, icons::CIRCLE_ARROW_DOWN, &tip, up, p);
+                if up {
+                    ui.painter().circle_filled(r.rect.right_top() + egui::vec2(-7.0, 7.0), 3.5, p.accent_strong);
+                }
+                if r.clicked() {
+                    app.updater.open = true;
+                    if app.updater.state == crate::update::State::Idle {
+                        app.updater.check();
+                    }
+                }
                 if icon_button(ui, icons::ARCHIVE, "Abrir outro cofre", false, p).clicked() {
                     app.save_all();
                     app.vault = None;
@@ -1225,4 +1244,107 @@ pub fn vault_picker(app: &mut App, ctx: &egui::Context) {
             }
         });
     });
+}
+
+/// "Atualizar o Ateliet": what changed upstream, the build's progress, restart.
+pub fn update_window(app: &mut App, ctx: &egui::Context) {
+    if !app.updater.open {
+        return;
+    }
+    use crate::update::State;
+    let p = app.palette;
+    let mut close = false;
+    let mut save_and_restart = false;
+    kit::scrim(ctx, p);
+    egui::Window::new("update").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0]).show(ctx, |ui| {
+        let u = &mut app.updater;
+        ui.set_width(520.0);
+        ui.label(RichText::new("Atualizar o Ateliet").font(kit::medium(17.0)).color(p.text));
+        ui.add_space(8.0);
+        let mut auto = u.auto;
+        if kit::setting(ui, "Atualizar automaticamente", "A cada meia hora o Ateliet olha o código de onde foi compilado; havendo commits novos, baixa e recompila em segundo plano, e a versão nova começa com o app.", p, |ui| kit::toggle(ui, &mut auto, p).changed()) {
+            u.set_auto(auto);
+        }
+        ui.add_space(6.0);
+        match u.state {
+            State::Checking => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0));
+                    ui.label(RichText::new("Procurando atualizações…").color(p.muted));
+                });
+            }
+            State::Building => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new().size(12.0));
+                    ui.label(RichText::new(format!("{}…", if u.step.is_empty() { "Começando" } else { &u.step })).color(p.muted));
+                });
+            }
+            State::Ready => {
+                ui.label(RichText::new("A versão nova está pronta. Reinicie o Ateliet para usá-la.").color(p.text));
+            }
+            State::Failed => {
+                ui.label(RichText::new("A atualização falhou:").color(p.error));
+            }
+            State::Idle => match &u.status {
+                Some(s) if s.available => {
+                    ui.label(RichText::new(format!("{} {} em {}:", s.behind, if s.behind == 1 { "commit novo" } else { "commits novos" }, s.upstream)).color(p.text));
+                    egui::ScrollArea::vertical().max_height(160.0).id_salt("upd-commits").show(ui, |ui| {
+                        for c in &s.commits {
+                            ui.label(RichText::new(c).size(12.0).monospace().color(p.muted));
+                        }
+                    });
+                }
+                Some(s) => {
+                    ui.label(RichText::new(format!("O Ateliet está em dia ({}).", &s.current[..s.current.len().min(8)])).color(p.muted));
+                }
+                None => {}
+            },
+        }
+        if let Some(e) = &u.error {
+            ui.label(RichText::new(e).size(12.0).color(p.error));
+        }
+        if !u.log.is_empty() {
+            ui.add_space(6.0);
+            egui::Frame::new().fill(p.code_bg).corner_radius(6.0).inner_margin(8.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).id_salt("upd-log").show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    for l in &u.log {
+                        ui.label(RichText::new(l).size(11.0).monospace().color(p.muted));
+                    }
+                });
+            });
+        }
+        ui.add_space(10.0);
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 30.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            match u.state {
+                State::Ready => {
+                    if kit::primary(ui, "Reiniciar agora", p).clicked() {
+                        save_and_restart = true;
+                    }
+                }
+                State::Idle if u.status.as_ref().is_some_and(|s| s.available) => {
+                    if kit::primary(ui, "Atualizar", p).clicked() {
+                        u.update();
+                    }
+                }
+                State::Idle | State::Failed => {
+                    if kit::button(ui, Some(icons::ROTATE_CW), "Procurar de novo", p).clicked() {
+                        u.state = State::Idle;
+                        u.check();
+                    }
+                }
+                _ => {}
+            }
+            if kit::button(ui, None, "Fechar", p).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                close = true;
+            }
+        });
+    });
+    if close {
+        app.updater.open = false;
+    }
+    if save_and_restart {
+        app.save_all();
+        app.updater.restart();
+    }
 }

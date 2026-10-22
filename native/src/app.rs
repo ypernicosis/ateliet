@@ -151,6 +151,7 @@ pub struct App {
     pub export: Option<crate::sc::export_ui::ExportDialog>,
     pub picker: Option<crate::sc::picker::Picker>,
     pub new_board_dlg: Option<crate::board_ui::NewBoard>,
+    pub updater: crate::update::Updater,
     pub music: crate::music::Music,
     pub focus: Option<crate::sc::focus::Focus>,
     pub sprint: Option<crate::sc::focus::Sprint>,
@@ -203,6 +204,7 @@ impl App {
             export: None,
             picker: None,
             new_board_dlg: None,
+            updater: crate::update::Updater::new(),
             music: Default::default(),
             focus: None,
             sprint: None,
@@ -872,6 +874,11 @@ impl eframe::App for App {
             self.central(ctx);
         }
 
+        self.updater.tick(ctx);
+        if let Some(n) = self.updater.notice.take() {
+            self.toast(n);
+        }
+        panels::update_window(self, ctx);
         commands::show_palette(self, ctx);
         panels::ask_dialog(self, ctx);
         self.form_ui(ctx);

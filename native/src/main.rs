@@ -21,6 +21,7 @@ mod panels;
 mod sc;
 mod templater;
 mod theme;
+mod update;
 mod vault;
 #[cfg(feature = "clip")]
 mod vision;
