@@ -884,6 +884,19 @@ impl App {
                     continue;
                 }
             };
+            // the core Templates plugin's {{title}}, {{date}}, {{time}}
+            let mut out = out;
+            let target = match &f.mode {
+                templater::Mode::Insert { path, .. } | templater::Mode::NewNote { path } | templater::Mode::Replace { path } => path.clone(),
+            };
+            let core = self.cfg.as_ref().map(|c| c.read("templates.json")).unwrap_or_default();
+            let title = vault::basename(&target).trim_end_matches(".md").to_string();
+            let replaced = templater::core_placeholders(&out.text, &title, &core);
+            if replaced != out.text {
+                // cursors keep their place only when nothing before them changed length; drop them otherwise
+                out.cursors.clear();
+                out.text = replaced;
+            }
             let (path, start) = match &f.mode {
                 templater::Mode::Insert { path, at } => {
                     if let Some(t) = self.tabs.iter_mut().find(|t| &t.path == path) {

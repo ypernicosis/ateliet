@@ -22,8 +22,11 @@ pub struct TemplaterSettings {
 impl TemplaterSettings {
     pub fn load(cfg: &VaultConfig) -> Self {
         let v = cfg.tool("templater", "templater-obsidian");
+        // the core Templates plugin's folder when Templater has none
+        let core = cfg.read("templates.json");
+        let folder = v["templates_folder"].as_str().filter(|s| !s.trim().is_empty()).or_else(|| core["folder"].as_str()).unwrap_or_default().to_string();
         TemplaterSettings {
-            folder: v["templates_folder"].as_str().unwrap_or_default().to_string(),
+            folder,
             hotkey_templates: v["enabled_templates_hotkeys"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).filter(|s| !s.is_empty()).collect()).unwrap_or_default(),
             folder_templates: v["folder_templates"].as_array().map(|a| a.iter().filter_map(|x| Some((x["folder"].as_str()?.to_string(), x["template"].as_str()?.to_string()))).filter(|(f, t)| !f.is_empty() && !t.is_empty()).collect()).unwrap_or_default(),
             trigger_on_create: v["trigger_on_file_creation"].as_bool().unwrap_or(false),
@@ -41,6 +44,48 @@ impl TemplaterSettings {
         v["trigger_on_file_creation"] = json!(self.trigger_on_create);
         cfg.merge("ateliet/templater.json", v);
     }
+}
+
+/// The core Templates plugin's placeholders: `{{title}}`, `{{date}}`,
+/// `{{time}}` and `{{date:FORMAT}}` / `{{time:FORMAT}}` (moment formats;
+/// the defaults from `templates.json`).
+pub fn core_placeholders(text: &str, title: &str, core: &Value) -> String {
+    if !text.contains("{{") {
+        return text.to_string();
+    }
+    let now = ateliet_core::datefmt::now();
+    let loc = ateliet_core::datefmt::locale("pt");
+    let date_fmt = core["dateFormat"].as_str().filter(|s| !s.is_empty()).unwrap_or("YYYY-MM-DD");
+    let time_fmt = core["timeFormat"].as_str().filter(|s| !s.is_empty()).unwrap_or("HH:mm");
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = rest.find("{{") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let Some(j) = after.find("}}") else {
+            out.push_str(&rest[i..]);
+            rest = "";
+            break;
+        };
+        let inner = after[..j].trim();
+        let (key, fmt) = match inner.split_once(':') {
+            Some((k, f)) => (k.trim().to_lowercase(), Some(f.trim())),
+            None => (inner.to_lowercase(), None),
+        };
+        let rep = match key.as_str() {
+            "title" => Some(title.to_string()),
+            "date" => Some(ateliet_core::datefmt::format_moment(now, fmt.unwrap_or(date_fmt), loc)),
+            "time" => Some(ateliet_core::datefmt::format_moment(now, fmt.unwrap_or(time_fmt), loc)),
+            _ => None,
+        };
+        match rep {
+            Some(r) => out.push_str(&r),
+            None => out.push_str(&rest[i..i + 2 + j + 2]),
+        }
+        rest = &after[j + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Where the output goes.
@@ -275,5 +320,20 @@ impl Templater {
             let _ = p.reply.send(a);
             self.current = None;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_template_placeholders() {
+        let core = json!({ "dateFormat": "DD/MM/YYYY" });
+        let out = core_placeholders("# {{title}}\n{{date}} {{date:YYYY}} {{other}} {{time:HH}}", "Cena", &core);
+        assert!(out.starts_with("# Cena\n"));
+        let year = ateliet_core::datefmt::format_moment(ateliet_core::datefmt::now(), "YYYY", ateliet_core::datefmt::locale("pt"));
+        assert!(out.contains(&format!("/{year} {year} {{{{other}}}} ")));
+        assert_eq!(core_placeholders("nada", "x", &core), "nada");
     }
 }
