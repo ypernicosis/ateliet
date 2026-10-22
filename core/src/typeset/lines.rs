@@ -92,7 +92,25 @@ impl Ctx<'_> {
                 size *= 0.8;
             }
         }
-        let shaped: Arc<Vec<Shaped>> = self.db.shape(font, &t, &feats);
+        let mut font = font;
+        let mut shaped: Arc<Vec<Shaped>> = self.db.shape(font, &t, &feats);
+        if shaped.iter().any(|g| g.id == 0) {
+            // a character the face lacks (an ornament, a symbol): the first face that has them all
+            let (it, w) = (st.italic, if st.bold { 700 } else { 400 });
+            let mut cands: Vec<FontId> = vec![self.faces.body[0], self.faces.title[0]];
+            cands.extend(["EB Garamond", "Cormorant Garamond", "Noto Serif", "DejaVu Serif", "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans"].iter().filter_map(|f| self.db.find(f, it, w)));
+            for c in cands {
+                if c == font {
+                    continue;
+                }
+                let s2 = self.db.shape(c, &t, &feats);
+                if !s2.iter().any(|g| g.id == 0) {
+                    font = c;
+                    shaped = s2;
+                    break;
+                }
+            }
+        }
         let face = self.db.face(font);
         let k = size * PT_MM / face.upem;
         let track = st.track * size * PT_MM;

@@ -23,13 +23,30 @@ pub const GARAMOND: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Medium.tt
 pub const GARAMOND_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-MediumItalic.ttf");
 pub const GARAMOND_BOLD: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Bold.ttf");
 pub const GARAMOND_BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-BoldItalic.ttf");
+/// The faces of the ready-made book styles (Diagramação), only for typesetting.
+const BOOK_SERIFS: [&[u8]; 14] = [
+    include_bytes!("../assets/fonts/Lora-Regular.ttf"),
+    include_bytes!("../assets/fonts/Lora-Italic.ttf"),
+    include_bytes!("../assets/fonts/Lora-Bold.ttf"),
+    include_bytes!("../assets/fonts/CrimsonText-Regular.ttf"),
+    include_bytes!("../assets/fonts/CrimsonText-Italic.ttf"),
+    include_bytes!("../assets/fonts/CrimsonText-Bold.ttf"),
+    include_bytes!("../assets/fonts/Cinzel-Regular.ttf"),
+    include_bytes!("../assets/fonts/Cinzel-Bold.ttf"),
+    include_bytes!("../assets/fonts/CinzelDecorative-Regular.ttf"),
+    include_bytes!("../assets/fonts/PlayfairDisplay-Regular.ttf"),
+    include_bytes!("../assets/fonts/PlayfairDisplay-Italic.ttf"),
+    include_bytes!("../assets/fonts/LibreBaskerville-Regular.ttf"),
+    include_bytes!("../assets/fonts/LibreBaskerville-Italic.ttf"),
+    include_bytes!("../assets/fonts/LibreBaskerville-Bold.ttf"),
+];
 
 /// The fonts for typesetting books: the bundled serifs and the system's
 /// (read once, in the background).
 pub fn book_fonts() -> std::sync::Arc<ateliet_core::typeset::fonts::FontDb> {
     static DB: std::sync::OnceLock<std::sync::Arc<ateliet_core::typeset::fonts::FontDb>> = std::sync::OnceLock::new();
     DB.get_or_init(|| {
-        let mut db = ateliet_core::typeset::fonts::FontDb::new(&[GARAMOND, GARAMOND_ITALIC, GARAMOND_BOLD, GARAMOND_BOLD_ITALIC, CORMORANT, CORMORANT_ITALIC, CORMORANT_BOLD]);
+        let mut db = ateliet_core::typeset::fonts::FontDb::new(&[&[GARAMOND, GARAMOND_ITALIC, GARAMOND_BOLD, GARAMOND_BOLD_ITALIC, CORMORANT, CORMORANT_ITALIC, CORMORANT_BOLD][..], &BOOK_SERIFS[..]].concat());
         db.scan_system();
         std::sync::Arc::new(db)
     })
