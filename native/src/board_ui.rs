@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod pages;
+mod timeline;
 pub use pages::NewBoard;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -71,6 +72,9 @@ pub struct BoardEditor {
     pg: pages::PageState,
     /// A panel to zoom to (centre x, y, width, height).
     zoom_target: Option<(f32, f32, f32, f32)>,
+    tl: timeline::TimelineState,
+    /// The view mirrored (a check of proportions, not a change).
+    mirror: bool,
 }
 
 impl BoardEditor {
@@ -121,6 +125,8 @@ impl BoardEditor {
             error: None,
             pg,
             zoom_target: None,
+            tl: timeline::TimelineState::default(),
+            mirror: false,
         }
     }
 
@@ -364,7 +370,12 @@ impl BoardEditor {
             self.pan = size / 2.0 - egui::vec2(cx, cy) * self.zoom;
         }
         let origin = self.origin(stage);
-        let to_canvas = |pos: egui::Pos2, z: f32, o: egui::Pos2| egui::pos2((pos.x - o.x) / z, (pos.y - o.y) / z);
+        let mirror = self.mirror && !self.is_pages() && !self.doc.infinite();
+        let mw = self.doc.width() as f32;
+        let to_canvas = move |pos: egui::Pos2, z: f32, o: egui::Pos2| {
+            let x = (pos.x - o.x) / z;
+            egui::pos2(if mirror { mw - x } else { x }, (pos.y - o.y) / z)
+        };
         // zoom with the wheel at the pointer
         if resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta);
@@ -434,8 +445,9 @@ impl BoardEditor {
             let page = egui::Rect::from_min_size(origin, egui::vec2(cw, ch) * self.zoom);
             clip.add(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) }.as_shape(page, 2.0));
         }
-        let view0 = to_canvas(stage.min, self.zoom, origin);
-        let view1 = to_canvas(stage.max, self.zoom, origin);
+        let (a0, a1) = (to_canvas(stage.min, self.zoom, origin), to_canvas(stage.max, self.zoom, origin));
+        let view0 = egui::pos2(a0.x.min(a1.x), a0.y.min(a1.y));
+        let view1 = egui::pos2(a0.x.max(a1.x), a0.y.max(a1.y));
         let (vx0, vy0, vx1, vy1) = if self.doc.infinite() { (view0.x, view0.y, view1.x, view1.y) } else { (view0.x.max(0.0), view0.y.max(0.0), view1.x.min(cw), view1.y.min(ch)) };
         let mut budget = if self.active.is_some() { 8 } else { 6 };
         let mut pending = false;
@@ -467,6 +479,20 @@ impl BoardEditor {
                         uv = egui::Rect::from_min_max(egui::pos2((inter.min.x - r.min.x) / r.width(), (inter.min.y - r.min.y) / r.height()), egui::pos2((inter.max.x - r.min.x) / r.width(), (inter.max.y - r.min.y) / r.height()));
                         rr = inter;
                     }
+                    if mirror {
+                        // drawn as in a mirror: the tile's place and its picture flipped
+                        let pw = cw * self.zoom;
+                        let x0 = origin.x + pw - (rr.max.x - origin.x);
+                        rr = egui::Rect::from_min_size(egui::pos2(x0, rr.min.y), rr.size());
+                        let mut mesh = egui::Mesh::with_texture(tex.id());
+                        mesh.add_rect_with_uv(rr, uv, Color32::WHITE);
+                        // the picture's columns in reverse
+                        for v in mesh.vertices.iter_mut() {
+                            v.uv.x = uv.min.x + uv.max.x - v.uv.x;
+                        }
+                        clip.add(egui::Shape::mesh(mesh));
+                        continue;
+                    }
                     clip.image(tex.id(), rr, uv, Color32::WHITE);
                 }
             }
@@ -476,6 +502,12 @@ impl BoardEditor {
         }
         if self.is_pages() {
             self.page_draw(ui, &clip, origin);
+        }
+        if !self.doc.infinite() {
+            self.draw_guides(&clip, origin);
+        }
+        if mirror {
+            clip.text(stage.left_top() + egui::vec2(12.0, 10.0), egui::Align2::LEFT_TOP, "Vista espelhada (F)", egui::FontId::proportional(11.0), p.faint);
         }
         // brush outline
         if let (Some(k), Some(ptr)) = (self.brush(), resp.hover_pos()) {
@@ -610,8 +642,9 @@ impl BoardEditor {
                 if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (0)", false, p).clicked() {
                     self.fit = true;
                 }
+                self.guide_menu(ui, p);
                 let onion = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
-                if kit::icon_button(ui, icons::LAYERS_2, "Papel de cebola", onion, p).clicked() {
+                if kit::icon_button(ui, icons::LAYERS_2, "Papel de cebola (O)", onion, p).clicked() {
                     self.doc.board["onion"]["enabled"] = json!(!onion);
                     self.invalidate();
                     self.dirty = true;
@@ -925,6 +958,16 @@ impl BoardEditor {
             if k(egui::Key::Num0) {
                 self.fit = true;
             }
+            if k(egui::Key::F) {
+                self.mirror = !self.mirror;
+                self.invalidate();
+            }
+            if k(egui::Key::O) && self.has_timeline() {
+                let on = self.doc.board["onion"]["enabled"].as_bool().unwrap_or(false);
+                self.doc.board["onion"]["enabled"] = json!(!on);
+                self.invalidate();
+                self.dirty = true;
+            }
             if self.is_pages() {
                 if k(egui::Key::J) {
                     self.tool = Tool::Panel;
@@ -986,11 +1029,22 @@ impl BoardEditor {
                 self.layers_ui(ui, p)
             });
         });
-        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(center), |ui| {
+        let (canvas, strip) = if self.has_timeline() {
+            let sh = 104.0;
+            (egui::Rect::from_min_max(center.min, egui::pos2(center.max.x, center.max.y - sh)), Some(egui::Rect::from_min_max(egui::pos2(center.min.x, center.max.y - sh), center.max)))
+        } else {
+            (center, None)
+        };
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(canvas), |ui| {
             if let Some(t) = self.canvas_ui(ui, p) {
                 toast = Some(t);
             }
         });
+        if let Some(s) = strip {
+            ui.painter().rect_filled(s, 0.0, p.bg);
+            ui.painter().hline(s.x_range(), s.top() + 0.5, egui::Stroke::new(1.0_f32, p.border));
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(s.shrink2(egui::vec2(10.0, 6.0))), |ui| self.timeline_ui(ui, p));
+        }
         if let Some(e) = self.error.take() {
             toast = Some(e);
         }
