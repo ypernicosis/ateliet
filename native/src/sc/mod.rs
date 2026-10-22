@@ -13,6 +13,8 @@ pub mod sheet_ui;
 pub mod export_ui;
 pub mod focus;
 pub mod library;
+pub mod mundo_more;
+pub mod mundo_ui;
 
 use crate::vault::Vault;
 use ateliet_core::dataview::index::Index;
@@ -70,6 +72,7 @@ pub enum Action {
     CreateSheetFor { sheet: String, list: String, idx: usize, name: String },
     /// (target, source note, new tab)
     OpenLink(String, String, bool),
+    Toast(String),
 }
 
 impl Sc {
@@ -162,6 +165,7 @@ pub enum View {
     Cast(cast_ui::CastView),
     Sheet(Box<sheet_ui::SheetView>),
     Enredo(Box<enredo_ui::EnredoView>),
+    Mundo(Box<mundo_ui::MundoView>),
 }
 
 impl View {
@@ -171,6 +175,7 @@ impl View {
             View::Cast(_) => "Elenco".into(),
             View::Sheet(s) => s.title(),
             View::Enredo(e) => e.title(),
+            View::Mundo(m) => m.title(),
         }
     }
 
@@ -178,6 +183,9 @@ impl View {
         match path {
             "scriptorium:library" => Some(View::Library(library::Library::default())),
             _ => {
+                if let Some(b) = path.strip_prefix("scriptorium:mundo:") {
+                    return Some(View::Mundo(Box::new(mundo_ui::MundoView::new(b))));
+                }
                 if let Some(b) = path.strip_prefix("scriptorium:enredo:") {
                     return Some(View::Enredo(Box::new(enredo_ui::EnredoView::new(b))));
                 }

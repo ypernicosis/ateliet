@@ -834,7 +834,7 @@ impl EnredoView {
                     ui.allocate_ui_with_layout(vec2(90.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.label(RichText::new(l).color(p.muted));
                     });
-                    ui.add(egui::TextEdit::singleline(v).hint_text(h).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
+                    ui.add(egui::TextEdit::singleline(v).hint_text(RichText::new(h).color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
                 });
             }
             ui.horizontal(|ui| {

@@ -905,7 +905,7 @@ impl EnredoView {
             ui.label(RichText::new("Nova trama").font(kit::medium(16.0)).color(p.text));
             ui.label(RichText::new("Um personagem, um mistério, um conflito.").color(p.muted));
             ui.add_space(12.0);
-            let r = ui.add(egui::TextEdit::singleline(name).hint_text("Ex.: Soren, IGA, O mistério da ponte").desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
+            let r = ui.add(egui::TextEdit::singleline(name).hint_text(RichText::new("Ex.: Soren, IGA, O mistério da ponte").color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
             r.request_focus();
             ui.add_space(14.0);
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {

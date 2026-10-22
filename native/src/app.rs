@@ -428,6 +428,16 @@ impl App {
             }
             return;
         }
+        if let Some(crate::sc::View::Mundo(m)) = t.view.as_mut() {
+            let saved = {
+                let ix = v.index.read().unwrap();
+                m.save(&v.root, &ix)
+            };
+            if let Some(p) = saved {
+                v.index.write().unwrap().update(&[p]);
+            }
+            return;
+        }
         if let Some(crate::sc::View::Enredo(e)) = t.view.as_mut() {
             let author = self.sc.as_ref().map(|s| s.author()).unwrap_or_default();
             let saved = {
@@ -914,6 +924,7 @@ impl App {
                         crate::sc::View::Cast(c) => c.ui(ui, &mut cx),
                         crate::sc::View::Sheet(s) => s.ui(ui, &mut cx),
                         crate::sc::View::Enredo(e) => e.ui(ui, &mut cx),
+                        crate::sc::View::Mundo(m) => m.ui(ui, &mut cx),
                     }
                 };
                 sc_actions = acts;

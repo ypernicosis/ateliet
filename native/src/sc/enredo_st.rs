@@ -870,7 +870,7 @@ impl EnredoView {
             egui::ScrollArea::vertical().max_height(ctx.screen_rect().height() - 330.0).show(ui, |ui| {
                 ui.set_width(640.0);
                 let m = &mut ed.m;
-                ui.add(egui::TextEdit::singleline(&mut m.nome).font(kit::bold(19.0)).frame(false).hint_text("Nome da estrutura").desired_width(f32::INFINITY));
+                ui.add(egui::TextEdit::singleline(&mut m.nome).font(kit::bold(19.0)).frame(false).hint_text(RichText::new("Nome da estrutura").color(p.faint)).desired_width(f32::INFINITY));
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Duração").size(12.5).color(p.muted));
                     let mut has = m.capitulos.is_some();
@@ -883,7 +883,7 @@ impl EnredoView {
                         ui.label(RichText::new("se estica ao trecho escolhido").size(12.0).color(p.faint));
                     }
                 });
-                ui.add(egui::TextEdit::multiline(&mut m.desc).desired_rows(2).desired_width(f32::INFINITY).hint_text("A ideia da estrutura (opcional)").margin(egui::Margin::symmetric(8, 5)));
+                ui.add(egui::TextEdit::multiline(&mut m.desc).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("A ideia da estrutura (opcional)").color(p.faint)).margin(egui::Margin::symmetric(8, 5)));
                 ui.add_space(10.0);
                 ui.label(RichText::new("PERGUNTAS DA FICHA DE CADA CENA").font(kit::medium(10.5)).color(p.faint).extra_letter_spacing(1.0));
                 ui.horizontal_wrapped(|ui| {
@@ -901,7 +901,7 @@ impl EnredoView {
                     if let Some(k) = drop {
                         m.campos.remove(k);
                     }
-                    let r = ui.add(egui::TextEdit::singleline(&mut ed.new_campo).hint_text("+ pergunta (Enter)").desired_width(170.0).margin(egui::Margin::symmetric(8, 4)));
+                    let r = ui.add(egui::TextEdit::singleline(&mut ed.new_campo).hint_text(RichText::new("+ pergunta (Enter)").color(p.faint)).desired_width(170.0).margin(egui::Margin::symmetric(8, 4)));
                     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !ed.new_campo.trim().is_empty() {
                         m.campos.push(ed.new_campo.trim().to_string());
                         ed.new_campo.clear();
@@ -940,7 +940,7 @@ impl EnredoView {
                                 }
                             }
                         });
-                        let r = ui.add(egui::TextEdit::singleline(&mut ed.new_group).hint_text("+ grupo (Enter)").desired_width(130.0).margin(egui::Margin::symmetric(8, 4)));
+                        let r = ui.add(egui::TextEdit::singleline(&mut ed.new_group).hint_text(RichText::new("+ grupo (Enter)").color(p.faint)).desired_width(130.0).margin(egui::Margin::symmetric(8, 4)));
                         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                             let g = ed.new_group.trim().to_string();
                             if !g.is_empty() && !m.grupos.iter().any(|x| x.nome == g) {
@@ -1003,10 +1003,10 @@ impl EnredoView {
                             ui.horizontal(|ui| {
                                 let b = &mut m.batidas[i];
                                 let mut num = b.num.map(|n| n.to_string()).unwrap_or_default();
-                                if ui.add(egui::TextEdit::singleline(&mut num).hint_text("·").desired_width(28.0).margin(egui::Margin::symmetric(4, 3))).changed() {
+                                if ui.add(egui::TextEdit::singleline(&mut num).hint_text(RichText::new("·").color(p.faint)).desired_width(28.0).margin(egui::Margin::symmetric(4, 3))).changed() {
                                     b.num = num.trim().parse().ok();
                                 }
-                                ui.add(egui::TextEdit::singleline(&mut b.nome).hint_text("Nome da batida").desired_width(250.0).margin(egui::Margin::symmetric(6, 3)));
+                                ui.add(egui::TextEdit::singleline(&mut b.nome).hint_text(RichText::new("Nome da batida").color(p.faint)).desired_width(250.0).margin(egui::Margin::symmetric(6, 3)));
                                 pct_inputs(ui, p, &mut b.auto, &mut b.de, &mut b.ate, auto);
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -1051,10 +1051,10 @@ impl EnredoView {
                             });
                             ui.label(RichText::new("Informações do cartão — uma por linha, \"Chave: valor\"").size(12.0).color(p.muted));
                             let mut info = b.info.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n");
-                            if ui.add(egui::TextEdit::multiline(&mut info).desired_rows(2).desired_width(f32::INFINITY).hint_text("Função: o que esta batida faz na história").margin(egui::Margin::symmetric(8, 5))).changed() {
+                            if ui.add(egui::TextEdit::multiline(&mut info).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Função: o que esta batida faz na história").color(p.faint)).margin(egui::Margin::symmetric(8, 5))).changed() {
                                 b.info = info.lines().filter_map(|l| l.split_once(':')).map(|(k, v)| (k.trim().to_string(), v.trim().to_string())).filter(|(k, v)| !k.is_empty() && !v.is_empty() && !k.eq_ignore_ascii_case("espelho")).collect();
                             }
-                            ui.add(egui::TextEdit::multiline(&mut b.desc).desired_rows(2).desired_width(f32::INFINITY).hint_text("Descrição (opcional)").margin(egui::Margin::symmetric(8, 5)));
+                            ui.add(egui::TextEdit::multiline(&mut b.desc).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Descrição (opcional)").color(p.faint)).margin(egui::Margin::symmetric(8, 5)));
                         });
                     }
                 }

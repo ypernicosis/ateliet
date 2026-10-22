@@ -54,7 +54,7 @@ impl App {
                 self.right_tab = crate::app::RightTab::Manuscript;
                 self.binder.book = book;
             }
-            "cast" | "enredo" => {
+            "cast" | "enredo" | "mundo" => {
                 if let Some(b) = book {
                     self.open(&format!("scriptorium:{view}:{b}"), true);
                 }
@@ -195,6 +195,7 @@ impl App {
                     None => self.toast("Esta ficha não pertence a um livro."),
                 }
             }
+            Action::Toast(t) => self.toast(t),
             Action::OpenLink(t, source, nt) => {
                 let target = self.vault.as_ref().and_then(|v| v.resolve(t.split('#').next().unwrap_or(&t), &source));
                 match target {
