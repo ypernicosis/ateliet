@@ -198,11 +198,6 @@ pub fn list_step(size: f32) -> f32 {
 
 static QUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(>\s?)+").unwrap());
 
-/// Build the styled layout for the whole note.
-pub fn highlight(text: &str, st: &Styles, reveal: Reveal) -> LayoutJob {
-    highlight_lines(text, st, reveal).0
-}
-
 /// The styled layout, and how each line sits in Live Preview.
 pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, Vec<LineInfo>) {
     let mut job = LayoutJob::default();

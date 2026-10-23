@@ -115,6 +115,9 @@ pub enum AskKind {
     Rename(String),
     NewFolder(String),
     ConfirmDelete(String),
+    /// Several explorer items: to the trash, or into a folder (typed).
+    ConfirmDeleteMany(Vec<String>),
+    MoveMany(Vec<String>),
 }
 
 pub struct App {
