@@ -706,100 +706,146 @@ impl Default for Runs {
     }
 }
 
-/// A Mermaid flowchart drawn: boxes in their shapes, edges with arrows and
-/// labels, scaled down to the width when it is wider.
-fn mermaid_ui(ui: &mut egui::Ui, chart: &ateliet_core::mermaid::Chart, size: f32, p: crate::theme::Palette) {
-    use ateliet_core::mermaid::{Line, Shape};
+/// The colour of a series (pie slices, Gantt sections): hues around the
+/// accent, light in a light theme and deep in a dark one.
+fn series(i: usize, p: &crate::theme::Palette) -> Color32 {
+    const HUES: [[u8; 3]; 8] = [[0x8a, 0x5c, 0xf5], [0x00, 0xa3, 0xa3], [0xec, 0x75, 0x00], [0xe0, 0x4f, 0x8a], [0x08, 0x6d, 0xdd], [0x08, 0xb9, 0x4e], [0xd4, 0xa0, 0x00], [0x6f, 0x6f, 0x80]];
+    let c = if i == 0 { p.accent } else { let h = HUES[i % HUES.len()]; Color32::from_rgb(h[0], h[1], h[2]) };
+    if p.dark {
+        crate::theme::mix(c, Color32::BLACK, 0.35)
+    } else {
+        crate::theme::mix(c, Color32::WHITE, 0.55)
+    }
+}
+
+/// A Mermaid diagram drawn from the core's shapes, coloured by the theme
+/// and scaled down to the width when it is wider.
+fn mermaid_ui(ui: &mut egui::Ui, diagram: &ateliet_core::mermaid::Diagram, size: f32, p: crate::theme::Palette) {
+    use ateliet_core::mermaid::{Anchor, Head, Ink, Prim};
     let fs = size * 0.82;
     let font = FontId::proportional(fs);
     let measure = |t: &str| {
         let g = ui.fonts(|f| f.layout_no_wrap(t.to_string(), font.clone(), p.text));
         (g.size().x, g.size().y)
     };
-    let lay = ateliet_core::mermaid::layout(chart, &measure);
     let pad = 16.0;
     let avail = ui.available_width() - 2.0 * pad;
-    let k = if lay.width > avail { (avail / lay.width).max(0.3) } else { 1.0 };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), lay.height * k + 2.0 * pad), Sense::hover());
+    let d = ateliet_core::mermaid::draw(diagram, &measure, avail);
+    let k = if d.width > avail { (avail / d.width).max(0.3) } else { 1.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), d.height * k + 2.0 * pad), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 8.0, p.bg_secondary);
-    let ox = rect.left() + pad + (avail - lay.width * k).max(0.0) / 2.0;
+    let ox = rect.left() + pad + (avail - d.width * k).max(0.0) / 2.0;
     let oy = rect.top() + pad;
-    let to = |x: f32, y: f32| egui::pos2(ox + x * k, oy + y * k);
-    let boxes: Vec<egui::Rect> = lay.boxes.iter().map(|b| egui::Rect::from_min_max(to(b.0, b.1), to(b.0 + b.2, b.1 + b.3))).collect();
-    let ink = p.muted;
-    // where the line between two centres leaves a box
-    let exit = |r: egui::Rect, toward: egui::Pos2| -> egui::Pos2 {
-        let c = r.center();
-        let d = toward - c;
-        if d.length() < 1e-3 {
-            return c;
+    let to = |(x, y): (f32, f32)| egui::pos2(ox + x * k, oy + y * k);
+    let ink = |i: Ink| -> Color32 {
+        match i {
+            Ink::Line | Ink::Muted => p.muted,
+            Ink::Fill => p.bg,
+            Ink::Stroke => p.border_strong,
+            Ink::Back => p.bg_secondary,
+            Ink::Text | Ink::Solid => p.text,
+            Ink::Note => p.highlight,
+            Ink::Faint => p.border,
+            Ink::Series(n) => series(n, &p),
+            Ink::Done => crate::theme::mix(p.faint, p.bg, 0.45),
+            Ink::Active => p.accent_soft,
+            Ink::Crit => crate::theme::mix(Color32::from_rgb(0xe9, 0x31, 0x47), if p.dark { Color32::BLACK } else { Color32::WHITE }, 0.45),
         }
-        let tx = if d.x.abs() > 1e-3 { (r.width() / 2.0) / d.x.abs() } else { f32::INFINITY };
-        let ty = if d.y.abs() > 1e-3 { (r.height() / 2.0) / d.y.abs() } else { f32::INFINITY };
-        c + d * tx.min(ty)
     };
-    for e in &chart.edges {
-        let (a, b) = (boxes[e.from], boxes[e.to]);
-        let (pa, pb) = (exit(a, b.center()), exit(b, a.center()));
-        let w: f32 = match e.line { Line::Thick => 2.6, _ => 1.3 };
-        let st = Stroke::new(w, ink);
-        if e.line == Line::Dotted {
-            painter.extend(egui::Shape::dashed_line(&[pa, pb], st, 4.0, 3.0));
-        } else {
-            painter.line_segment([pa, pb], st);
+    let stroke = |i: Option<Ink>, w: f32| i.map(|i| Stroke::new(w * k.max(0.6), ink(i))).unwrap_or(Stroke::NONE);
+    let dashed = |pts: &[egui::Pos2], st: Stroke| painter.extend(egui::Shape::dashed_line(pts, st, 5.0 * k.max(0.6), 3.5 * k.max(0.6)));
+    for prim in &d.prims {
+        match prim {
+            Prim::Rect { x, y, w, h, round, fill, stroke: st, dashed: dash } => {
+                let r = egui::Rect::from_min_max(to((*x, *y)), to((x + w, y + h)));
+                painter.rect_filled(r, round * k, fill.map(ink).unwrap_or(Color32::TRANSPARENT));
+                if let Some(s) = st {
+                    if *dash {
+                        dashed(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], stroke(Some(*s), 1.0));
+                    } else {
+                        painter.rect_stroke(r, round * k, stroke(Some(*s), 1.3), egui::StrokeKind::Inside);
+                    }
+                }
+            }
+            Prim::Poly { pts, fill, stroke: st } => {
+                painter.add(egui::Shape::convex_polygon(pts.iter().map(|q| to(*q)).collect(), fill.map(ink).unwrap_or(Color32::TRANSPARENT), stroke(*st, 1.3)));
+            }
+            Prim::Circle { x, y, r, fill, stroke: st } => {
+                painter.circle(to((*x, *y)), r * k, fill.map(ink).unwrap_or(Color32::TRANSPARENT), stroke(*st, 1.3));
+            }
+            Prim::Line { pts, ink: i, width, dashed: dash } => {
+                let pts: Vec<egui::Pos2> = pts.iter().map(|q| to(*q)).collect();
+                let st = Stroke::new(width * k.max(0.6), ink(*i));
+                if *dash {
+                    dashed(&pts, st);
+                } else {
+                    painter.add(egui::Shape::line(pts, st));
+                }
+            }
+            Prim::Head { at, dir, kind, ink: i } => {
+                let tip = to(*at);
+                let dv = egui::vec2(dir.0, dir.1).normalized();
+                let side = egui::vec2(-dv.y, dv.x);
+                let l = 10.0 * k.max(0.6);
+                let c = ink(*i);
+                match kind {
+                    Head::Arrow => {
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.42, tip - dv * l - side * l * 0.42], c, Stroke::NONE));
+                    }
+                    Head::Triangle => {
+                        let l = l * 1.3;
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.5, tip - dv * l - side * l * 0.5], p.bg, Stroke::new(1.3_f32, c)));
+                    }
+                    Head::Diamond | Head::HollowDiamond => {
+                        let l = l * 0.85;
+                        let fill = if *kind == Head::Diamond { c } else { p.bg };
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.5, tip - dv * l * 2.0, tip - dv * l - side * l * 0.5], fill, Stroke::new(1.3_f32, c)));
+                    }
+                    Head::Cross => {
+                        let s = l * 0.45;
+                        let m = tip - dv * s;
+                        painter.line_segment([m + (dv + side) * s, m - (dv + side) * s], Stroke::new(1.5_f32, c));
+                        painter.line_segment([m + (dv - side) * s, m - (dv - side) * s], Stroke::new(1.5_f32, c));
+                    }
+                    Head::Open => {
+                        painter.add(egui::Shape::line(vec![tip - dv * l + side * l * 0.45, tip, tip - dv * l - side * l * 0.45], Stroke::new(1.3_f32, c)));
+                    }
+                    Head::None => {}
+                }
+            }
+            Prim::Text { x, y, text, anchor, ink: i, bold, small } => {
+                let f = if *bold { FontFamily::Name("bold".into()) } else { FontFamily::Proportional };
+                let font = FontId::new(fs * if *small { 0.9 } else { 1.0 } * k.max(0.55), f);
+                let align = match anchor {
+                    Anchor::Left => egui::Align2::LEFT_CENTER,
+                    Anchor::Center => egui::Align2::CENTER_CENTER,
+                    Anchor::Right => egui::Align2::RIGHT_CENTER,
+                };
+                let g = painter.layout_no_wrap(text.clone(), font, ink(*i));
+                let at = to((*x, *y));
+                painter.galley(align.align_size_within_rect(g.size(), egui::Rect::from_center_size(at, egui::Vec2::ZERO)).min, g, ink(*i));
+            }
+            Prim::Slice { x, y, r, a0, a1, ink: i } => {
+                // in pieces of at most a quarter turn, each convex
+                let c = to((*x, *y));
+                let r = r * k;
+                let pieces = ((a1 - a0) / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+                for n in 0..pieces {
+                    let (s0, s1) = (a0 + (a1 - a0) * n as f32 / pieces as f32, a0 + (a1 - a0) * (n + 1) as f32 / pieces as f32);
+                    let steps = (((s1 - s0) * r / 4.0).ceil() as usize).clamp(2, 64);
+                    let mut pts = vec![c];
+                    for t in 0..=steps {
+                        let a = s0 + (s1 - s0) * t as f32 / steps as f32;
+                        pts.push(c + egui::vec2(a.sin(), -a.cos()) * r);
+                    }
+                    painter.add(egui::Shape::convex_polygon(pts, ink(*i), Stroke::NONE));
+                }
+                for a in [a0, a1] {
+                    painter.line_segment([c, c + egui::vec2(a.sin(), -a.cos()) * r], Stroke::new(1.5_f32, p.bg_secondary));
+                }
+            }
         }
-        if e.arrow {
-            let dir = (pb - pa).normalized();
-            let side = egui::vec2(-dir.y, dir.x);
-            let l = 9.0 * k.max(0.6);
-            painter.add(egui::Shape::convex_polygon(vec![pb, pb - dir * l + side * l * 0.45, pb - dir * l - side * l * 0.45], ink, Stroke::NONE));
-        }
-        if !e.label.is_empty() {
-            let mid = pa + (pb - pa) * 0.5;
-            let g = painter.layout_no_wrap(e.label.clone(), FontId::proportional(fs * 0.9 * k.max(0.7)), p.muted);
-            let r = egui::Rect::from_center_size(mid, g.size() + egui::vec2(8.0, 4.0));
-            painter.rect_filled(r, 4.0, p.bg_secondary);
-            painter.galley(r.center() - g.size() / 2.0, g, p.muted);
-        }
-    }
-    for (i, nd) in chart.nodes.iter().enumerate() {
-        let r = boxes[i];
-        let fill = p.bg;
-        let st = Stroke::new(1.3_f32, p.border_strong);
-        match nd.shape {
-            Shape::Diamond => {
-                let c = r.center();
-                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(c.x, r.top()), egui::pos2(r.right(), c.y), egui::pos2(c.x, r.bottom()), egui::pos2(r.left(), c.y)], fill, st));
-            }
-            Shape::Circle => {
-                painter.circle(r.center(), r.width().min(r.height()) / 2.0, fill, st);
-            }
-            Shape::Hexagon => {
-                let d = r.height() * 0.3;
-                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(r.left() + d, r.top()), egui::pos2(r.right() - d, r.top()), egui::pos2(r.right(), r.center().y), egui::pos2(r.right() - d, r.bottom()), egui::pos2(r.left() + d, r.bottom()), egui::pos2(r.left(), r.center().y)], fill, st));
-            }
-            Shape::Flag => {
-                let d = r.height() * 0.3;
-                painter.add(egui::Shape::convex_polygon(vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), egui::pos2(r.left() + d, r.center().y)], fill, st));
-            }
-            Shape::Round => {
-                painter.rect(r, 8.0 * k, fill, st, egui::StrokeKind::Inside);
-            }
-            Shape::Stadium | Shape::Cylinder => {
-                painter.rect(r, r.height() / 2.0, fill, st, egui::StrokeKind::Inside);
-            }
-            Shape::Subroutine => {
-                painter.rect(r, 2.0, fill, st, egui::StrokeKind::Inside);
-                painter.vline(r.left() + 6.0 * k, r.y_range(), st);
-                painter.vline(r.right() - 6.0 * k, r.y_range(), st);
-            }
-            Shape::Rect => {
-                painter.rect(r, 3.0, fill, st, egui::StrokeKind::Inside);
-            }
-        }
-        let g = painter.layout(nd.label.clone(), FontId::proportional(fs * k), p.text, f32::INFINITY);
-        painter.galley(r.center() - g.size() / 2.0, g, p.text);
     }
 }
 
@@ -1154,8 +1200,8 @@ impl<'h> Renderer<'h> {
                     }
                 }
                 if l == "mermaid" {
-                    if let Some(chart) = ateliet_core::mermaid::parse(text) {
-                        mermaid_ui(ui, &chart, size, p);
+                    if let Some(d) = ateliet_core::mermaid::diagram(text) {
+                        mermaid_ui(ui, &d, size, p);
                         return;
                     }
                 }
