@@ -40,3 +40,4 @@ pub mod calendar;
 pub mod scriptorium;
 pub mod typeset;
 pub mod board;
+pub mod quadro;
