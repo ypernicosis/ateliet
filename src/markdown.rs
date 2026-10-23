@@ -260,6 +260,8 @@ impl<'a> Builder<'a> {
     fn blocks(&mut self, until: Option<TagEnd>) -> Vec<Block> {
         let mut out = Vec::new();
         let mut loose: Vec<Inline> = Vec::new();
+        // the style of loose text (tight list items): kept from one event to the next
+        let mut style = Style::default();
         // the last line of the block before (top level only): the blank lines
         // written between two blocks show as that much space
         let mut last_line: Option<usize> = None;
@@ -276,15 +278,18 @@ impl<'a> Builder<'a> {
             }
             match ev {
                 Event::End(t) if Some(t) == until => break,
+                Event::End(TagEnd::Emphasis) => style.italic = false,
+                Event::End(TagEnd::Strong) => style.bold = false,
+                Event::End(TagEnd::Strikethrough) => style.strike = false,
                 Event::Start(tag) => {
                     if !loose.is_empty() && !is_inline(&tag) {
                         out.push(Block::Para(tidy(std::mem::take(&mut loose))));
                     }
                     if is_inline(&tag) {
-                        let mut style = Style::default();
                         self.inline_start(tag, &mut loose, &mut style);
                         continue;
                     }
+                    style = Style::default();
                     if let Some(b) = self.block(tag, r.start) {
                         out.push(b);
                     }
@@ -303,10 +308,7 @@ impl<'a> Builder<'a> {
                     out.push(Block::Math(m.to_string()));
                 }
                 Event::TaskListMarker(_) => {}
-                other => {
-                    let mut style = Style::default();
-                    self.inline_event(other, &mut loose, &mut style);
-                }
+                other => self.inline_event(other, &mut loose, &mut style),
             }
         }
         flush(&mut out, &mut loose);
@@ -897,7 +899,7 @@ impl<'h> Renderer<'h> {
                         crate::dv::value_runs(self, runs, &res, size, true);
                         continue;
                     }
-                    let mut f = TextFormat { font_id: FontId::new(size * 0.88, FontFamily::Monospace), color: p.text, background: p.code_bg, ..Default::default() };
+                    let mut f = TextFormat { font_id: FontId::new(size * 0.88, FontFamily::Monospace), color: p.text, background: p.code_bg, valign: egui::Align::Center, ..Default::default() };
                     if let Some(c) = color {
                         f.color = c;
                     }
@@ -919,7 +921,7 @@ impl<'h> Renderer<'h> {
                 }
                 Inline::Break => runs.push("\n", self.fmt(size, base)),
                 Inline::Field { key, value, paren } => {
-                    let mono = |c: Color32, bg: Color32| TextFormat { font_id: FontId::new(size * 0.85, FontFamily::Monospace), color: c, background: bg, ..Default::default() };
+                    let mono = |c: Color32, bg: Color32| TextFormat { font_id: FontId::new(size * 0.85, FontFamily::Monospace), color: c, background: bg, valign: egui::Align::Center, ..Default::default() };
                     if !paren {
                         runs.push(&format!(" {key} "), mono(p.muted, p.bg_hover));
                     }
@@ -1035,6 +1037,8 @@ impl<'h> Renderer<'h> {
             }
             Block::Para(inl) => self.paragraph(ui, inl, size, Style::default(), None),
             Block::List { start, items } => {
+                let note_align = crate::align::current();
+                crate::align::set_current(crate::align::for_lists(note_align));
                 for (n, it) in items.iter().enumerate() {
                     if n > 0 {
                         ui.add_space(size * 0.2);
@@ -1076,6 +1080,7 @@ impl<'h> Renderer<'h> {
                         });
                     });
                 }
+                crate::align::set_current(note_align);
             }
             Block::Quote(body) => {
                 let resp = egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
@@ -1369,6 +1374,17 @@ mod tests {
         let Block::Callout { kind, folded, .. } = &d.blocks[3] else { panic!() };
         assert_eq!(kind, "warning");
         assert_eq!(*folded, Some(true));
+    }
+
+    #[test]
+    fn tight_list_items_keep_their_styles() {
+        let d = parse("- um **forte** e ==realce==\n- dois");
+        let Block::List { items, .. } = &d.blocks[0] else { panic!() };
+        let Block::Para(inl) = &items[0].blocks[0] else { panic!() };
+        let styled: Vec<(String, Style)> = inl.iter().filter_map(|i| if let Inline::Text(t, s) = i { Some((t.clone(), *s)) } else { None }).collect();
+        assert!(styled.iter().any(|(t, s)| t == "forte" && s.bold), "{styled:?}");
+        assert!(styled.iter().any(|(t, s)| t == "realce" && s.mark), "{styled:?}");
+        assert!(styled.iter().any(|(t, s)| t == " e " && !s.bold && !s.mark), "{styled:?}");
     }
 
     #[test]

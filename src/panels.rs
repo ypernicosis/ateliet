@@ -1019,8 +1019,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             ui.set_min_width(200.0);
                             for a in crate::align::ALL {
                                 if kit::menu_entry(ui, a.icon(), a.label(), if a == cur { "✓" } else { "" }, true, false, p) && a != cur {
-                                    t.text = a.set_on(&t.text);
-                                    t.last_edit = Some(std::time::Instant::now());
+                                    crate::align::apply(ui.ctx(), t, a);
                                 }
                             }
                         });

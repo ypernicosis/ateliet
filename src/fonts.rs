@@ -82,6 +82,11 @@ fn first(paths: &[&str]) -> Option<Vec<u8>> {
 }
 
 pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(definitions());
+}
+
+/// The app's font families (see the module's notes).
+pub fn definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let builtin: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let builtin_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
@@ -123,5 +128,5 @@ pub fn install(ctx: &egui::Context) {
     m.extend(builtin_mono);
     m.push("inter".into());
     fonts.families.insert(FontFamily::Monospace, m);
-    ctx.set_fonts(fonts);
+    fonts
 }

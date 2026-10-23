@@ -76,7 +76,7 @@ impl Tab {
         }
     }
 
-    fn editor_id(&self) -> egui::Id {
+    pub fn editor_id(&self) -> egui::Id {
         egui::Id::new(("editor", &self.path))
     }
 }
@@ -1581,7 +1581,7 @@ impl App {
                         }
                         match tab.mode {
                             Mode::Edit if self.live_preview => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::live(size, p);
                                 let path = tab.path.clone();
                                 let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
                                 let mut acts = crate::live::show(ui, tab, &mut host, &st);
@@ -1589,7 +1589,7 @@ impl App {
                             }
                             // the source, with Dataview results shown in place
                             Mode::Edit if !crate::live::query_blocks(&tab.text).is_empty() => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::source(size, p);
                                 let blocks = crate::live::query_blocks(&tab.text);
                                 let path = tab.path.clone();
                                 let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
@@ -1597,7 +1597,7 @@ impl App {
                                 actions.append(&mut acts);
                             }
                             Mode::Edit => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::source(size, p);
                                 let id = tab.editor_id();
                                 if let Some((pid, ci)) = PENDING_CURSOR.with(|c| c.borrow_mut().take()) {
                                     if pid == id {
