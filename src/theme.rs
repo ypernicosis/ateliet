@@ -170,6 +170,8 @@ pub const UI_SMALL: f32 = 11.5;
 
 pub fn apply(ctx: &egui::Context, a: &Appearance) -> Palette {
     let p = Palette::new(a);
+    // the theme's typography (its fonts arrive in the background)
+    crate::typo::apply(ctx, a);
     let mut v = if a.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
     v.panel_fill = p.bg_secondary;
     v.window_fill = p.bg;

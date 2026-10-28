@@ -405,7 +405,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     // the same rhythm as the reading view: more room above headings
     let gap_before = |seg: &Segment| match seg.doc.blocks.first() {
         Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
-        _ => size * 0.7,
+        _ => size * crate::typo::get().gap,
     };
     for (i, seg) in segs.iter().enumerate() {
         if let Some(a) = active {

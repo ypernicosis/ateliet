@@ -917,6 +917,8 @@ pub struct Renderer<'h> {
     pub scroll_to: Option<usize>,
     /// Drawing inside a table cell.
     pub in_cell: bool,
+    /// The theme's typography.
+    pub typo: crate::typo::Typo,
 }
 
 pub fn callout_color(kind: &str, p: &crate::theme::Palette) -> Color32 {
@@ -953,22 +955,26 @@ fn callout_icon(kind: &str) -> &'static str {
 
 impl<'h> Renderer<'h> {
     pub fn new(host: &'h mut dyn Host) -> Self {
-        Renderer { host, actions: Vec::new(), depth: 0, scroll_to: None, in_cell: false }
+        Renderer { host, actions: Vec::new(), depth: 0, scroll_to: None, in_cell: false, typo: crate::typo::get() }
     }
 
     fn fmt(&self, size: f32, style: Style) -> TextFormat {
         let p = self.host.palette();
-        let family = if style.bold { FontFamily::Name("bold".into()) } else if style.italic { FontFamily::Name("italic".into()) } else { FontFamily::Proportional };
-        let lh = if size > self.host.size() * 1.1 { 1.28 } else { 1.62 };
+        let family = if style.bold { FontFamily::Name("theme-text-bold".into()) } else if style.italic { FontFamily::Name("theme-text-italic".into()) } else { FontFamily::Name("theme-text".into()) };
+        let lh = if size > self.host.size() * 1.1 { 1.28 } else { self.typo.line };
         let mut f = TextFormat { font_id: FontId::new(size, family), color: p.text, line_height: Some((size * lh).round()), valign: egui::Align::Center, ..Default::default() };
         if style.italic && style.bold {
             f.italics = true;
+        }
+        // the theme's colours of emphasis
+        if let Some(c) = if style.bold { self.typo.bold } else if style.italic { self.typo.italic } else { None } {
+            f.color = c;
         }
         if style.strike {
             f.strikethrough = Stroke::new(1.0_f32, p.text);
         }
         if style.mark {
-            f.background = p.highlight;
+            f.background = self.typo.highlight.unwrap_or(p.highlight);
         }
         f
     }
@@ -993,7 +999,7 @@ impl<'h> Renderer<'h> {
                         crate::dv::value_runs(self, runs, &res, size, true);
                         continue;
                     }
-                    let mut f = TextFormat { font_id: FontId::new(size * 0.88, FontFamily::Monospace), color: p.text, background: p.code_bg, valign: egui::Align::Center, ..Default::default() };
+                    let mut f = TextFormat { font_id: FontId::new(size * self.typo.code, FontFamily::Name("theme-mono".into())), color: p.text, background: p.code_bg, valign: egui::Align::Center, ..Default::default() };
                     if let Some(c) = color {
                         f.color = c;
                     }
@@ -1031,7 +1037,8 @@ impl<'h> Renderer<'h> {
                     self.runs(&mut sub, children, size, base, None);
                     for mut section in sub.job.sections {
                         let text = &sub.job.text[section.byte_range.clone()];
-                        section.format.color = if ok { p.link() } else { p.link().gamma_multiply(0.6) };
+                        let link = self.typo.link.unwrap_or(p.link());
+                        section.format.color = if ok { link } else { link.gamma_multiply(0.6) };
                         if matches!(target, Target::Tag(_)) {
                             section.format.background = p.accent_soft;
                             section.format.color = p.accent_strong;
@@ -1107,7 +1114,7 @@ impl<'h> Renderer<'h> {
                 let gap = match b {
                     Block::Space(_) => 0.0,
                     Block::Heading { level, .. } => size * if *level <= 2 { 1.5 } else { 1.1 },
-                    _ => size * 0.7,
+                    _ => size * self.typo.gap,
                 };
                 ui.add_space(gap);
             }
@@ -1120,9 +1127,12 @@ impl<'h> Renderer<'h> {
         let p = self.host.palette();
         match b {
             Block::Heading { level, inlines, line } => {
-                let scale = [1.6, 1.32, 1.16, 1.05, 1.0, 0.92][(*level as usize).clamp(1, 6) - 1];
+                let k = (*level as usize).clamp(1, 6) - 1;
+                let scale = self.typo.heading[k];
                 let top = ui.cursor().min;
-                self.paragraph(ui, inlines, size * scale, Style { bold: true, ..Default::default() }, None);
+                let (bold, color) = (self.typo.heading_bold[k], self.typo.heading_color[k]);
+                // the heading's own colour (not the theme's colour for bold text)
+                self.paragraph(ui, inlines, size * scale, Style { bold, ..Default::default() }, Some(color.unwrap_or(p.text)));
                 if self.scroll_to == Some(*line) && self.depth == 0 {
                     ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(10.0, size * scale)), Some(egui::Align::TOP));
                     self.scroll_to = None;
@@ -1149,19 +1159,19 @@ impl<'h> Renderer<'h> {
                         match it.task {
                             Some(c) => {
                                 let mut checked = c != ' ';
-                                let r = ui.add_sized([marker_w, (size * 1.62).round()], egui::Checkbox::without_text(&mut checked));
+                                let r = ui.add_sized([marker_w, (size * self.typo.line).round()], egui::Checkbox::without_text(&mut checked));
                                 if r.clicked() {
                                     self.actions.push(Action::ToggleTask(it.line, c));
                                 }
                             }
                             None => {
-                                let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_w, (size * 1.62).round()), Sense::hover());
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_w, (size * self.typo.line).round()), Sense::hover());
                                 match start {
                                     Some(s) => {
                                         ui.painter().text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, format!("{}.", s + n as u64), FontId::proportional(size), p.muted);
                                     }
                                     None => {
-                                        ui.painter().circle_filled(egui::pos2(rect.center().x, rect.center().y), (size * 0.16).max(2.2), p.faint);
+                                        ui.painter().circle_filled(egui::pos2(rect.center().x, rect.center().y), (size * 0.16).max(2.2), self.typo.bullet.unwrap_or(p.faint));
                                     }
                                 }
                             }
@@ -1185,7 +1195,7 @@ impl<'h> Renderer<'h> {
             Block::Quote(body) => {
                 let resp = egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
                 let r = resp.response.rect;
-                ui.painter().line_segment([r.left_top() + egui::vec2(1.0, 2.0), r.left_bottom() + egui::vec2(1.0, -2.0)], Stroke::new(2.0_f32, p.border_strong));
+                ui.painter().line_segment([r.left_top() + egui::vec2(1.0, 2.0), r.left_bottom() + egui::vec2(1.0, -2.0)], Stroke::new(self.typo.quote_width, self.typo.quote.unwrap_or(p.border_strong)));
             }
             Block::Callout { kind, title, body, folded, line } => {
                 let color = callout_color(kind, &p);
@@ -1282,7 +1292,7 @@ impl<'h> Renderer<'h> {
                 egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::ScrollArea::horizontal().id_salt(("code", text.len(), lang)).show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(text).monospace().size(size * 0.85).color(p.text)).extend());
+                        ui.add(egui::Label::new(egui::RichText::new(text).family(FontFamily::Name("theme-mono".into())).size(size * 0.85).color(p.text)).extend());
                     });
                 });
             }

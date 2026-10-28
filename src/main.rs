@@ -24,6 +24,7 @@ mod sc;
 mod settings_pages;
 mod templater;
 mod theme;
+mod typo;
 mod update;
 mod vault;
 #[cfg(feature = "clip")]

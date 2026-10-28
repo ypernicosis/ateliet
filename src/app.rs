@@ -1557,7 +1557,7 @@ impl App {
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
-            let max_w = if readable && centered { 46.0 * size } else { f32::INFINITY };
+            let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
             let pad = if centered { 32.0 } else { 14.0 };
             egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
@@ -1570,7 +1570,7 @@ impl App {
                         if centered {
                             ui.add_space(28.0);
                             // inline title
-                            ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
+                            ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("theme-text-bold".into())).color(p.text));
                             ui.add_space(10.0);
                         }
                         // writing tools ("/" menu, selection bar) in chapters

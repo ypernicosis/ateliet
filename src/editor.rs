@@ -34,30 +34,54 @@ pub struct Styles {
     /// sizes, line heights and colours), with the Markdown marks hidden
     /// except where the cursor is.
     pub live: bool,
+    /// The theme's typography, and a hash of it for the layout cache.
+    pub typo: crate::typo::Typo,
+    typo_key: u64,
+}
+
+/// The notes' font families (the theme's fonts, else Inter and the monospace).
+pub fn text_family() -> FontFamily {
+    FontFamily::Name("theme-text".into())
+}
+pub fn bold_family() -> FontFamily {
+    FontFamily::Name("theme-text-bold".into())
+}
+pub fn italic_family() -> FontFamily {
+    FontFamily::Name("theme-text-italic".into())
+}
+pub fn mono_family() -> FontFamily {
+    FontFamily::Name("theme-mono".into())
 }
 
 impl Styles {
+    fn new(size: f32, p: Palette, live: bool) -> Styles {
+        let typo = crate::typo::get();
+        let mut h = DefaultHasher::new();
+        format!("{typo:?}").hash(&mut h);
+        Styles { size, p, live, typo, typo_key: h.finish() }
+    }
+
     pub fn source(size: f32, p: Palette) -> Styles {
-        Styles { size, p, live: false }
+        Styles::new(size, p, false)
     }
 
     pub fn live(size: f32, p: Palette) -> Styles {
-        Styles { size, p, live: true }
+        Styles::new(size, p, true)
     }
 
     fn fmt(&self, size: f32, color: Color32) -> TextFormat {
         if self.live {
             // the reading view's paragraph (markdown::Renderer::fmt)
-            let lh = if size > self.size * 1.1 { 1.28 } else { 1.62 };
-            return TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, line_height: Some((size * lh).round()), valign: egui::Align::Center, ..Default::default() };
+            let lh = if size > self.size * 1.1 { 1.28 } else { self.typo.line };
+            return TextFormat { font_id: FontId::new(size, text_family()), color, line_height: Some((size * lh).round()), valign: egui::Align::Center, ..Default::default() };
         }
-        TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, line_height: Some(size * 1.62), ..Default::default() }
+        TextFormat { font_id: FontId::new(size, text_family()), color, line_height: Some(size * self.typo.line), ..Default::default() }
     }
     fn mono(&self, color: Color32) -> TextFormat {
         if self.live {
-            return TextFormat { font_id: FontId::new(self.size * 0.88, FontFamily::Monospace), color, valign: egui::Align::Center, ..Default::default() };
+            return TextFormat { font_id: FontId::new(self.size * self.typo.code, mono_family()), color, valign: egui::Align::Center, ..Default::default() };
         }
-        TextFormat { font_id: FontId::new(self.size * 0.88, FontFamily::Monospace), color, line_height: Some(self.size * 1.5), ..Default::default() }
+        TextFormat { font_id: FontId::new(self.size * self.typo.code, mono_family()), color, line_height: Some(self.size * 1.5), ..Default::default() }
     }
     /// Code blocks: the reading view's code size in Live Preview.
     fn code(&self, color: Color32) -> TextFormat {
@@ -70,16 +94,19 @@ impl Styles {
     }
     /// Italic: the italic face in Live Preview (as the reading view), slanted otherwise.
     fn italic(&self, f: &mut TextFormat) {
-        let bold = f.font_id.family == FontFamily::Name("bold".into());
+        let bold = f.font_id.family == bold_family();
         if self.live && !bold {
-            f.font_id.family = FontFamily::Name("italic".into());
+            f.font_id.family = italic_family();
         } else {
             f.italics = true;
+        }
+        if let Some(c) = self.typo.italic.filter(|_| self.live) {
+            f.color = c;
         }
     }
     fn heading_scale(&self, level: usize) -> f32 {
         if self.live {
-            [1.6, 1.32, 1.16, 1.05, 1.0, 0.92][level - 1]
+            self.typo.heading[level - 1]
         } else {
             [1.6, 1.4, 1.25, 1.12, 1.05, 1.0][level - 1]
         }
@@ -271,12 +298,15 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
                 let level = h[1].len();
                 let size = st.size * st.heading_scale(level);
                 let mut f = st.fmt(size, p.text);
-                f.font_id = FontId::new(size, FontFamily::Name("bold".into()));
+                f.font_id = FontId::new(size, if st.typo.heading_bold[level - 1] || !st.live { bold_family() } else { text_family() });
+                if let Some(c) = st.typo.heading_color[level - 1].filter(|_| st.live) {
+                    f.color = c;
+                }
                 if !st.live {
                     f.line_height = Some(size * 1.35);
                 }
                 let mut mark = f.clone();
-                mark.font_id = FontId::new(size, FontFamily::Proportional);
+                mark.font_id = FontId::new(size, text_family());
                 mark.color = p.faint;
                 job.append(&line[..h[0].len()], 0.0, if on_line { mark } else { hidden(&f) });
                 info.lead = 1;
@@ -421,7 +451,10 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
             f.underline = Stroke::new(1.0_f32, p.link().gamma_multiply(0.4));
             job.append(s, 0.0, f);
         } else if c.name("bold").is_some() {
-            f.font_id = FontId::new(f.font_id.size, FontFamily::Name("bold".into()));
+            f.font_id = FontId::new(f.font_id.size, bold_family());
+            if let Some(c) = st.typo.bold.filter(|_| st.live) {
+                f.color = c;
+            }
             wrapped(job, s, 2, 2, f, &marks);
         } else if c.name("italic").is_some() {
             st.italic(&mut f);
@@ -487,6 +520,7 @@ impl HighlightCache {
         st.p.dark.hash(&mut h);
         st.p.accent.hash(&mut h);
         st.live.hash(&mut h);
+        st.typo_key.hash(&mut h);
         if st.live {
             reveal.hash(&mut h);
         }
@@ -640,10 +674,11 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
 /// boxes, quote bars, the code block's box.
 fn paint_decos(painter: &egui::Painter, at: egui::Pos2, decos: &[DecoShape], size: f32, p: &Palette) {
     let v = at.to_vec2();
+    let typo = crate::typo::get();
     for d in decos {
         match d {
             DecoShape::Bullet(c) => {
-                painter.circle_filled(*c + v, (size * 0.16).max(2.2), p.faint);
+                painter.circle_filled(*c + v, (size * 0.16).max(2.2), typo.bullet.unwrap_or(p.faint));
             }
             DecoShape::Check(c, done) => {
                 let r = egui::Rect::from_center_size(*c + v, egui::vec2(size * 0.9, size * 0.9));
@@ -655,7 +690,7 @@ fn paint_decos(painter: &egui::Painter, at: egui::Pos2, decos: &[DecoShape], siz
                 }
             }
             DecoShape::Bar(x, t, b) => {
-                painter.line_segment([egui::pos2(at.x + x, at.y + t + 2.0), egui::pos2(at.x + x, at.y + b - 2.0)], Stroke::new(2.0_f32, p.border_strong));
+                painter.line_segment([egui::pos2(at.x + x, at.y + t + 2.0), egui::pos2(at.x + x, at.y + b - 2.0)], Stroke::new(typo.quote_width, typo.quote.unwrap_or(p.border_strong)));
             }
             DecoShape::CodeBox(r) => {
                 painter.rect(r.translate(v), 8.0, p.code_bg, Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
