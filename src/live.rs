@@ -88,6 +88,8 @@ pub struct LiveState {
     pub highlight: editor::HighlightCache,
     /// Where to put the cursor when a block opens (char index), or the end.
     pub cursor_at: Option<usize>,
+    /// Where the block was clicked to open it: the cursor goes there.
+    pub click: Option<egui::Pos2>,
     /// In the source editor: the query block (by its order) shown as code.
     pub query_edit: Option<usize>,
     query_focus: bool,
@@ -114,6 +116,7 @@ impl LiveState {
 
     pub fn close(&mut self) {
         self.active = None;
+        self.click = None;
     }
 
     /// Put the edited lines back into the note.
@@ -399,11 +402,19 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     let mut drawn_editor = false;
     let mut open: Option<(usize, bool)> = None;
     let size = host.size();
+    // the same rhythm as the reading view: more room above headings
+    let gap_before = |seg: &Segment| match seg.doc.blocks.first() {
+        Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
+        _ => size * crate::typo::get().gap,
+    };
     for (i, seg) in segs.iter().enumerate() {
         if let Some(a) = active {
             if seg.start >= a && seg.start <= buf_end || (seg.start < a && seg.end >= a) {
                 if !drawn_editor {
                     drawn_editor = true;
+                    if i > 0 {
+                        ui.add_space(gap_before(seg));
+                    }
                     if let Some(nav) = editor_block(ui, tab, id, st) {
                         match nav {
                             Nav::Up => {
@@ -425,18 +436,16 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
             }
             if seg.start > buf_end && !drawn_editor {
                 drawn_editor = true;
+                if i > 0 {
+                    ui.add_space(size * 0.7);
+                }
                 if let Some(Nav::Close) = editor_block(ui, tab, id, st) {
                     tab.live.close();
                 }
             }
         }
-        // the same rhythm as the reading view: more room above headings
         if i > 0 {
-            let gap = match seg.doc.blocks.first() {
-                Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
-                _ => size * 0.7,
-            };
-            ui.add_space(gap);
+            ui.add_space(gap_before(seg));
         }
         let top = ui.cursor().min;
         let before = actions.len();
@@ -467,12 +476,16 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         // the properties are edited with their own widgets, not as YAML
         if clicked && actions.len() == before && !seg.frontmatter {
             open = Some((i, true));
+            tab.live.click = ui.input(|inp| inp.pointer.interact_pos());
         }
         if ui.rect_contains_pointer(rect) && actions.len() == before && !seg.frontmatter {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
         }
     }
     if active.is_some() && !drawn_editor {
+        if !segs.is_empty() {
+            ui.add_space(size * 0.7);
+        }
         if let Some(Nav::Close) = editor_block(ui, tab, id, st) {
             tab.live.close();
         }
@@ -518,8 +531,13 @@ enum Nav {
 }
 
 fn editor_block(ui: &mut egui::Ui, tab: &mut Tab, id: egui::Id, st: &editor::Styles) -> Option<Nav> {
-    ui.add_space(st.size * 0.45);
     let mut nav = None;
+    if let Some(pos) = tab.live.click.take() {
+        // the block opened where it was clicked: the text is set as it was
+        // drawn (marks hidden), so the click lands on the same letter
+        let g = editor::galley(ui, &tab.live.buf, &mut tab.live.highlight, st, editor::Reveal(None), ui.available_width());
+        tab.live.cursor_at = Some(g.cursor_from_pos(pos - ui.cursor().min).ccursor.index);
+    }
     if let Some(ci) = tab.live.cursor_at.take() {
         let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(ci))));
@@ -541,16 +559,13 @@ fn editor_block(ui: &mut egui::Ui, tab: &mut Tab, id: egui::Id, st: &editor::Sty
         }
     }
     let before = tab.live.buf.clone();
-    let p = st.p;
-    let frame = egui::Frame::new().fill(p.bg_secondary).corner_radius(egui::CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
-        ui.add(editor::editor_widget(&mut tab.live.buf, id, &mut tab.live.highlight, st, 1));
-    });
+    let resp = ui.add(editor::editor_widget(&mut tab.live.buf, id, &mut tab.live.highlight, st, 1));
     if tab.live.buf != before && crate::sc::focus::TYPEWRITER.with(|t| t.get()) {
         // keep the line being typed in the middle of the screen
         let cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or(0);
         let lines = tab.live.buf.split('\n').count().max(1) as f32;
         let at = tab.live.buf.chars().take(cursor).filter(|c| *c == '\n').count() as f32;
-        let r = frame.response.rect;
+        let r = resp.rect;
         let y = r.top() + r.height() * ((at + 0.5) / lines);
         ui.scroll_to_rect(egui::Rect::from_center_size(egui::pos2(r.center().x, y), egui::vec2(10.0, st.size)), Some(egui::Align::Center));
     }

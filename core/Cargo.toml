@@ -39,6 +39,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 rustybuzz = "0.20"
 ttf-parser = "0.25"
 pdf-writer = "0.15"
+hayro = "0.8"
 subsetter = "0.2"
 rquickjs = { version = "0.9", default-features = false, features = ["classes", "properties"] }
 

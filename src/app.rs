@@ -84,7 +84,7 @@ impl Tab {
         }
     }
 
-    fn editor_id(&self) -> egui::Id {
+    pub fn editor_id(&self) -> egui::Id {
         egui::Id::new(("editor", &self.path))
     }
 }
@@ -123,6 +123,9 @@ pub enum AskKind {
     Rename(String),
     NewFolder(String),
     ConfirmDelete(String),
+    /// Several explorer items: to the trash, or into a folder (typed).
+    ConfirmDeleteMany(Vec<String>),
+    MoveMany(Vec<String>),
 }
 
 pub struct App {
@@ -1633,7 +1636,7 @@ impl App {
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
-            let max_w = if readable && centered { 46.0 * size } else { f32::INFINITY };
+            let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
             let pad = if centered { 32.0 } else { 14.0 };
             egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
@@ -1646,7 +1649,7 @@ impl App {
                         if centered {
                             ui.add_space(28.0);
                             // inline title
-                            ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("bold".into())).color(p.text));
+                            ui.label(egui::RichText::new(vault::basename(&tab.path)).size(size * 1.9).family(egui::FontFamily::Name("theme-text-bold".into())).color(p.text));
                             ui.add_space(10.0);
                         }
                         // writing tools ("/" menu, selection bar) in chapters
@@ -1660,7 +1663,7 @@ impl App {
                         }
                         match tab.mode {
                             Mode::Edit if self.live_preview => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::live(size, p);
                                 let path = tab.path.clone();
                                 let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
                                 let mut acts = crate::live::show(ui, tab, &mut host, &st);
@@ -1668,7 +1671,7 @@ impl App {
                             }
                             // the source, with Dataview results shown in place
                             Mode::Edit if !crate::live::query_blocks(&tab.text).is_empty() => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::source(size, p);
                                 let blocks = crate::live::query_blocks(&tab.text);
                                 let path = tab.path.clone();
                                 let mut host = RenderHost { vault, palette: p, size, source: &path, caches: &mut self.caches, settings: &self.dv_settings };
@@ -1676,7 +1679,7 @@ impl App {
                                 actions.append(&mut acts);
                             }
                             Mode::Edit => {
-                                let st = editor::Styles { size, p };
+                                let st = editor::Styles::source(size, p);
                                 let id = tab.editor_id();
                                 if let Some((pid, ci)) = PENDING_CURSOR.with(|c| c.borrow_mut().take()) {
                                     if pid == id {

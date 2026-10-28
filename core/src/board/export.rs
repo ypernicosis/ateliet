@@ -226,6 +226,85 @@ pub fn animated_png(doc: &mut BoardDoc, pics: &mut Pictures, max: u32) -> Vec<u8
     apng(&frames, &delays)
 }
 
+// ── video ─────────────────────────────────────────────────────────────────
+
+/// The `ffmpeg` to encode videos with: on the PATH, or where Homebrew,
+/// MacPorts and Linux packages put it (an app opened from the Finder does
+/// not get the terminal's PATH). `ATELIET_FFMPEG` points to another one.
+pub fn ffmpeg_path() -> Option<std::path::PathBuf> {
+    if let Some(p) = std::env::var_os("ATELIET_FFMPEG").map(std::path::PathBuf::from).filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    let exe = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
+    let mut dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/snap/bin"] {
+        dirs.push(d.into());
+    }
+    dirs.into_iter().map(|d| d.join(exe)).find(|p| p.is_file())
+}
+
+/// The frames of a storyboard ready to encode: written as PNG files in
+/// `dir`, each with how many video frames it lasts.
+pub struct VideoFrames {
+    pub dir: std::path::PathBuf,
+    pub holds: Vec<(String, u32)>,
+    pub fps: u32,
+}
+
+/// Every frame scaled to fit `max` pixels, into `dir` (created).
+pub fn video_frames(doc: &mut BoardDoc, pics: &mut Pictures, max: u32, dir: &std::path::Path) -> std::io::Result<VideoFrames> {
+    std::fs::create_dir_all(dir)?;
+    let fps = doc.fps().max(1);
+    let mut holds = Vec::new();
+    for i in 0..doc.frame_count() {
+        let (w, h, px) = bc::frame_image(doc, pics, i, max, true);
+        let name = format!("{:05}.png", i + 1);
+        std::fs::write(dir.join(&name), super::tile::encode_png(&px, w, h))?;
+        let frames = doc.frame(i)["duration"].as_f64().unwrap_or(24.0).round().max(1.0) as u32;
+        holds.push((name, frames));
+    }
+    Ok(VideoFrames { dir: dir.to_path_buf(), holds, fps })
+}
+
+/// Encode the frames into a WebM (VP9) at `out` with `ffmpeg`. Each picture
+/// goes down ffmpeg's input as many times as it lasts, so the video keeps
+/// the timeline's timing to the frame. Sizes are made even, as the 4:2:0
+/// colour of the video needs.
+pub fn encode_webm(ffmpeg: &std::path::Path, frames: &VideoFrames, out: &std::path::Path) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(ffmpeg)
+        .arg("-y")
+        .args(["-hide_banner", "-loglevel", "error"])
+        .args(["-f", "image2pipe", "-c:v", "png", "-framerate", &frames.fps.to_string(), "-i", "-"])
+        .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p"])
+        .args(["-c:v", "libvpx-vp9", "-b:v", "0", "-crf", "32", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4"])
+        .arg(out)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut fed = Ok(());
+    if let Some(mut stdin) = child.stdin.take() {
+        'feed: for (name, n) in &frames.holds {
+            let bytes = std::fs::read(frames.dir.join(name)).map_err(|e| e.to_string())?;
+            for _ in 0..*n {
+                if let Err(e) = stdin.write_all(&bytes) {
+                    fed = Err(e.to_string());
+                    break 'feed;
+                }
+            }
+        }
+    }
+    let o = child.wait_with_output().map_err(|e| e.to_string())?;
+    if o.status.success() {
+        return fed;
+    }
+    let err = String::from_utf8_lossy(&o.stderr);
+    Err(err.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("o ffmpeg falhou").trim().to_string())
+}
+
 /// A proportion written the way Pictogrep names it ("16:9"), or the ratio.
 pub fn aspect_of(w: u32, h: u32) -> String {
     fn g(a: u32, b: u32) -> u32 {
@@ -302,6 +381,27 @@ pub fn to_pictogrep(doc: &mut BoardDoc, pics: &mut Pictures, dir: &std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A whole storyboard: frames held for their durations (ffmpeg only).
+    #[test]
+    fn webm_of_a_storyboard_lasts_its_timeline() {
+        let Some(ff) = ffmpeg_path() else { return };
+        let mut doc = BoardDoc::new("animatic", 64, 36, "#ffffff", 12);
+        doc.add_frame(1);
+        doc.board["frames"][0]["duration"] = json!(12);
+        doc.board["frames"][1]["duration"] = json!(6);
+        let dir = std::env::temp_dir().join(format!("ateliet-webm-board-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let frames = video_frames(&mut doc, &mut Pictures::default(), 64, &dir).unwrap();
+        let out = dir.join("b.webm");
+        encode_webm(&ff, &frames, &out).unwrap();
+        let probe = ff.with_file_name(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+        if let Ok(o) = std::process::Command::new(probe).args(["-v", "error", "-count_frames", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0"]).arg(&out).output() {
+            let n: u32 = String::from_utf8_lossy(&o.stdout).trim().parse().unwrap_or(0);
+            assert_eq!(n, 18, "12 + 6 frames at 12 fps");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn apng_has_frames() {

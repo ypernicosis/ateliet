@@ -23,7 +23,77 @@ enum FileCmd {
     /// A new quadro (Kanban) or Excalidraw drawing in this folder.
     NewQuadro,
     NewDrawing,
+    /// Move the selected items into this folder.
+    MoveManyTo(Vec<String>, String),
+    /// Open the selected files, each in a tab.
+    OpenMany(Vec<String>),
 }
+
+/// The explorer's selection: several files and folders picked with Shift
+/// (a range from the anchor) or Ctrl/Cmd (one more, or one less), as in
+/// Obsidian. Kept in egui's memory between frames.
+#[derive(Clone, Default)]
+struct Selection {
+    items: Vec<String>,
+    /// Where a Shift range starts: the last item clicked.
+    anchor: Option<String>,
+    /// The rows in the order they were drawn last frame, for ranges.
+    order: Vec<String>,
+}
+
+impl Selection {
+    fn id() -> egui::Id {
+        egui::Id::new("explorer-selection")
+    }
+
+    fn has(&self, path: &str) -> bool {
+        self.items.iter().any(|x| x == path)
+    }
+
+    /// A click on `path` with these modifiers; true when it only changed
+    /// the selection (the click must not open or fold anything).
+    fn click(&mut self, path: &str, m: egui::Modifiers, active: Option<&str>) -> bool {
+        if m.shift {
+            let anchor = self.anchor.clone().or_else(|| active.map(str::to_string)).unwrap_or_else(|| path.to_string());
+            let a = self.order.iter().position(|x| *x == anchor);
+            let b = self.order.iter().position(|x| x == path);
+            self.items = match (a, b) {
+                (Some(a), Some(b)) => self.order[a.min(b)..=a.max(b)].to_vec(),
+                _ => vec![path.to_string()],
+            };
+            self.anchor = Some(anchor);
+            return true;
+        }
+        if m.command {
+            if self.items.is_empty() {
+                // the open note is where a selection starts
+                if let Some(a) = active.filter(|a| *a != path && self.order.iter().any(|x| x == a)) {
+                    self.items.push(a.to_string());
+                }
+            }
+            match self.items.iter().position(|x| x == path) {
+                Some(i) => {
+                    self.items.remove(i);
+                }
+                None => self.items.push(path.to_string()),
+            }
+            self.anchor = Some(path.to_string());
+            return true;
+        }
+        self.items.clear();
+        self.anchor = Some(path.to_string());
+        false
+    }
+
+    /// The selection when `path` is part of it with others, else nothing.
+    fn group(&self, path: &str) -> Option<Vec<String>> {
+        (self.items.len() > 1 && self.has(path)).then(|| self.items.clone())
+    }
+}
+
+/// Several explorer items being dragged together.
+#[derive(Clone)]
+struct DraggedMany(Vec<String>);
 
 /// What the explorer shows first (Obsidian's `fileSortOrder` values).
 const SORTS: [(&str, &str); 6] = [("alphabetical", "Nome (A a Z)"), ("alphabeticalReverse", "Nome (Z a A)"), ("byModifiedTime", "Editados por último"), ("byModifiedTimeReverse", "Editados primeiro"), ("byCreatedTime", "Criados por último"), ("byCreatedTimeReverse", "Criados primeiro")];
@@ -279,18 +349,30 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
         _ => HashMap::new(),
     };
     let order = Order { sort: &sort, times: &times };
+    let mut sel: Selection = ui.data(|d| d.get_temp(Selection::id())).unwrap_or_default();
+    let mut drawn: Vec<String> = Vec::new();
     let resp = egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 1.0;
-        folder_ui(ui, &tree, "", 0, active.as_deref(), &mut open, &mut ask, &mut new_in, &marks, &mut cmd, &order, p);
-        // the space below: drop here to move to the root
-        let (rest, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.available_height().max(40.0)), Sense::hover());
-        if let Some(src) = r.dnd_release_payload::<String>() {
-            cmd = Some(((*src).clone(), FileCmd::MoveTo(String::new())));
+        let mut fx = FolderCx { active: active.as_deref(), open: &mut open, ask: &mut ask, new_in: &mut new_in, marks: &marks, cmd: &mut cmd, order: &order, sel: &mut sel, drawn: &mut drawn, p };
+        folder_ui(ui, &tree, "", 0, &mut fx);
+        // the space below: drop here to move to the root; a click clears the selection
+        let (rest, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ui.available_height().max(40.0)), Sense::click());
+        if let Some(c) = dropped(&r, "") {
+            cmd = Some(c);
         }
-        if r.dnd_hover_payload::<String>().is_some() {
+        if r.dnd_hover_payload::<String>().is_some() || r.dnd_hover_payload::<DraggedMany>().is_some() {
             ui.painter().rect_stroke(rest.shrink(2.0), 6.0, egui::Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
         }
+        if r.clicked() {
+            sel.items.clear();
+        }
     });
+    if !sel.items.is_empty() && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !ui.ctx().wants_keyboard_input() {
+        sel.items.clear();
+    }
+    sel.order = drawn;
+    sel.items.retain(|x| sel.order.contains(x));
+    ui.data_mut(|d| d.insert_temp(Selection::id(), sel));
     let _ = resp;
     if let Some((p, nt)) = open {
         app.open(&p, nt);
@@ -308,11 +390,20 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                     toggle_bookmark(cfg, &path);
                 }
             }
-            FileCmd::MoveTo(folder) => {
-                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
-                let to = if folder.is_empty() { name } else { format!("{folder}/{name}") };
-                if to != path {
-                    app.rename(&path, &to);
+            FileCmd::MoveTo(folder) => move_into(app, &path, &folder),
+            FileCmd::MoveManyTo(items, folder) => {
+                // an item inside another selected folder moves with it
+                let tops: Vec<&String> = items.iter().filter(|x| !items.iter().any(|y| y != *x && x.starts_with(&format!("{y}/")))).collect();
+                for it in tops {
+                    if *it != folder && !folder.starts_with(&format!("{it}/")) {
+                        move_into(app, it, &folder);
+                    }
+                }
+                ui.data_mut(|d| d.remove::<Selection>(Selection::id()));
+            }
+            FileCmd::OpenMany(items) => {
+                for it in items {
+                    app.open(&it, true);
                 }
             }
             FileCmd::NewQuadro => app.new_quadro(&path, false),
@@ -333,6 +424,15 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         }
+    }
+}
+
+/// Move a file or folder into `folder` ("" is the root), keeping its name.
+fn move_into(app: &mut App, path: &str, folder: &str) {
+    let name = path.rsplit('/').next().unwrap_or(path).to_string();
+    let to = if folder.is_empty() { name } else { format!("{folder}/{name}") };
+    if to != path {
+        app.rename(path, &to);
     }
 }
 
@@ -389,9 +489,81 @@ fn toggle_bookmark(cfg: &VaultConfig, path: &str) {
     cfg.merge("bookmarks.json", b);
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
-fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Option<&str>, open: &mut Option<(String, bool)>, ask: &mut Option<Ask>, new_in: &mut Option<String>, marks: &[String], cmd: &mut Option<(String, FileCmd)>, order: &Order, p: Palette) {
+/// What drawing the explorer's tree reads and changes.
+struct FolderCx<'a> {
+    active: Option<&'a str>,
+    open: &'a mut Option<(String, bool)>,
+    ask: &'a mut Option<Ask>,
+    new_in: &'a mut Option<String>,
+    marks: &'a [String],
+    cmd: &'a mut Option<(String, FileCmd)>,
+    order: &'a Order<'a>,
+    sel: &'a mut Selection,
+    /// The rows in drawing order (for Shift ranges next frame).
+    drawn: &'a mut Vec<String>,
+    p: Palette,
+}
+
+/// Drag and drop on a row: dragging a selected item takes the whole
+/// selection; a folder takes what is dropped on it.
+fn row_dnd(ui: &egui::Ui, r: &egui::Response, full: &str, folder: bool, fx: &mut FolderCx) {
+    if r.drag_started() {
+        match fx.sel.group(full) {
+            Some(items) => r.dnd_set_drag_payload(DraggedMany(items)),
+            None => r.dnd_set_drag_payload(full.to_string()),
+        }
+    }
+    if !folder {
+        return;
+    }
+    // a file or folder dropped here moves in (not a folder into itself)
+    if let Some(c) = dropped(r, full) {
+        *fx.cmd = Some(c);
+    }
+    if r.dnd_hover_payload::<String>().is_some() || r.dnd_hover_payload::<DraggedMany>().is_some() {
+        ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(1.5_f32, fx.p.accent_strong), egui::StrokeKind::Inside);
+    }
+}
+
+/// What was dropped on `folder`, as the move it asks for. The payload's type
+/// is checked first: taking it as the wrong type would throw it away.
+fn dropped(r: &egui::Response, folder: &str) -> Option<(String, FileCmd)> {
+    if egui::DragAndDrop::has_payload_of_type::<DraggedMany>(&r.ctx) {
+        let many = r.dnd_release_payload::<DraggedMany>()?;
+        return Some((String::new(), FileCmd::MoveManyTo(many.0.clone(), folder.to_string())));
+    }
+    let src = r.dnd_release_payload::<String>()?;
+    (*src != folder && !folder.starts_with(&format!("{src}/"))).then(|| ((*src).clone(), FileCmd::MoveTo(folder.to_string())))
+}
+
+/// The right-click menu of a row that is part of a selection of several.
+fn group_menu(ui: &mut egui::Ui, items: &[String], fx: &mut FolderCx) {
+    let p = fx.p;
+    ui.label(RichText::new(format!("{} itens selecionados", items.len())).size(12.0).color(p.faint));
+    let files: Vec<String> = items.iter().filter(|x| x.contains('.')).cloned().collect();
+    if !files.is_empty() && kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir em abas", p) {
+        *fx.cmd = Some((String::new(), FileCmd::OpenMany(files.clone())));
+        ui.close_menu();
+    }
+    if kit::menu_item(ui, icons::LINK, "Copiar links", p) {
+        let links: Vec<String> = items.iter().map(|x| format!("[[{}]]", vault::basename(x).trim_end_matches(".md"))).collect();
+        ui.ctx().copy_text(links.join("\n"));
+        ui.close_menu();
+    }
+    if kit::menu_item(ui, icons::FOLDER_OPEN, "Mover para…", p) {
+        *fx.ask = Some(Ask { title: format!("Mover {} itens para a pasta", items.len()), value: String::new(), kind: AskKind::MoveMany(items.to_vec()) });
+        ui.close_menu();
+    }
+    kit::menu_sep(ui, p);
+    if kit::menu_danger(ui, icons::TRASH_2, &format!("Excluir {} itens", items.len()), p) {
+        *fx.ask = Some(Ask { title: format!("Excluir {} itens?", items.len()), value: String::new(), kind: AskKind::ConfirmDeleteMany(items.to_vec()) });
+        ui.close_menu();
+    }
+}
+
+fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, fx: &mut FolderCx) {
+    let p = fx.p;
+    let order = fx.order;
     let mut folders: Vec<(&String, &Folder)> = f.folders.iter().collect();
     if order.sort == "alphabeticalReverse" {
         folders.reverse();
@@ -400,22 +572,29 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
         let full = if path.is_empty() { name.clone() } else { format!("{path}/{name}") };
         let id = ui.make_persistent_id(("folder", &full));
         let is_open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
-        let r = kit::Row::new(name).depth(depth).chevron(is_open).draggable().show(ui, p);
-        if r.drag_started() {
-            r.dnd_set_drag_payload(full.clone());
-        }
-        // a file or folder dropped here moves in (not a folder into itself)
-        if let Some(src) = r.dnd_release_payload::<String>() {
-            if *src != full && !full.starts_with(&format!("{src}/")) {
-                *cmd = Some(((*src).clone(), FileCmd::MoveTo(full.clone())));
-            }
-        }
-        if r.dnd_hover_payload::<String>().is_some() {
-            ui.painter().rect_stroke(r.rect, 6.0, egui::Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
-        }
-        if r.clicked() {
+        fx.drawn.push(full.clone());
+        let r = kit::Row::new(name).depth(depth).chevron(is_open).selected(fx.sel.has(&full)).draggable().show(ui, p);
+        row_dnd(ui, &r, &full, true, fx);
+        if r.clicked() && !fx.sel.click(&full, ui.input(|i| i.modifiers), fx.active) {
             ui.data_mut(|d| d.insert_temp(id, !is_open));
         }
+        if let Some(items) = fx.sel.group(&full) {
+            r.context_menu(|ui| group_menu(ui, &items, fx));
+        } else {
+            folder_menu(&r, name, &full, fx);
+        }
+        if is_open {
+            folder_ui(ui, sub, &full, depth + 1, fx);
+        }
+    }
+    folder_files(ui, f, depth, fx);
+}
+
+fn folder_menu(r: &egui::Response, name: &str, full: &str, fx: &mut FolderCx) {
+    let p = fx.p;
+    let full = full.to_string();
+    let (new_in, ask, cmd) = (&mut *fx.new_in, &mut *fx.ask, &mut *fx.cmd);
+    {
         r.context_menu(|ui| {
             if kit::menu_item(ui, icons::FILE_PLUS, "Nova nota", p) {
                 *new_in = Some(full.clone());
@@ -438,7 +617,7 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
             }
             kit::menu_sep(ui, p);
             if kit::menu_item(ui, icons::PENCIL, "Renomear", p) {
-                *ask = Some(Ask { title: "Renomear pasta".into(), value: name.clone(), kind: AskKind::Rename(full.clone()) });
+                *ask = Some(Ask { title: "Renomear pasta".into(), value: name.to_string(), kind: AskKind::Rename(full.clone()) });
                 ui.close_menu();
             }
             if kit::menu_danger(ui, icons::TRASH_2, "Excluir", p) {
@@ -446,10 +625,12 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
                 ui.close_menu();
             }
         });
-        if is_open {
-            folder_ui(ui, sub, &full, depth + 1, active, open, ask, new_in, marks, cmd, order, p);
-        }
     }
+}
+
+fn folder_files(ui: &mut egui::Ui, f: &Folder, depth: usize, fx: &mut FolderCx) {
+    let p = fx.p;
+    let order = fx.order;
     let mut files: Vec<(&String, &String)> = f.files.iter().collect();
     match order.sort {
         "alphabeticalReverse" => files.reverse(),
@@ -462,18 +643,24 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
     for (name, full) in files {
         let is_md = name.to_lowercase().ends_with(".md");
         let label = if is_md { &name[..name.len() - 3] } else { name.as_str() };
-        let is_active = active == Some(full.as_str());
+        let is_active = fx.active == Some(full.as_str());
+        fx.drawn.push(full.clone());
+        // a selection of several shows instead of the open note
+        let selected = if fx.sel.items.len() > 1 { fx.sel.has(full) } else { is_active || fx.sel.has(full) };
         // files line up with the folder names above them (past the chevron)
-        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard") && !name.ends_with(".excalidraw")).draggable().show(ui, p);
-        if r.drag_started() {
-            r.dnd_set_drag_payload(full.clone());
-        }
-        if r.clicked() {
-            *open = Some((full.clone(), ui.input(|i| i.modifiers.command)));
+        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(selected).dim(!is_md && !name.ends_with(".storyboard") && !name.ends_with(".excalidraw")).draggable().show(ui, p);
+        row_dnd(ui, &r, full, false, fx);
+        if r.clicked() && !fx.sel.click(full, ui.input(|i| i.modifiers), fx.active) {
+            *fx.open = Some((full.clone(), false));
         }
         if r.middle_clicked() {
-            *open = Some((full.clone(), true));
+            *fx.open = Some((full.clone(), true));
         }
+        if let Some(items) = fx.sel.group(full) {
+            r.context_menu(|ui| group_menu(ui, &items, fx));
+            continue;
+        }
+        let (open, ask, cmd, marks) = (&mut *fx.open, &mut *fx.ask, &mut *fx.cmd, fx.marks);
         r.context_menu(|ui| {
             if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir em nova aba", p) {
                 *open = Some((full.clone(), true));
@@ -1038,8 +1225,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             ui.set_min_width(200.0);
                             for a in crate::align::ALL {
                                 if kit::menu_entry(ui, a.icon(), a.label(), if a == cur { "✓" } else { "" }, true, false, p) && a != cur {
-                                    t.text = a.set_on(&t.text);
-                                    t.last_edit = Some(std::time::Instant::now());
+                                    crate::align::apply(ui.ctx(), t, a);
                                 }
                             }
                         });
@@ -1243,7 +1429,7 @@ pub fn ask_dialog(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
     let Some(ask) = &mut app.ask else { return };
     let mut done: Option<bool> = None;
-    let confirm = matches!(ask.kind, AskKind::ConfirmDelete(_));
+    let confirm = matches!(ask.kind, AskKind::ConfirmDelete(_) | AskKind::ConfirmDeleteMany(_));
     kit::scrim(ctx, p);
     egui::Window::new(ask.title.clone()).title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 140.0]).show(ctx, |ui| {
         ui.set_width(400.0);
@@ -1282,6 +1468,25 @@ pub fn ask_dialog(app: &mut App, ctx: &egui::Context) {
                 }
             }
             AskKind::ConfirmDelete(path) => app.delete(&path),
+            AskKind::ConfirmDeleteMany(items) => {
+                // a folder's contents go with it
+                for it in items.iter().filter(|x| !items.iter().any(|y| y != *x && x.starts_with(&format!("{y}/")))) {
+                    app.delete(it);
+                }
+                ctx.data_mut(|d| d.remove::<Selection>(Selection::id()));
+            }
+            AskKind::MoveMany(items) => {
+                let folder = value.trim_matches('/').to_string();
+                if let Some(v) = &app.vault {
+                    let _ = std::fs::create_dir_all(v.abs(&folder));
+                }
+                for it in items.iter().filter(|x| !items.iter().any(|y| y != *x && x.starts_with(&format!("{y}/")))) {
+                    if *it != folder && !folder.starts_with(&format!("{it}/")) {
+                        move_into(app, it, &folder);
+                    }
+                }
+                ctx.data_mut(|d| d.remove::<Selection>(Selection::id()));
+            }
             _ => {}
         }
     }
@@ -1544,6 +1749,14 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                 None => ui.label(RichText::new("Nenhuma biblioteca compartilhada em uso.").size(11.5).color(p.faint)),
                             };
                             ui.add_space(6.0);
+                            let mut show_vault = st["show_vault"].as_bool().unwrap_or(false);
+                            kit::setting(ui, "Imagens do cofre no modo imagens", "Desligado, o modo imagens mostra só a biblioteca (os downloads do Pinterest) e as pastas de fora do cofre. O painel de imagens da escrita continua com todas.", p, |ui| {
+                                if kit::toggle(ui, &mut show_vault, p).changed() {
+                                    crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "show_vault": show_vault }));
+                                    app.images.show_vault = show_vault;
+                                }
+                            });
+                            ui.add_space(6.0);
                             rescan |= crate::settings_pages::copy_library_ui(app, ui, &root, p);
                             ui.add_space(10.0);
                             ui.label(RichText::new("Pastas de fora do cofre").font(kit::medium(13.0)).color(p.text));
@@ -1763,5 +1976,45 @@ pub fn update_window(app: &mut App, ctx: &egui::Context) {
     if save_and_restart {
         app.save_all();
         app.updater.restart();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sel() -> Selection {
+        Selection { order: ["A", "B", "C", "D", "E"].iter().map(|s| s.to_string()).collect(), ..Default::default() }
+    }
+    const SHIFT: egui::Modifiers = egui::Modifiers { shift: true, ..egui::Modifiers::NONE };
+    const CMD: egui::Modifiers = egui::Modifiers::COMMAND;
+
+    #[test]
+    fn shift_selects_a_range_from_the_last_click() {
+        let mut s = sel();
+        assert!(!s.click("B", egui::Modifiers::NONE, None), "a plain click opens");
+        assert!(s.click("D", SHIFT, None));
+        assert_eq!(s.items, ["B", "C", "D"]);
+        // the anchor stays: Shift again moves the other end
+        s.click("A", SHIFT, None);
+        assert_eq!(s.items, ["A", "B"]);
+        // with nothing clicked yet, the range starts at the open note
+        let mut s = sel();
+        s.click("E", SHIFT, Some("C"));
+        assert_eq!(s.items, ["C", "D", "E"]);
+    }
+
+    #[test]
+    fn command_adds_and_removes_one() {
+        let mut s = sel();
+        s.click("D", CMD, Some("A"));
+        assert_eq!(s.items, ["A", "D"], "the open note starts the selection");
+        s.click("A", CMD, Some("A"));
+        assert_eq!(s.items, ["D"]);
+        assert!(s.group("D").is_none(), "one item is not a group");
+        s.click("E", CMD, None);
+        assert_eq!(s.group("E").unwrap(), ["D", "E"]);
+        s.click("B", egui::Modifiers::NONE, None);
+        assert!(s.items.is_empty());
     }
 }

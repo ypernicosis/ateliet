@@ -1,5 +1,6 @@
 //! The export menu: this frame, every frame as PNG files in a folder next
-//! to the storyboard, a contact sheet, and the timeline as an animated PNG.
+//! to the storyboard, a contact sheet, and the timeline as an animated PNG
+//! or a WebM video (encoded by ffmpeg, when installed).
 
 use super::*;
 use ateliet_core::board::export as bx;
@@ -10,11 +11,13 @@ pub(super) struct ExportOpts {
     transparent: bool,
     columns: usize,
     notes: bool,
+    /// A video being encoded: where it goes, and the encoder's answer.
+    video: Option<(std::path::PathBuf, std::sync::mpsc::Receiver<Result<(), String>>)>,
 }
 
 impl Default for ExportOpts {
     fn default() -> Self {
-        ExportOpts { scale: 1.0, with_trace: false, transparent: false, columns: 4, notes: true }
+        ExportOpts { scale: 1.0, with_trace: false, transparent: false, columns: 4, notes: true, video: None }
     }
 }
 
@@ -77,6 +80,53 @@ impl BoardEditor {
         let out = self.abs.with_file_name(format!("{stem} - animação.png"));
         let r = std::fs::write(&out, bytes);
         self.written("PNG animado (toca nas notas)", &out, r);
+    }
+
+    /// The timeline as a WebM video next to the storyboard: the frames are
+    /// drawn here, ffmpeg encodes them in the background.
+    fn export_webm(&mut self, ctx: &egui::Context) {
+        if self.xo.video.is_some() {
+            return;
+        }
+        let Some(ff) = bx::ffmpeg_path() else {
+            self.error = Some("Para exportar vídeo, instale o ffmpeg (no Mac: brew install ffmpeg).".into());
+            return;
+        };
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("ateliet-video-{}-{stamp}", std::process::id()));
+        let max = (1280.0 * self.xo.scale).round() as u32;
+        let frames = match bx::video_frames(&mut self.doc, &mut self.pics, max, &dir) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&dir);
+                self.error = Some(format!("Não foi possível preparar os quadros: {e}"));
+                return;
+            }
+        };
+        let out = self.abs.with_file_name(format!("{} - animação.webm", self.stem()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (to, c) = (out.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let r = bx::encode_webm(&ff, &frames, &to);
+            let _ = std::fs::remove_dir_all(&frames.dir);
+            let _ = tx.send(r);
+            c.request_repaint();
+        });
+        self.xo.video = Some((out, rx));
+        self.error = Some("Codificando o vídeo…".into());
+    }
+
+    /// The video's encoder finished: say so.
+    fn poll_video(&mut self) {
+        let Some((out, rx)) = &self.xo.video else { return };
+        let r = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(_) => Err("o codificador parou".into()),
+        };
+        let out = out.clone();
+        self.xo.video = None;
+        self.written("Vídeo WebM", &out, r.map_err(std::io::Error::other));
     }
 
     /// A Clip Studio file into this frame (on top, centred) or a new frame after it.
@@ -155,6 +205,7 @@ impl BoardEditor {
         if r.clicked() {
             ui.memory_mut(|m| m.toggle_popup(id));
         }
+        self.poll_video();
         let pages = self.is_pages();
         let timeline = self.has_timeline();
         let mut act: Option<u8> = None;
@@ -171,6 +222,12 @@ impl BoardEditor {
             }
             if timeline && kit::menu_item(ui, icons::PLAY, "PNG animado da linha do tempo", p) {
                 act = Some(3);
+            }
+            if timeline {
+                let busy = self.xo.video.is_some();
+                if kit::menu_entry(ui, icons::FILM, if busy { "Vídeo WebM (codificando…)" } else { "Vídeo WebM da linha do tempo" }, "", !busy, false, p) {
+                    act = Some(5);
+                }
             }
             if !pages && kit::menu_item(ui, icons::IMAGES, "Pasta de storyboards do Pictogrep", p) {
                 act = Some(4);
@@ -208,6 +265,7 @@ impl BoardEditor {
                 1 => self.export_all_frames(),
                 2 => self.export_contact_sheet(),
                 3 => self.export_animated_png(),
+                5 => self.export_webm(ui.ctx()),
                 _ => self.export_to_pictogrep(),
             }
         }

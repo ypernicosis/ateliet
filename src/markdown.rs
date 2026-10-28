@@ -260,6 +260,8 @@ impl<'a> Builder<'a> {
     fn blocks(&mut self, until: Option<TagEnd>) -> Vec<Block> {
         let mut out = Vec::new();
         let mut loose: Vec<Inline> = Vec::new();
+        // the style of loose text (tight list items): kept from one event to the next
+        let mut style = Style::default();
         // the last line of the block before (top level only): the blank lines
         // written between two blocks show as that much space
         let mut last_line: Option<usize> = None;
@@ -276,15 +278,18 @@ impl<'a> Builder<'a> {
             }
             match ev {
                 Event::End(t) if Some(t) == until => break,
+                Event::End(TagEnd::Emphasis) => style.italic = false,
+                Event::End(TagEnd::Strong) => style.bold = false,
+                Event::End(TagEnd::Strikethrough) => style.strike = false,
                 Event::Start(tag) => {
                     if !loose.is_empty() && !is_inline(&tag) {
                         out.push(Block::Para(tidy(std::mem::take(&mut loose))));
                     }
                     if is_inline(&tag) {
-                        let mut style = Style::default();
                         self.inline_start(tag, &mut loose, &mut style);
                         continue;
                     }
+                    style = Style::default();
                     if let Some(b) = self.block(tag, r.start) {
                         out.push(b);
                     }
@@ -303,10 +308,7 @@ impl<'a> Builder<'a> {
                     out.push(Block::Math(m.to_string()));
                 }
                 Event::TaskListMarker(_) => {}
-                other => {
-                    let mut style = Style::default();
-                    self.inline_event(other, &mut loose, &mut style);
-                }
+                other => self.inline_event(other, &mut loose, &mut style),
             }
         }
         flush(&mut out, &mut loose);
@@ -620,6 +622,10 @@ pub trait Host {
     fn quadro(&mut self, _ui: &mut egui::Ui, _target: &str) -> Option<(String, egui::Response)> {
         None
     }
+    /// The file a link points to, on disk (for embedded audio, video, PDF).
+    fn abs_path(&self, _target: &str) -> Option<std::path::PathBuf> {
+        None
+    }
     /// A composed page (`scriptorium-pagina`) drawn as a picture, when ready.
     fn composed(&mut self, _ctx: &egui::Context, _model: &str) -> Option<(egui::TextureId, egui::Vec2)> {
         None
@@ -709,100 +715,190 @@ impl Default for Runs {
     }
 }
 
-/// A Mermaid flowchart drawn: boxes in their shapes, edges with arrows and
-/// labels, scaled down to the width when it is wider.
-fn mermaid_ui(ui: &mut egui::Ui, chart: &ateliet_core::mermaid::Chart, size: f32, p: crate::theme::Palette) {
-    use ateliet_core::mermaid::{Line, Shape};
+/// The colour of a series (pie slices, Gantt sections): hues around the
+/// accent, light in a light theme and deep in a dark one.
+fn series(i: usize, p: &crate::theme::Palette) -> Color32 {
+    const HUES: [[u8; 3]; 8] = [[0x8a, 0x5c, 0xf5], [0x00, 0xa3, 0xa3], [0xec, 0x75, 0x00], [0xe0, 0x4f, 0x8a], [0x08, 0x6d, 0xdd], [0x08, 0xb9, 0x4e], [0xd4, 0xa0, 0x00], [0x6f, 0x6f, 0x80]];
+    let c = if i == 0 { p.accent } else { let h = HUES[i % HUES.len()]; Color32::from_rgb(h[0], h[1], h[2]) };
+    if p.dark {
+        crate::theme::mix(c, Color32::BLACK, 0.35)
+    } else {
+        crate::theme::mix(c, Color32::WHITE, 0.55)
+    }
+}
+
+/// A Mermaid diagram drawn from the core's shapes, coloured by the theme
+/// and scaled down to the width when it is wider.
+fn mermaid_ui(ui: &mut egui::Ui, diagram: &ateliet_core::mermaid::Diagram, size: f32, p: crate::theme::Palette) {
+    use ateliet_core::mermaid::{Anchor, Head, Ink, Prim};
     let fs = size * 0.82;
     let font = FontId::proportional(fs);
     let measure = |t: &str| {
         let g = ui.fonts(|f| f.layout_no_wrap(t.to_string(), font.clone(), p.text));
         (g.size().x, g.size().y)
     };
-    let lay = ateliet_core::mermaid::layout(chart, &measure);
     let pad = 16.0;
     let avail = ui.available_width() - 2.0 * pad;
-    let k = if lay.width > avail { (avail / lay.width).max(0.3) } else { 1.0 };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), lay.height * k + 2.0 * pad), Sense::hover());
+    let d = ateliet_core::mermaid::draw(diagram, &measure, avail);
+    let k = if d.width > avail { (avail / d.width).max(0.3) } else { 1.0 };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), d.height * k + 2.0 * pad), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 8.0, p.bg_secondary);
-    let ox = rect.left() + pad + (avail - lay.width * k).max(0.0) / 2.0;
+    let ox = rect.left() + pad + (avail - d.width * k).max(0.0) / 2.0;
     let oy = rect.top() + pad;
-    let to = |x: f32, y: f32| egui::pos2(ox + x * k, oy + y * k);
-    let boxes: Vec<egui::Rect> = lay.boxes.iter().map(|b| egui::Rect::from_min_max(to(b.0, b.1), to(b.0 + b.2, b.1 + b.3))).collect();
-    let ink = p.muted;
-    // where the line between two centres leaves a box
-    let exit = |r: egui::Rect, toward: egui::Pos2| -> egui::Pos2 {
-        let c = r.center();
-        let d = toward - c;
-        if d.length() < 1e-3 {
-            return c;
+    let to = |(x, y): (f32, f32)| egui::pos2(ox + x * k, oy + y * k);
+    let ink = |i: Ink| -> Color32 {
+        match i {
+            Ink::Line | Ink::Muted => p.muted,
+            Ink::Fill => p.bg,
+            Ink::Stroke => p.border_strong,
+            Ink::Back => p.bg_secondary,
+            Ink::Text | Ink::Solid => p.text,
+            Ink::Note => p.highlight,
+            Ink::Faint => p.border,
+            Ink::Series(n) => series(n, &p),
+            Ink::Done => crate::theme::mix(p.faint, p.bg, 0.45),
+            Ink::Active => p.accent_soft,
+            Ink::Crit => crate::theme::mix(Color32::from_rgb(0xe9, 0x31, 0x47), if p.dark { Color32::BLACK } else { Color32::WHITE }, 0.45),
         }
-        let tx = if d.x.abs() > 1e-3 { (r.width() / 2.0) / d.x.abs() } else { f32::INFINITY };
-        let ty = if d.y.abs() > 1e-3 { (r.height() / 2.0) / d.y.abs() } else { f32::INFINITY };
-        c + d * tx.min(ty)
     };
-    for e in &chart.edges {
-        let (a, b) = (boxes[e.from], boxes[e.to]);
-        let (pa, pb) = (exit(a, b.center()), exit(b, a.center()));
-        let w: f32 = match e.line { Line::Thick => 2.6, _ => 1.3 };
-        let st = Stroke::new(w, ink);
-        if e.line == Line::Dotted {
-            painter.extend(egui::Shape::dashed_line(&[pa, pb], st, 4.0, 3.0));
-        } else {
-            painter.line_segment([pa, pb], st);
-        }
-        if e.arrow {
-            let dir = (pb - pa).normalized();
-            let side = egui::vec2(-dir.y, dir.x);
-            let l = 9.0 * k.max(0.6);
-            painter.add(egui::Shape::convex_polygon(vec![pb, pb - dir * l + side * l * 0.45, pb - dir * l - side * l * 0.45], ink, Stroke::NONE));
-        }
-        if !e.label.is_empty() {
-            let mid = pa + (pb - pa) * 0.5;
-            let g = painter.layout_no_wrap(e.label.clone(), FontId::proportional(fs * 0.9 * k.max(0.7)), p.muted);
-            let r = egui::Rect::from_center_size(mid, g.size() + egui::vec2(8.0, 4.0));
-            painter.rect_filled(r, 4.0, p.bg_secondary);
-            painter.galley(r.center() - g.size() / 2.0, g, p.muted);
+    let stroke = |i: Option<Ink>, w: f32| i.map(|i| Stroke::new(w * k.max(0.6), ink(i))).unwrap_or(Stroke::NONE);
+    let dashed = |pts: &[egui::Pos2], st: Stroke| painter.extend(egui::Shape::dashed_line(pts, st, 5.0 * k.max(0.6), 3.5 * k.max(0.6)));
+    for prim in &d.prims {
+        match prim {
+            Prim::Rect { x, y, w, h, round, fill, stroke: st, dashed: dash } => {
+                let r = egui::Rect::from_min_max(to((*x, *y)), to((x + w, y + h)));
+                painter.rect_filled(r, round * k, fill.map(ink).unwrap_or(Color32::TRANSPARENT));
+                if let Some(s) = st {
+                    if *dash {
+                        dashed(&[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()], stroke(Some(*s), 1.0));
+                    } else {
+                        painter.rect_stroke(r, round * k, stroke(Some(*s), 1.3), egui::StrokeKind::Inside);
+                    }
+                }
+            }
+            Prim::Poly { pts, fill, stroke: st } => {
+                painter.add(egui::Shape::convex_polygon(pts.iter().map(|q| to(*q)).collect(), fill.map(ink).unwrap_or(Color32::TRANSPARENT), stroke(*st, 1.3)));
+            }
+            Prim::Circle { x, y, r, fill, stroke: st } => {
+                painter.circle(to((*x, *y)), r * k, fill.map(ink).unwrap_or(Color32::TRANSPARENT), stroke(*st, 1.3));
+            }
+            Prim::Line { pts, ink: i, width, dashed: dash } => {
+                let pts: Vec<egui::Pos2> = pts.iter().map(|q| to(*q)).collect();
+                let st = Stroke::new(width * k.max(0.6), ink(*i));
+                if *dash {
+                    dashed(&pts, st);
+                } else {
+                    painter.add(egui::Shape::line(pts, st));
+                }
+            }
+            Prim::Head { at, dir, kind, ink: i } => {
+                let tip = to(*at);
+                let dv = egui::vec2(dir.0, dir.1).normalized();
+                let side = egui::vec2(-dv.y, dv.x);
+                let l = 10.0 * k.max(0.6);
+                let c = ink(*i);
+                match kind {
+                    Head::Arrow => {
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.42, tip - dv * l - side * l * 0.42], c, Stroke::NONE));
+                    }
+                    Head::Triangle => {
+                        let l = l * 1.3;
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.5, tip - dv * l - side * l * 0.5], p.bg, Stroke::new(1.3_f32, c)));
+                    }
+                    Head::Diamond | Head::HollowDiamond => {
+                        let l = l * 0.85;
+                        let fill = if *kind == Head::Diamond { c } else { p.bg };
+                        painter.add(egui::Shape::convex_polygon(vec![tip, tip - dv * l + side * l * 0.5, tip - dv * l * 2.0, tip - dv * l - side * l * 0.5], fill, Stroke::new(1.3_f32, c)));
+                    }
+                    Head::Cross => {
+                        let s = l * 0.45;
+                        let m = tip - dv * s;
+                        painter.line_segment([m + (dv + side) * s, m - (dv + side) * s], Stroke::new(1.5_f32, c));
+                        painter.line_segment([m + (dv - side) * s, m - (dv - side) * s], Stroke::new(1.5_f32, c));
+                    }
+                    Head::Open => {
+                        painter.add(egui::Shape::line(vec![tip - dv * l + side * l * 0.45, tip, tip - dv * l - side * l * 0.45], Stroke::new(1.3_f32, c)));
+                    }
+                    Head::None => {}
+                }
+            }
+            Prim::Text { x, y, text, anchor, ink: i, bold, small } => {
+                let f = if *bold { FontFamily::Name("bold".into()) } else { FontFamily::Proportional };
+                let font = FontId::new(fs * if *small { 0.9 } else { 1.0 } * k.max(0.55), f);
+                let align = match anchor {
+                    Anchor::Left => egui::Align2::LEFT_CENTER,
+                    Anchor::Center => egui::Align2::CENTER_CENTER,
+                    Anchor::Right => egui::Align2::RIGHT_CENTER,
+                };
+                let g = painter.layout_no_wrap(text.clone(), font, ink(*i));
+                let at = to((*x, *y));
+                painter.galley(align.align_size_within_rect(g.size(), egui::Rect::from_center_size(at, egui::Vec2::ZERO)).min, g, ink(*i));
+            }
+            Prim::Slice { x, y, r, a0, a1, ink: i } => {
+                // in pieces of at most a quarter turn, each convex
+                let c = to((*x, *y));
+                let r = r * k;
+                let pieces = ((a1 - a0) / std::f32::consts::FRAC_PI_2).ceil().max(1.0) as usize;
+                for n in 0..pieces {
+                    let (s0, s1) = (a0 + (a1 - a0) * n as f32 / pieces as f32, a0 + (a1 - a0) * (n + 1) as f32 / pieces as f32);
+                    let steps = (((s1 - s0) * r / 4.0).ceil() as usize).clamp(2, 64);
+                    let mut pts = vec![c];
+                    for t in 0..=steps {
+                        let a = s0 + (s1 - s0) * t as f32 / steps as f32;
+                        pts.push(c + egui::vec2(a.sin(), -a.cos()) * r);
+                    }
+                    painter.add(egui::Shape::convex_polygon(pts, ink(*i), Stroke::NONE));
+                }
+                for a in [a0, a1] {
+                    painter.line_segment([c, c + egui::vec2(a.sin(), -a.cos()) * r], Stroke::new(1.5_f32, p.bg_secondary));
+                }
+            }
         }
     }
-    for (i, nd) in chart.nodes.iter().enumerate() {
-        let r = boxes[i];
-        let fill = p.bg;
-        let st = Stroke::new(1.3_f32, p.border_strong);
-        match nd.shape {
-            Shape::Diamond => {
-                let c = r.center();
-                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(c.x, r.top()), egui::pos2(r.right(), c.y), egui::pos2(c.x, r.bottom()), egui::pos2(r.left(), c.y)], fill, st));
+}
+
+/// A TeX formula laid out by the core (fractions, roots, matrices…) and
+/// painted in EB Garamond; `display` for a formula on its own line,
+/// centred, with big operators and limits above and below.
+pub fn math_ui(ui: &mut egui::Ui, src: &str, size: f32, display: bool, color: Color32) {
+    use ateliet_core::texlayout::{Face, Item};
+    let family = |f: Face| FontFamily::Name(match f {
+        Face::Roman => "garamond",
+        Face::Italic => "garamond-italic",
+        Face::Bold => "garamond-bold",
+    }.into());
+    let measure = |t: &str, s: f32, f: Face| ui.fonts(|fo| fo.layout_no_wrap(t.to_string(), FontId::new(s, family(f)), color).size().x);
+    let b = ateliet_core::texlayout::layout(src, size, display, &measure);
+    let avail = ui.available_width();
+    // too wide: scaled down to fit (never below half)
+    let k = if b.w > avail { (avail / b.w).max(0.5) } else { 1.0 };
+    let pad = size * 0.15;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail, (b.asc + b.desc) * k + 2.0 * pad), Sense::hover());
+    let x0 = match (display, crate::align::current()) {
+        (true, _) | (false, crate::align::TextAlign::Center) => rect.center().x - b.w * k / 2.0,
+        (false, crate::align::TextAlign::Right) => rect.right() - b.w * k,
+        _ => rect.left(),
+    };
+    let origin = egui::pos2(x0, rect.top() + pad + b.asc * k);
+    let to = |x: f32, y: f32| origin + egui::vec2(x, y) * k;
+    let painter = ui.painter_at(rect.expand(4.0));
+    for it in &b.items {
+        match it {
+            Item::Glyphs { x, y, text, size, face } => {
+                let g = painter.layout_no_wrap(text.clone(), FontId::new(size * k, family(*face)), color);
+                // the galley's first glyph sits on the baseline
+                let base = g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(size * k * 0.8);
+                painter.galley(to(*x, *y) - egui::vec2(0.0, base), g, color);
             }
-            Shape::Circle => {
-                painter.circle(r.center(), r.width().min(r.height()) / 2.0, fill, st);
+            Item::Rule { x, y, w, h } => {
+                painter.rect_filled(egui::Rect::from_min_size(to(*x, *y), egui::vec2(w * k, (h * k).max(1.0))), 0.0, color);
             }
-            Shape::Hexagon => {
-                let d = r.height() * 0.3;
-                painter.add(egui::Shape::convex_polygon(vec![egui::pos2(r.left() + d, r.top()), egui::pos2(r.right() - d, r.top()), egui::pos2(r.right(), r.center().y), egui::pos2(r.right() - d, r.bottom()), egui::pos2(r.left() + d, r.bottom()), egui::pos2(r.left(), r.center().y)], fill, st));
-            }
-            Shape::Flag => {
-                let d = r.height() * 0.3;
-                painter.add(egui::Shape::convex_polygon(vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), egui::pos2(r.left() + d, r.center().y)], fill, st));
-            }
-            Shape::Round => {
-                painter.rect(r, 8.0 * k, fill, st, egui::StrokeKind::Inside);
-            }
-            Shape::Stadium | Shape::Cylinder => {
-                painter.rect(r, r.height() / 2.0, fill, st, egui::StrokeKind::Inside);
-            }
-            Shape::Subroutine => {
-                painter.rect(r, 2.0, fill, st, egui::StrokeKind::Inside);
-                painter.vline(r.left() + 6.0 * k, r.y_range(), st);
-                painter.vline(r.right() - 6.0 * k, r.y_range(), st);
-            }
-            Shape::Rect => {
-                painter.rect(r, 3.0, fill, st, egui::StrokeKind::Inside);
+            Item::Path { pts, width } => {
+                let pts: Vec<egui::Pos2> = pts.iter().map(|(x, y)| to(*x, *y)).collect();
+                painter.add(egui::Shape::line(pts, Stroke::new((width * k).max(1.0), color)));
             }
         }
-        let g = painter.layout(nd.label.clone(), FontId::proportional(fs * k), p.text, f32::INFINITY);
-        painter.galley(r.center() - g.size() / 2.0, g, p.text);
     }
 }
 
@@ -826,6 +922,8 @@ pub struct Renderer<'h> {
     pub scroll_to: Option<usize>,
     /// Drawing inside a table cell.
     pub in_cell: bool,
+    /// The theme's typography.
+    pub typo: crate::typo::Typo,
 }
 
 pub fn callout_color(kind: &str, p: &crate::theme::Palette) -> Color32 {
@@ -862,22 +960,26 @@ fn callout_icon(kind: &str) -> &'static str {
 
 impl<'h> Renderer<'h> {
     pub fn new(host: &'h mut dyn Host) -> Self {
-        Renderer { host, actions: Vec::new(), depth: 0, scroll_to: None, in_cell: false }
+        Renderer { host, actions: Vec::new(), depth: 0, scroll_to: None, in_cell: false, typo: crate::typo::get() }
     }
 
     fn fmt(&self, size: f32, style: Style) -> TextFormat {
         let p = self.host.palette();
-        let family = if style.bold { FontFamily::Name("bold".into()) } else if style.italic { FontFamily::Name("italic".into()) } else { FontFamily::Proportional };
-        let lh = if size > self.host.size() * 1.1 { 1.28 } else { 1.62 };
+        let family = if style.bold { FontFamily::Name("theme-text-bold".into()) } else if style.italic { FontFamily::Name("theme-text-italic".into()) } else { FontFamily::Name("theme-text".into()) };
+        let lh = if size > self.host.size() * 1.1 { 1.28 } else { self.typo.line };
         let mut f = TextFormat { font_id: FontId::new(size, family), color: p.text, line_height: Some((size * lh).round()), valign: egui::Align::Center, ..Default::default() };
         if style.italic && style.bold {
             f.italics = true;
+        }
+        // the theme's colours of emphasis
+        if let Some(c) = if style.bold { self.typo.bold } else if style.italic { self.typo.italic } else { None } {
+            f.color = c;
         }
         if style.strike {
             f.strikethrough = Stroke::new(1.0_f32, p.text);
         }
         if style.mark {
-            f.background = p.highlight;
+            f.background = self.typo.highlight.unwrap_or(p.highlight);
         }
         f
     }
@@ -902,7 +1004,7 @@ impl<'h> Renderer<'h> {
                         crate::dv::value_runs(self, runs, &res, size, true);
                         continue;
                     }
-                    let mut f = TextFormat { font_id: FontId::new(size * 0.88, FontFamily::Monospace), color: p.text, background: p.code_bg, ..Default::default() };
+                    let mut f = TextFormat { font_id: FontId::new(size * self.typo.code, FontFamily::Name("theme-mono".into())), color: p.text, background: p.code_bg, valign: egui::Align::Center, ..Default::default() };
                     if let Some(c) = color {
                         f.color = c;
                     }
@@ -924,7 +1026,7 @@ impl<'h> Renderer<'h> {
                 }
                 Inline::Break => runs.push("\n", self.fmt(size, base)),
                 Inline::Field { key, value, paren } => {
-                    let mono = |c: Color32, bg: Color32| TextFormat { font_id: FontId::new(size * 0.85, FontFamily::Monospace), color: c, background: bg, ..Default::default() };
+                    let mono = |c: Color32, bg: Color32| TextFormat { font_id: FontId::new(size * 0.85, FontFamily::Monospace), color: c, background: bg, valign: egui::Align::Center, ..Default::default() };
                     if !paren {
                         runs.push(&format!(" {key} "), mono(p.muted, p.bg_hover));
                     }
@@ -940,7 +1042,8 @@ impl<'h> Renderer<'h> {
                     self.runs(&mut sub, children, size, base, None);
                     for mut section in sub.job.sections {
                         let text = &sub.job.text[section.byte_range.clone()];
-                        section.format.color = if ok { p.link() } else { p.link().gamma_multiply(0.6) };
+                        let link = self.typo.link.unwrap_or(p.link());
+                        section.format.color = if ok { link } else { link.gamma_multiply(0.6) };
                         if matches!(target, Target::Tag(_)) {
                             section.format.background = p.accent_soft;
                             section.format.color = p.accent_strong;
@@ -1016,7 +1119,7 @@ impl<'h> Renderer<'h> {
                 let gap = match b {
                     Block::Space(_) => 0.0,
                     Block::Heading { level, .. } => size * if *level <= 2 { 1.5 } else { 1.1 },
-                    _ => size * 0.7,
+                    _ => size * self.typo.gap,
                 };
                 ui.add_space(gap);
             }
@@ -1029,17 +1132,28 @@ impl<'h> Renderer<'h> {
         let p = self.host.palette();
         match b {
             Block::Heading { level, inlines, line } => {
-                let scale = [1.6, 1.32, 1.16, 1.05, 1.0, 0.92][(*level as usize).clamp(1, 6) - 1];
+                let k = (*level as usize).clamp(1, 6) - 1;
+                let scale = self.typo.heading[k];
                 let top = ui.cursor().min;
-                self.paragraph(ui, inlines, size * scale, Style { bold: true, ..Default::default() }, None);
+                let (bold, color) = (self.typo.heading_bold[k], self.typo.heading_color[k]);
+                // the heading's own colour (not the theme's colour for bold text)
+                self.paragraph(ui, inlines, size * scale, Style { bold, ..Default::default() }, Some(color.unwrap_or(p.text)));
                 if self.scroll_to == Some(*line) && self.depth == 0 {
                     ui.scroll_to_rect(egui::Rect::from_min_size(top, egui::vec2(10.0, size * scale)), Some(egui::Align::TOP));
                     self.scroll_to = None;
                 }
                 ui.add_space(size * 0.05);
             }
+            // a paragraph that is only a formula: laid out as one, in the text's style
+            Block::Para(inl) if matches!(inl.iter().filter(|i| !matches!(i, Inline::Text(t, _) if t.trim().is_empty())).collect::<Vec<_>>().as_slice(), [Inline::Math(_)]) => {
+                if let Some(Inline::Math(m)) = inl.iter().find(|i| matches!(i, Inline::Math(_))) {
+                    math_ui(ui, m.trim(), size * 1.1, false, p.text);
+                }
+            }
             Block::Para(inl) => self.paragraph(ui, inl, size, Style::default(), None),
             Block::List { start, items } => {
+                let note_align = crate::align::current();
+                crate::align::set_current(crate::align::for_lists(note_align));
                 for (n, it) in items.iter().enumerate() {
                     if n > 0 {
                         ui.add_space(size * 0.2);
@@ -1050,19 +1164,19 @@ impl<'h> Renderer<'h> {
                         match it.task {
                             Some(c) => {
                                 let mut checked = c != ' ';
-                                let r = ui.add_sized([marker_w, (size * 1.62).round()], egui::Checkbox::without_text(&mut checked));
+                                let r = ui.add_sized([marker_w, (size * self.typo.line).round()], egui::Checkbox::without_text(&mut checked));
                                 if r.clicked() {
                                     self.actions.push(Action::ToggleTask(it.line, c));
                                 }
                             }
                             None => {
-                                let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_w, (size * 1.62).round()), Sense::hover());
+                                let (rect, _) = ui.allocate_exact_size(egui::vec2(marker_w, (size * self.typo.line).round()), Sense::hover());
                                 match start {
                                     Some(s) => {
                                         ui.painter().text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, format!("{}.", s + n as u64), FontId::proportional(size), p.muted);
                                     }
                                     None => {
-                                        ui.painter().circle_filled(egui::pos2(rect.center().x, rect.center().y), (size * 0.16).max(2.2), p.faint);
+                                        ui.painter().circle_filled(egui::pos2(rect.center().x, rect.center().y), (size * 0.16).max(2.2), self.typo.bullet.unwrap_or(p.faint));
                                     }
                                 }
                             }
@@ -1081,11 +1195,12 @@ impl<'h> Renderer<'h> {
                         });
                     });
                 }
+                crate::align::set_current(note_align);
             }
             Block::Quote(body) => {
                 let resp = egui::Frame::new().inner_margin(egui::Margin { left: 18, right: 4, top: 2, bottom: 2 }).show(ui, |ui| self.blocks(ui, body));
                 let r = resp.response.rect;
-                ui.painter().line_segment([r.left_top() + egui::vec2(1.0, 2.0), r.left_bottom() + egui::vec2(1.0, -2.0)], Stroke::new(2.0_f32, p.border_strong));
+                ui.painter().line_segment([r.left_top() + egui::vec2(1.0, 2.0), r.left_bottom() + egui::vec2(1.0, -2.0)], Stroke::new(self.typo.quote_width, self.typo.quote.unwrap_or(p.border_strong)));
             }
             Block::Callout { kind, title, body, folded, line } => {
                 let color = callout_color(kind, &p);
@@ -1154,8 +1269,8 @@ impl<'h> Renderer<'h> {
                     }
                 }
                 if l == "mermaid" {
-                    if let Some(chart) = ateliet_core::mermaid::parse(text) {
-                        mermaid_ui(ui, &chart, size, p);
+                    if let Some(d) = ateliet_core::mermaid::diagram(text) {
+                        mermaid_ui(ui, &d, size, p);
                         return;
                     }
                 }
@@ -1182,7 +1297,7 @@ impl<'h> Renderer<'h> {
                 egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::ScrollArea::horizontal().id_salt(("code", text.len(), lang)).show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(text).monospace().size(size * 0.85).color(p.text)).extend());
+                        ui.add(egui::Label::new(egui::RichText::new(text).family(FontFamily::Name("theme-mono".into())).size(size * 0.85).color(p.text)).extend());
                     });
                 });
             }
@@ -1233,9 +1348,8 @@ impl<'h> Renderer<'h> {
                 }
             }
             Block::Math(m) => {
-                let text = ateliet_core::texmath::convert(m.trim());
                 ui.add_space(size * 0.3);
-                ui.vertical_centered(|ui| ui.label(egui::RichText::new(text.trim()).family(FontFamily::Name("italic".into())).size(size * 1.12).color(p.text)));
+                math_ui(ui, m.trim(), size * 1.15, true, p.text);
                 ui.add_space(size * 0.3);
             }
             Block::Footnotes(notes) => {
@@ -1262,7 +1376,16 @@ impl<'h> Renderer<'h> {
                     self.image(ui, target.split('#').next().unwrap_or(target), alt, true);
                     return;
                 }
-                // audio plays here; video and PDF open in the system's app
+                // audio and video play here, PDF pages show here
+                let file = target.split('#').next().unwrap_or(target);
+                if let (Some(k), Some(abs)) = (crate::media_ui::kind(file), self.host.abs_path(file)) {
+                    let page = target.split_once("#page=").and_then(|(_, n)| n.trim().parse::<usize>().ok()).map(|n| n.saturating_sub(1));
+                    let name = file.rsplit('/').next().unwrap_or(file).to_string();
+                    if crate::media_ui::show(ui, &abs, &name, k, page, p) {
+                        self.actions.push(Action::External(file.to_string()));
+                    }
+                    return;
+                }
                 let media = match ext.as_str() {
                     "mp3" | "wav" | "m4a" | "ogg" | "flac" | "webm" | "3gp" => Some((crate::icons::PLAY, "áudio · tocar", true)),
                     "mp4" | "mov" | "mkv" | "ogv" | "avi" => Some((crate::icons::FILM, "vídeo · abrir", false)),
@@ -1380,6 +1503,17 @@ mod tests {
         let Block::Callout { kind, folded, .. } = &d.blocks[3] else { panic!() };
         assert_eq!(kind, "warning");
         assert_eq!(*folded, Some(true));
+    }
+
+    #[test]
+    fn tight_list_items_keep_their_styles() {
+        let d = parse("- um **forte** e ==realce==\n- dois");
+        let Block::List { items, .. } = &d.blocks[0] else { panic!() };
+        let Block::Para(inl) = &items[0].blocks[0] else { panic!() };
+        let styled: Vec<(String, Style)> = inl.iter().filter_map(|i| if let Inline::Text(t, s) = i { Some((t.clone(), *s)) } else { None }).collect();
+        assert!(styled.iter().any(|(t, s)| t == "forte" && s.bold), "{styled:?}");
+        assert!(styled.iter().any(|(t, s)| t == "realce" && s.mark), "{styled:?}");
+        assert!(styled.iter().any(|(t, s)| t == " e " && !s.bold && !s.mark), "{styled:?}");
     }
 
     #[test]
