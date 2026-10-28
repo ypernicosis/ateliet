@@ -8,6 +8,7 @@
 │ panels.rs · commands.rs · settings_pages.rs   barras laterais, paleta e atalhos, configurações             │
 │ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, moodboards, busca por descrição (CLIP)    │
 │ board_ui.rs, board_ui/   storyboard: quadros, camadas, pincéis, ferramentas, referências, exportações      │
+│ quadro_ui/  Quadro: Kanban e Excalidraw no canvas (desenho, ponteiro, edição, painéis e menus)             │
 │ sc/         Scriptorium, Enredo, Mundo, Mapas, Diagramação, Capa, Compositor, Trilha                       │
 │ dv.rs · templater.rs · daily.rs   Dataview, Templater, notas diárias e calendário                          │
 │ vault.rs · host.rs · config.rs · update.rs   arquivos e watcher, caches, configurações, autoatualização    │
@@ -20,6 +21,7 @@
 │   dataview/ · script/ (QuickJS) · calendar.rs · datefmt.rs   Dataview, dataviewjs, Templater, datas         │
 │   images.rs · clip.rs · pictogrep.rs · pinterest.rs · moodboard.rs   imagens, CLIP, Pictogrep, moodboards  │
 │   board/ · clipstudio.rs                          storyboard: documento, pintura, composição, .clip       │
+│   quadro/                                         Kanban, Excalidraw, LZString, traço rabiscado, PNG      │
 │   scriptorium/ · typeset/                         livros, enredo, mundo; composição de páginas e PDF       │
 │   css_theme.rs · texmath.rs · mermaid.rs          cores de temas, TeX → Unicode, fluxogramas               │
 └───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -61,6 +63,16 @@ Dataview, Templater, Calendar e o Moodboard do Pictogrep eram plugins e agora fa
 ## Storyboard (`core/src/board/`, `src/board_ui.rs`, `src/board_ui/`)
 
 - **Clip Studio** (`core/src/clipstudio.rs`): o arquivo é uma sequência de chunks depois de `CSFCHUNK`; `SQLi` é um banco SQLite (lido com rusqlite) com a árvore de camadas e `Exta` guarda os pixels em blocos zlib de 256×256 (plano alfa + BGRx), ligados ao banco por `Layer.LayerRenderMipmap → Mipmap → MipmapInfo → Offscreen.BlockData`. Pastas são achatadas (visibilidade, opacidade e máscaras descem), máscaras ativas são aplicadas, o papel vira cor, preenchimentos chapados vêm de `GradationFillInfo`. Os testes comparam pixel a pixel com o clip_to_psd quando `ATELIET_CLIP_SAMPLE` e `ATELIET_CLIP_REFERENCE` estão definidos.
+
+## Quadro (`core/src/quadro/`, `src/quadro_ui/`)
+
+- **Modelo** (`mod.rs`): um `Board` com colunas (`Lane`), cartões soltos (`Card`), elementos de desenho e as imagens deles (`FileRef`), mais o que cada formato precisa para ser regravado igual (`Kept`: frontmatter, configurações e recuo do Kanban; cabeçalho, seções e cena do Excalidraw). `detect` decide o formato pelo nome e pelo frontmatter.
+- **Elementos** (`element.rs`): cada elemento é o objeto JSON do Excalidraw como foi lido; os acessores leem e escrevem os campos usados, e o resto passa intacto. `rev` (de um contador global, para os caches) muda a cada alteração; `stamp` sobe `version` antes de gravar.
+- **Kanban** (`kanban.rs`): lê linha a linha como o parser do plugin (colunas por título, `**Complete**` traduzido, continuação recuada, `<br>`, `^id`, arquivo depois de `***`) e grava com o mesmo `boardToMd` do plugin. O bloco `%% ateliet:quadro %%` vai antes das configurações, com `` ` `` e `%` escapados no JSON. Os testes conferem a ida e volta byte a byte; com `QUADRO_FIXTURES=<pasta>`, também os arquivos dessa pasta (gerados pelos plugins).
+- **Excalidraw** (`excalidraw.rs`, `lz.rs`): as mesmas expressões do plugin para achar `## Drawing` e as seções; a cena guarda a ordem das chaves (os elementos e os arquivos entram no lugar de onde saíram) e é impressa como o `JSON.stringify(…, null, "\t")` do plugin. O LZString trabalha em unidades UTF-16, como o JavaScript, e os testes comparam com saídas da biblioteca original.
+- **Desenho** (`rough.rs`): a geometria do rough.js com as opções do Excalidraw (desvio por `seed`, duas passadas, curvatura, elipses com sobreposição, hachura a -41°, pontas de seta por tipo, tracejado), em coordenadas do mundo. A tela (com malhas do egui, polígonos triangulados por orelhas) e o PNG desenham a mesma geometria.
+- **Layout** (`layout.rs`): onde ficam cabeçalho, cartões, imagem, tags e data; cada lado mede o texto com as suas fontes (egui na tela, `FontDb` no PNG). **PNG** (`export.rs`): a cena vira itens do compositor (`typeset::Item`) e passa pelo rasterizador dos PDFs.
+- **Interface**: `quadro_ui/mod.rs` guarda o estado (vista, ferramenta, seleção, desfazer por instantâneos do `Board`, salvamento atômico, releitura do disco e a cópia do bloco do Quadro em `.obsidian/ateliet/quadro/`); `draw.rs` desenha; `input.rs` trata ponteiro e teclado; `edit.rs` faz as mudanças (acerto do clique, grupos, setas que seguem os alvos quando eles se movem, texto dentro de formas, cartões entre colunas, área de transferência); `panel.rs` tem a barra, o painel de estilo, os menus e a exportação em segundo plano. A aba do app guarda o editor em `Tab::quadro`; as prévias em notas passam por `Host::quadro`.
 
 ## Moodboards (`core/src/moodboard.rs`, `src/images_ui/moodboard.rs`)
 

@@ -20,6 +20,13 @@ pub struct Caches {
     pub docs: HashMap<String, (std::time::SystemTime, Arc<Doc>)>,
     /// Composed pages drawn for reading: key of (note, model) → picture.
     pub composed: HashMap<u64, Composed>,
+    /// Quadros embedded in notes: path → (modified, board); their drawn
+    /// geometry and pictures kept in the file itself.
+    pub quadros: HashMap<String, (std::time::SystemTime, Arc<ateliet_core::quadro::Board>)>,
+    pub quadro_geo: HashMap<String, (u64, crate::quadro_ui::Geo)>,
+    pub quadro_data: HashMap<String, Option<(egui::TextureHandle, egui::Vec2)>>,
+    /// Whether an embedded note is a quadro: path → (modified, answer).
+    pub quadro_kind: HashMap<String, (std::time::SystemTime, bool)>,
 }
 
 pub enum Composed {
@@ -219,6 +226,25 @@ impl Host for RenderHost<'_> {
             Composed::Ready(t, s) => Some((t.id(), *s)),
             _ => None,
         }
+    }
+
+    fn quadro(&mut self, ui: &mut egui::Ui, target: &str) -> Option<(String, egui::Response)> {
+        let path = self.vault.resolve(target, self.source)?;
+        let abs = self.vault.abs(&path);
+        let mtime = std::fs::metadata(&abs).and_then(|m| m.modified()).ok()?;
+        let is = match self.caches.quadro_kind.get(&path) {
+            Some((t, b)) if *t == mtime => *b,
+            _ => {
+                let b = crate::quadro_ui::is_quadro(&abs);
+                self.caches.quadro_kind.insert(path.clone(), (mtime, b));
+                b
+            }
+        };
+        if !is || path == self.source {
+            return None;
+        }
+        let r = crate::quadro_ui::embed(ui, self.vault, self.caches, &path, self.palette)?;
+        Some((path, r))
     }
 
     fn embed(&mut self, target: &str) -> Option<(String, Arc<Doc>)> {
