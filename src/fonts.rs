@@ -6,7 +6,8 @@
 //! Families: `Proportional` (Inter Regular), `"medium"`, `"bold"` (Inter
 //! SemiBold), `"italic"`, `"icons"` (Lucide; see `icons.rs`); the serifs
 //! `"cormorant"`, `"cormorant-italic"`, `"cormorant-bold"` (map labels) and
-//! `"garamond"`, `"garamond-italic"` (typeset pages).
+//! `"garamond"`, `"garamond-italic"`, `"garamond-bold"` (typeset pages and
+//! math formulas).
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
@@ -103,6 +104,7 @@ pub fn definitions() -> FontDefinitions {
     put("cormorant-bold", FontData::from_static(CORMORANT_BOLD));
     put("garamond", FontData::from_static(GARAMOND));
     put("garamond-italic", FontData::from_static(GARAMOND_ITALIC));
+    put("garamond-bold", FontData::from_static(GARAMOND_BOLD));
     let sys = first(SYSTEM_SANS).map(|d| put("sys-sans", FontData::from_owned(d))).is_some();
     let mono = first(MONO).map(|d| put("sys-mono", FontData::from_owned(d))).is_some();
 
@@ -120,7 +122,7 @@ pub fn definitions() -> FontDefinitions {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("italic".into()), chain("inter-italic"));
-    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic"] {
+    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold"] {
         fonts.families.insert(FontFamily::Name(f.into()), chain(f));
     }
     fonts.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into(), "inter".into()]);

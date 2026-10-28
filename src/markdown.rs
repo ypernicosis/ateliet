@@ -849,6 +849,50 @@ fn mermaid_ui(ui: &mut egui::Ui, diagram: &ateliet_core::mermaid::Diagram, size:
     }
 }
 
+/// A TeX formula laid out by the core (fractions, roots, matrices…) and
+/// painted in EB Garamond; `display` for a formula on its own line,
+/// centred, with big operators and limits above and below.
+pub fn math_ui(ui: &mut egui::Ui, src: &str, size: f32, display: bool, color: Color32) {
+    use ateliet_core::texlayout::{Face, Item};
+    let family = |f: Face| FontFamily::Name(match f {
+        Face::Roman => "garamond",
+        Face::Italic => "garamond-italic",
+        Face::Bold => "garamond-bold",
+    }.into());
+    let measure = |t: &str, s: f32, f: Face| ui.fonts(|fo| fo.layout_no_wrap(t.to_string(), FontId::new(s, family(f)), color).size().x);
+    let b = ateliet_core::texlayout::layout(src, size, display, &measure);
+    let avail = ui.available_width();
+    // too wide: scaled down to fit (never below half)
+    let k = if b.w > avail { (avail / b.w).max(0.5) } else { 1.0 };
+    let pad = size * 0.15;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(avail, (b.asc + b.desc) * k + 2.0 * pad), Sense::hover());
+    let x0 = match (display, crate::align::current()) {
+        (true, _) | (false, crate::align::TextAlign::Center) => rect.center().x - b.w * k / 2.0,
+        (false, crate::align::TextAlign::Right) => rect.right() - b.w * k,
+        _ => rect.left(),
+    };
+    let origin = egui::pos2(x0, rect.top() + pad + b.asc * k);
+    let to = |x: f32, y: f32| origin + egui::vec2(x, y) * k;
+    let painter = ui.painter_at(rect.expand(4.0));
+    for it in &b.items {
+        match it {
+            Item::Glyphs { x, y, text, size, face } => {
+                let g = painter.layout_no_wrap(text.clone(), FontId::new(size * k, family(*face)), color);
+                // the galley's first glyph sits on the baseline
+                let base = g.rows.first().and_then(|r| r.glyphs.first()).map(|gl| gl.pos.y).unwrap_or(size * k * 0.8);
+                painter.galley(to(*x, *y) - egui::vec2(0.0, base), g, color);
+            }
+            Item::Rule { x, y, w, h } => {
+                painter.rect_filled(egui::Rect::from_min_size(to(*x, *y), egui::vec2(w * k, (h * k).max(1.0))), 0.0, color);
+            }
+            Item::Path { pts, width } => {
+                let pts: Vec<egui::Pos2> = pts.iter().map(|(x, y)| to(*x, *y)).collect();
+                painter.add(egui::Shape::line(pts, Stroke::new((width * k).max(1.0), color)));
+            }
+        }
+    }
+}
+
 /// A list bullet the height of a line of text at `size`.
 pub fn bullet(ui: &mut egui::Ui, size: f32, color: Color32, hollow: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size * 1.1, (size * 1.62).round()), Sense::hover());
@@ -1081,6 +1125,12 @@ impl<'h> Renderer<'h> {
                 }
                 ui.add_space(size * 0.05);
             }
+            // a paragraph that is only a formula: laid out as one, in the text's style
+            Block::Para(inl) if matches!(inl.iter().filter(|i| !matches!(i, Inline::Text(t, _) if t.trim().is_empty())).collect::<Vec<_>>().as_slice(), [Inline::Math(_)]) => {
+                if let Some(Inline::Math(m)) = inl.iter().find(|i| matches!(i, Inline::Math(_))) {
+                    math_ui(ui, m.trim(), size * 1.1, false, p.text);
+                }
+            }
             Block::Para(inl) => self.paragraph(ui, inl, size, Style::default(), None),
             Block::List { start, items } => {
                 let note_align = crate::align::current();
@@ -1279,9 +1329,8 @@ impl<'h> Renderer<'h> {
                 }
             }
             Block::Math(m) => {
-                let text = ateliet_core::texmath::convert(m.trim());
                 ui.add_space(size * 0.3);
-                ui.vertical_centered(|ui| ui.label(egui::RichText::new(text.trim()).family(FontFamily::Name("italic".into())).size(size * 1.12).color(p.text)));
+                math_ui(ui, m.trim(), size * 1.15, true, p.text);
                 ui.add_space(size * 0.3);
             }
             Block::Footnotes(notes) => {
