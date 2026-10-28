@@ -25,6 +25,7 @@ pub mod relink;
 pub mod render;
 pub mod search;
 pub mod syntax;
+pub mod media;
 pub mod texlayout;
 pub mod texmath;
 pub mod themes;

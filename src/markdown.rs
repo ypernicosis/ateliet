@@ -617,6 +617,10 @@ pub trait Host {
     fn inline_query(&mut self, js: bool, expr: &str) -> serde_json::Value;
     /// A note embedded with `![[note]]`: its path and parsed document.
     fn embed(&mut self, target: &str) -> Option<(String, Arc<Doc>)>;
+    /// The file a link points to, on disk (for embedded audio, video, PDF).
+    fn abs_path(&self, _target: &str) -> Option<std::path::PathBuf> {
+        None
+    }
     /// A composed page (`scriptorium-pagina`) drawn as a picture, when ready.
     fn composed(&mut self, _ctx: &egui::Context, _model: &str) -> Option<(egui::TextureId, egui::Vec2)> {
         None
@@ -1357,7 +1361,16 @@ impl<'h> Renderer<'h> {
                     self.image(ui, target.split('#').next().unwrap_or(target), alt, true);
                     return;
                 }
-                // audio plays here; video and PDF open in the system's app
+                // audio and video play here, PDF pages show here
+                let file = target.split('#').next().unwrap_or(target);
+                if let (Some(k), Some(abs)) = (crate::media_ui::kind(file), self.host.abs_path(file)) {
+                    let page = target.split_once("#page=").and_then(|(_, n)| n.trim().parse::<usize>().ok()).map(|n| n.saturating_sub(1));
+                    let name = file.rsplit('/').next().unwrap_or(file).to_string();
+                    if crate::media_ui::show(ui, &abs, &name, k, page, p) {
+                        self.actions.push(Action::External(file.to_string()));
+                    }
+                    return;
+                }
                 let media = match ext.as_str() {
                     "mp3" | "wav" | "m4a" | "ogg" | "flac" | "webm" | "3gp" => Some((crate::icons::PLAY, "áudio · tocar", true)),
                     "mp4" | "mov" | "mkv" | "ogv" | "avi" => Some((crate::icons::FILM, "vídeo · abrir", false)),
