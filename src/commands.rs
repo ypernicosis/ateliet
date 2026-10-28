@@ -31,6 +31,8 @@ pub enum Cmd {
     ChangeVault,
     ImageMode,
     NewStoryboard,
+    NewQuadro,
+    NewDrawing,
     NewCanvas,
     Align(crate::align::TextAlign),
     Library,
@@ -77,6 +79,8 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::ChangeVault, "app:open-vault", "Abrir outro cofre"),
     (Cmd::ImageMode, "images:toggle-mode", "Imagens: Alternar modo imagem"),
     (Cmd::NewStoryboard, "storyboard:new", "Storyboard: Novo storyboard"),
+    (Cmd::NewQuadro, "quadro:new", "Novo quadro"),
+    (Cmd::NewDrawing, "quadro:new-drawing", "Quadro: Novo desenho (Excalidraw)"),
     (Cmd::NewCanvas, "storyboard:new-canvas", "Storyboard: Nova tela infinita"),
     (Cmd::Align(crate::align::TextAlign::Left), "editor:align-left", "Texto: Alinhar à esquerda"),
     (Cmd::Align(crate::align::TextAlign::Justify), "editor:align-justify", "Texto: Justificar"),
@@ -190,6 +194,10 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.new_note(&folder);
         }
         Cmd::NewStoryboard => app.new_board_dlg = Some(crate::board_ui::NewBoard::new()),
+        Cmd::NewQuadro | Cmd::NewDrawing => {
+            let folder = app.active_path().map(|p| vault::parent(&p).to_string()).unwrap_or_default();
+            app.new_quadro(&folder, matches!(c, Cmd::NewDrawing));
+        }
         Cmd::Library => app.open_view("library", None),
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
@@ -270,7 +278,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::NewCanvas => app.new_board("canvas"),
         Cmd::OpenDaily => app.open_daily(ateliet_core::datefmt::today().date()),
         Cmd::Align(a) => {
-            if let Some(t) = app.tabs.get_mut(app.active).filter(|t| t.view.is_none() && t.board.is_none()) {
+            if let Some(t) = app.tabs.get_mut(app.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()) {
                 if crate::align::TextAlign::of_note(&t.text) != a {
                     t.text = a.set_on(&t.text);
                     t.last_edit = Some(std::time::Instant::now());

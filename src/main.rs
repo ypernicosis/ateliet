@@ -19,6 +19,7 @@ mod live;
 mod markdown;
 mod music;
 mod panels;
+mod quadro_ui;
 mod sc;
 mod settings_pages;
 mod templater;

@@ -302,12 +302,12 @@ fn quadro_json(b: &Board) -> Option<String> {
     if elements.is_empty() && b.cards.is_empty() && b.is_default_layout() {
         return None;
     }
-    let lanes: Vec<Value> = b.lanes.iter().map(|l| json!({ "title": l.title, "x": l.x.round(), "y": l.y.round(), "w": l.w.round() })).collect();
+    let lanes: Vec<Value> = b.lanes.iter().map(|l| json!({ "title": l.title, "x": l.x.round() as i64, "y": l.y.round() as i64, "w": l.w.round() as i64 })).collect();
     let cards: Vec<Value> = b
         .cards
         .iter()
         .map(|c| {
-            let mut m = json!({ "id": c.id, "text": c.text, "check": c.check.to_string(), "x": c.x.round(), "y": c.y.round(), "w": c.w.round() });
+            let mut m = json!({ "id": c.id, "text": c.text, "check": c.check.to_string(), "x": c.x.round() as i64, "y": c.y.round() as i64, "w": c.w.round() as i64 });
             if let Some(col) = &c.color {
                 m["color"] = json!(col);
             }

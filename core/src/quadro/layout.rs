@@ -13,6 +13,8 @@ pub const TITLE_SIZE: f32 = 14.0;
 pub const META_SIZE: f32 = 11.5;
 pub const CHIP_H: f32 = 20.0;
 pub const CHIP_SIZE: f32 = 11.0;
+/// Kept free at the right of a card's title for its checkbox.
+pub const CHECK_W: f32 = 20.0;
 /// The add-a-card row at the bottom of a column.
 pub const FOOT_H: f32 = 34.0;
 
@@ -80,8 +82,10 @@ pub fn card_box(c: &Card, x: f32, y: f32, w: f32, trig: &(String, String), m: &m
         cy += h + 6.0;
     }
     let title = title_of(&info);
-    let (_, th) = if title.is_empty() { (0.0, 0.0) } else { m.text(&title, TITLE_SIZE, inner) };
-    let title_rect = (x + CARD_PAD, cy, inner, th);
+    // room on the right for the checkbox
+    let tw = inner - CHECK_W;
+    let (_, th) = if title.is_empty() { (0.0, 0.0) } else { m.text(&title, TITLE_SIZE, tw) };
+    let title_rect = (x + CARD_PAD, cy, tw, th);
     if th > 0.0 {
         cy += th + 4.0;
     }

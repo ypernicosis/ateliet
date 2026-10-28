@@ -226,3 +226,5 @@ contrast
 fullscreen
 grid-2x2
 layout-dashboard
+
+diamond columns-3 arrow-up-right square-kanban group ungroup copy-plus

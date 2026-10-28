@@ -265,7 +265,7 @@ impl App {
         };
         crate::sc::focus::DIM.with(|d| d.set(dim));
         crate::sc::focus::TYPEWRITER.with(|d| d.set(tw));
-        let active = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none()).map(|t| (t.path.clone(), ateliet_core::scriptorium::count_words(&t.text) as i64));
+        let active = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()).map(|t| (t.path.clone(), ateliet_core::scriptorium::count_words(&t.text) as i64));
         let is_chapter = active.as_ref().is_some_and(|(p, _)| self.vault.as_ref().is_some_and(|v| ateliet_core::scriptorium::book::is_chapter(&v.index.read().unwrap(), p)));
         let tabs: Vec<(String, i64)> = self.tabs.iter().map(|t| (t.path.clone(), ateliet_core::scriptorium::count_words(&t.text) as i64)).collect();
         let root = self.vault.as_ref().map(|v| v.root.clone());
@@ -556,7 +556,7 @@ impl App {
     /// A blank composed page at the cursor of the open note, opened in the compositor.
     pub fn insert_composed_page(&mut self) {
         use ateliet_core::typeset::compose;
-        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.path.ends_with(".md")) else {
+        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none() && t.path.ends_with(".md")) else {
             self.toast("Abra uma nota ou um capítulo para inserir a página.");
             return;
         };

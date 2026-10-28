@@ -95,10 +95,18 @@ fn num(v: f32) -> Value {
     }
 }
 
+static REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A revision number never handed out before (a state of an element seen
+/// again after an undo keeps the one it had).
+pub fn next_rev() -> u64 {
+    REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 impl Element {
     pub fn from_value(v: Value) -> Option<Element> {
         match v {
-            Value::Object(m) => Some(Element { v: m, rev: 0, touched: false }),
+            Value::Object(m) => Some(Element { v: m, rev: next_rev(), touched: false }),
             _ => None,
         }
     }
@@ -181,7 +189,7 @@ impl Element {
             }
             _ => {}
         }
-        Element { v: v.as_object().cloned().unwrap_or_default(), rev: 0, touched: true }
+        Element { v: v.as_object().cloned().unwrap_or_default(), rev: next_rev(), touched: true }
     }
 
     pub fn to_value(&self) -> Value {
@@ -210,7 +218,7 @@ impl Element {
     pub fn set(&mut self, k: &str, v: Value) {
         if self.v.get(k) != Some(&v) {
             self.v.insert(k.to_string(), v);
-            self.rev += 1;
+            self.rev = next_rev();
             self.touched = true;
         }
     }
@@ -489,7 +497,7 @@ pub fn fix_indices(els: &mut [Element]) {
     for (i, e) in els.iter_mut().enumerate() {
         e.v.insert("index".into(), json!(nth_index(i)));
         e.touched = true;
-        e.rev += 1;
+        e.rev = next_rev();
     }
 }
 

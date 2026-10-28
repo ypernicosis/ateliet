@@ -20,6 +20,9 @@ enum FileCmd {
     Similar,
     /// Move into this folder ("" is the root).
     MoveTo(String),
+    /// A new quadro (Kanban) or Excalidraw drawing in this folder.
+    NewQuadro,
+    NewDrawing,
 }
 
 /// What the explorer shows first (Obsidian's `fileSortOrder` values).
@@ -239,6 +242,9 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
             if kit::icon_button_sized(ui, icons::FOLDER_PLUS, "Nova pasta", false, p, 24.0, 14.0).clicked() {
                 app.ask = Some(Ask { title: "Nova pasta".into(), value: String::new(), kind: AskKind::NewFolder(String::new()) });
             }
+            if kit::icon_button_sized(ui, icons::SQUARE_KANBAN, "Novo quadro", false, p, 24.0, 14.0).clicked() {
+                app.new_quadro("", false);
+            }
             if kit::icon_button_sized(ui, icons::SQUARE_PEN, "Nova nota (Ctrl+N)", false, p, 24.0, 14.0).clicked() {
                 app.new_note("");
             }
@@ -309,6 +315,8 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                     app.rename(&path, &to);
                 }
             }
+            FileCmd::NewQuadro => app.new_quadro(&path, false),
+            FileCmd::NewDrawing => app.new_quadro(&path, true),
             FileCmd::Similar => {
                 if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
                     if let Some(c) = app.ctx.clone() {
@@ -334,6 +342,7 @@ fn file_icon(name: &str) -> &'static str {
         "md" => icons::FILE_TEXT,
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "avif" | "psd" | "clip" => icons::IMAGE,
         "storyboard" => icons::CLAPPERBOARD,
+        "excalidraw" => icons::PEN_TOOL,
         "canvas" => icons::NETWORK,
         "mp3" | "wav" | "ogg" | "m4a" | "flac" => icons::MUSIC,
         "mp4" | "mov" | "webm" => icons::FILM,
@@ -412,6 +421,14 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
                 *new_in = Some(full.clone());
                 ui.close_menu();
             }
+            if kit::menu_item(ui, icons::SQUARE_KANBAN, "Novo quadro", p) {
+                *cmd = Some((full.clone(), FileCmd::NewQuadro));
+                ui.close_menu();
+            }
+            if kit::menu_item(ui, icons::PEN_TOOL, "Novo desenho (Excalidraw)", p) {
+                *cmd = Some((full.clone(), FileCmd::NewDrawing));
+                ui.close_menu();
+            }
             if kit::menu_item(ui, icons::FOLDER_PLUS, "Nova pasta", p) {
                 *ask = Some(Ask { title: "Nova pasta".into(), value: String::new(), kind: AskKind::NewFolder(full.clone()) });
                 ui.close_menu();
@@ -447,7 +464,7 @@ fn folder_ui(ui: &mut egui::Ui, f: &Folder, path: &str, depth: usize, active: Op
         let label = if is_md { &name[..name.len() - 3] } else { name.as_str() };
         let is_active = active == Some(full.as_str());
         // files line up with the folder names above them (past the chevron)
-        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard")).draggable().show(ui, p);
+        let r = kit::Row::new(label).depth(depth).icon(file_icon(name)).selected(is_active).dim(!is_md && !name.ends_with(".storyboard") && !name.ends_with(".excalidraw")).draggable().show(ui, p);
         if r.drag_started() {
             r.dnd_set_drag_payload(full.clone());
         }
@@ -718,7 +735,7 @@ fn backlinks(app: &mut App, ui: &mut egui::Ui) {
 fn outline(app: &mut App, ui: &mut egui::Ui) {
     let p = app.palette;
     let Some(tab) = app.tabs.get_mut(app.active) else { return };
-    if tab.view.is_some() || tab.board.is_some() {
+    if tab.view.is_some() || tab.board.is_some() || tab.quadro.is_some() {
         ui.label(RichText::new("Sem títulos.").color(p.faint));
         return;
     }
@@ -911,6 +928,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             Some(crate::sc::View::Pagina(_)) => icons::LAYERS,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
+                            None if t.quadro.is_some() => icons::SQUARE_KANBAN,
                             None => icons::FILE_TEXT,
                         };
                         let cy = rect.center().y - 1.0;
@@ -1006,7 +1024,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                     app.right_open = !app.right_open;
                 }
                 if let Some(t) = app.tabs.get_mut(app.active) {
-                    if t.view.is_none() && t.board.is_none() {
+                    if t.view.is_none() && t.board.is_none() && t.quadro.is_none() {
                         focus = kit::icon_button(ui, icons::FOCUS, "Modo foco", false, p).clicked();
                         // the note's alignment, kept in its frontmatter
                         let cur = crate::align::TextAlign::of_note(&t.text);
@@ -1095,7 +1113,7 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
                     }
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
                 }
-                if let Some(t) = app.tabs.get(app.active).filter(|t| t.view.is_none() && t.board.is_none()) {
+                if let Some(t) = app.tabs.get(app.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()) {
                     let words = ateliet_core::scriptorium::count_words(&t.text);
                     let chars = t.text.chars().count();
                     let back = app.vault.as_ref().map(|v| v.index.read().map(|ix| ix.inlinks(&t.path).len()).unwrap_or(0)).unwrap_or(0);

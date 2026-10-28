@@ -615,6 +615,11 @@ pub trait Host {
     fn inline_query(&mut self, js: bool, expr: &str) -> serde_json::Value;
     /// A note embedded with `![[note]]`: its path and parsed document.
     fn embed(&mut self, target: &str) -> Option<(String, Arc<Doc>)>;
+    /// A quadro (Kanban board or Excalidraw drawing) embedded with
+    /// `![[…]]`, drawn small; its path and the picture's response.
+    fn quadro(&mut self, _ui: &mut egui::Ui, _target: &str) -> Option<(String, egui::Response)> {
+        None
+    }
     /// A composed page (`scriptorium-pagina`) drawn as a picture, when ready.
     fn composed(&mut self, _ctx: &egui::Context, _model: &str) -> Option<(egui::TextureId, egui::Vec2)> {
         None
@@ -1277,6 +1282,12 @@ impl<'h> Renderer<'h> {
                     return;
                 }
                 if self.depth >= 2 {
+                    return;
+                }
+                if let Some((path, r)) = self.host.quadro(ui, target.split('#').next().unwrap_or(target)) {
+                    if r.on_hover_text("Abrir no Quadro").clicked() {
+                        self.actions.push(Action::Open(path, false));
+                    }
                     return;
                 }
                 match self.host.embed(target) {

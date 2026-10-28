@@ -235,9 +235,7 @@ fn union(a: Option<R>, r: R) -> Option<R> {
 pub fn render(b: &Board, f: &Fonts, load: &mut dyn FnMut(&str) -> Option<Picture>, only: Option<&HashSet<String>>, scale: f32) -> Result<(u32, u32, Vec<u8>), String> {
     let mut data_load = |k: &str| -> Option<Picture> {
         if let Some(rest) = k.strip_prefix("data:") {
-            let b64 = rest.split_once(',')?.1;
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()?;
+            let bytes = super::data_url_bytes(rest)?;
             let img = image::load_from_memory(&bytes).ok()?.to_rgba8();
             return Some(Picture { w: img.width(), h: img.height(), rgba: img.into_raw(), jpeg: None });
         }
@@ -275,16 +273,20 @@ pub fn render(b: &Board, f: &Fonts, load: &mut dyn FnMut(&str) -> Option<Picture
         let mut m = DbMeasure { f, pics: &mut pics };
         b.cards.iter().filter(|c| want(&c.id)).map(|c| layout::card_box(c, c.x, c.y, c.w, &trig, &mut m)).collect()
     };
-    // drawings first, cards over them, as on the canvas
-    let mut drawn = Vec::new();
+    // as on the canvas: shapes and pictures, the columns, then lines,
+    // arrows, strokes and loose text, then loose cards
+    let mut under = Vec::new();
+    let mut over = Vec::new();
     for e in b.elements.iter().filter(|e| !e.deleted() && (want(e.id()) || e.container().is_some_and(&want))) {
         let (x0, y0, x1, y1) = e.aabb();
         let pad = e.fo("strokeWidth", 2.0) + 4.0;
         bounds = union(bounds, (x0 - pad, y0 - pad, x1 - x0 + 2.0 * pad, y1 - y0 + 2.0 * pad));
-        element_items(&mut drawn, b, e, f, &mut pics);
+        let top = matches!(e.kind(), "arrow" | "line" | "freedraw") || (e.kind() == "text" && e.container().is_none());
+        element_items(if top { &mut over } else { &mut under }, b, e, f, &mut pics);
     }
-    let mut page_items = drawn;
+    let mut page_items = under;
     page_items.extend(items);
+    page_items.extend(over);
     for (cb, c) in loose.iter().zip(b.cards.iter().filter(|c| want(&c.id))) {
         bounds = union(bounds, cb.rect);
         card_items(&mut page_items, b, cb, c.color.as_deref(), f, &mut pics);

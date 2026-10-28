@@ -38,6 +38,8 @@ pub struct Tab {
     pub live: crate::live::LiveState,
     /// A `.storyboard` file open in the drawing editor.
     pub board: Option<Box<crate::board_ui::BoardEditor>>,
+    /// A Kanban board or Excalidraw drawing open in the Quadro.
+    pub quadro: Option<Box<crate::quadro_ui::QuadroEditor>>,
     /// A Scriptorium screen (the library…) instead of a note.
     pub view: Option<crate::sc::View>,
     /// Paths this tab showed before (back) and after going back (forward).
@@ -52,10 +54,16 @@ impl Tab {
             Some(crate::sc::View::Pagina(c)) => return c.dirty(),
             _ => {}
         }
+        if let Some(q) = &self.quadro {
+            return q.dirty;
+        }
         self.text != self.saved
     }
 
     pub fn title(&self) -> String {
+        if let Some(q) = &self.quadro {
+            return q.title();
+        }
         match &self.view {
             Some(v) => v.title(),
             None => vault::basename(&self.path).to_string(),
@@ -337,7 +345,7 @@ impl App {
                 self.active = i;
                 return;
             }
-            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
+            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
             if new_tab || self.tabs.is_empty() {
                 self.tabs.push(tab);
                 self.active = self.tabs.len() - 1;
@@ -349,7 +357,8 @@ impl App {
         }
         let lower = path.to_lowercase();
         let is_board = lower.ends_with(".storyboard");
-        if !lower.ends_with(".md") && !is_board {
+        let is_quadro = lower.ends_with(".excalidraw") || (lower.ends_with(".md") && crate::quadro_ui::is_quadro(&v.abs(path)));
+        if !lower.ends_with(".md") && !is_board && !is_quadro {
             let _ = open::that(v.abs(path));
             return;
         }
@@ -368,8 +377,19 @@ impl App {
         } else {
             None
         };
+        let quadro = if is_quadro {
+            match crate::quadro_ui::QuadroEditor::open(path, v.abs(path)) {
+                Ok(q) => Some(Box::new(q)),
+                Err(e) => {
+                    self.toast(format!("Não foi possível abrir {path}: {e}"));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         // characters open as their sheet (the plugin's "abrirFichas"), maps as maps
-        if !is_board {
+        if !is_board && !is_quadro {
             // the index may still be building (session restore): read the note itself then
             let kind = v.index.read().unwrap().page(path).map(|p| ateliet_core::scriptorium::book::kind(p).to_string()).unwrap_or_else(|| {
                 let text = std::fs::read_to_string(v.abs(path)).unwrap_or_default();
@@ -382,7 +402,7 @@ impl App {
                 _ => None,
             };
             if let Some(view) = view {
-                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
+                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
@@ -395,9 +415,10 @@ impl App {
                 return;
             }
         }
-        let text = if is_board { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, view: None, back: Vec::new(), fwd: Vec::new() };
+        let text = if is_board || is_quadro { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, back: Vec::new(), fwd: Vec::new() };
         tab.board = board;
+        tab.quadro = quadro;
         if new_tab || self.tabs.is_empty() {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;
@@ -497,6 +518,15 @@ impl App {
         let Some(t) = self.tabs.get_mut(i) else { return };
         if let Some(b) = t.board.as_mut() {
             b.save();
+            return;
+        }
+        if let Some(q) = t.quadro.as_mut() {
+            q.save();
+            let err = q.error.take();
+            v.index.write().unwrap().update(&[t.path.clone()]);
+            if let Some(e) = err {
+                self.toast(e);
+            }
             return;
         }
         if let Some(crate::sc::View::Sheet(s)) = t.view.as_mut() {
@@ -614,6 +644,28 @@ impl App {
         }
     }
 
+    /// A new quadro (a Kanban note the plugin also reads) or an Excalidraw
+    /// drawing (`.excalidraw.md`) in `folder`, opened and named.
+    pub fn new_quadro(&mut self, folder: &str, drawing: bool) {
+        let Some(v) = &self.vault else { return };
+        let name = if drawing { "Desenho" } else { "Quadro" };
+        let base = if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") };
+        let (path, text) = if drawing {
+            (v.available_path(&base, "excalidraw.md"), ateliet_core::quadro::excalidraw::new_md())
+        } else {
+            (v.available_path(&base, "md"), crate::quadro_ui::new_board_text())
+        };
+        if let Err(e) = v.write(&path, &text) {
+            self.toast(format!("Não foi possível criar {path}: {e}"));
+            return;
+        }
+        v.index.write().unwrap().update(std::slice::from_ref(&path));
+        self.vault.as_mut().unwrap().rescan();
+        self.open(&path, true);
+        let stem = path.rsplit('/').next().unwrap_or(&path).trim_end_matches(".md").to_string();
+        self.ask = Some(Ask { title: if drawing { "Nome do desenho".into() } else { "Nome do quadro".into() }, value: stem, kind: AskKind::Rename(path) });
+    }
+
     /// A Clip Studio file as a new storyboard beside the active note.
     pub fn new_board_from_clip(&mut self, file: &std::path::Path) {
         let Some(v) = &self.vault else { return };
@@ -716,6 +768,9 @@ impl App {
                 t.path = to.clone();
             } else if let Some(rest) = t.path.strip_prefix(&prefix) {
                 t.path = format!("{to}/{rest}");
+            }
+            if let Some(q) = t.quadro.as_mut() {
+                q.moved(&t.path, v.abs(&t.path));
             }
         }
         let mut touched: Vec<String> = moves.iter().flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
@@ -861,7 +916,7 @@ impl App {
 
     /// Templater's "replace templates in the active file".
     pub fn replace_templates(&mut self, ctx: &egui::Context) {
-        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none()) else { return };
+        let Some(t) = self.tabs.get(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()) else { return };
         let path = t.path.clone();
         let text = t.text.clone();
         self.save_tab(self.active);
@@ -1313,7 +1368,7 @@ impl App {
     fn drops_and_paste(&mut self, ctx: &egui::Context) {
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         let board = self.tabs.get(self.active).is_some_and(|t| t.board.is_some());
-        let note = self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
+        let note = self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.quadro.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
         if !dropped.is_empty() && !self.images_mode {
             if board {
                 if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
@@ -1421,6 +1476,25 @@ impl App {
                 }
             }
             *sc_actions = acts;
+            return;
+        }
+        if self.tabs.get(self.active).is_some_and(|t| t.quadro.is_some()) {
+            let outs = {
+                let Some(v) = self.vault.as_ref() else { return };
+                let mut cx = crate::quadro_ui::Cx { vault: v, caches: &mut self.caches, palette: p };
+                self.tabs[self.active].quadro.as_mut().unwrap().ui(ui, &mut cx)
+            };
+            for o in outs {
+                match o {
+                    crate::quadro_ui::Out::Open(link) => self.open_link(&link, true),
+                    crate::quadro_ui::Out::Toast(t) => self.toast(t),
+                    crate::quadro_ui::Out::Rescan => {
+                        if let Some(v) = self.vault.as_mut() {
+                            v.rescan();
+                        }
+                    }
+                }
+            }
             return;
         }
         if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {

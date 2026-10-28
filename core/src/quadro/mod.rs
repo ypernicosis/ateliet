@@ -273,6 +273,19 @@ pub fn is_quadro_file(abs: &Path) -> bool {
     detect(&name, &text).is_some()
 }
 
+/// The bytes of a `data:…;base64,…` URL.
+pub fn data_url_bytes(url: &str) -> Option<Vec<u8>> {
+    use base64::Engine;
+    let b64 = url.split_once(',')?.1;
+    base64::engine::general_purpose::STANDARD.decode(b64.trim()).ok()
+}
+
+/// Bytes as a `data:` URL.
+pub fn data_url(mime: &str, bytes: &[u8]) -> String {
+    use base64::Engine;
+    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
 /// Write atomically (a temporary file beside it, then a rename).
 pub fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(d) = path.parent() {
@@ -293,4 +306,23 @@ pub fn new_board_text(columns: &[&str]) -> String {
     }
     b.default_layout();
     b.write()
+}
+
+#[cfg(test)]
+mod tests {
+    /// Files written by the plugins themselves come out the same when read
+    /// and written back unchanged (`QUADRO_FIXTURES=<folder>`).
+    #[test]
+    fn plugin_files_round_trip() {
+        let Ok(dir) = std::env::var("QUADRO_FIXTURES") else { return };
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            let Ok(mut b) = super::Board::parse(&name, &text) else { continue };
+            assert_eq!(b.write(), text, "{name}");
+            n += 1;
+        }
+        assert!(n > 0, "no quadro files in QUADRO_FIXTURES");
+    }
 }
