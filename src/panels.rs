@@ -1730,6 +1730,14 @@ pub fn settings_window(app: &mut App, ctx: &egui::Context) {
                                 None => ui.label(RichText::new("Nenhuma biblioteca compartilhada em uso.").size(11.5).color(p.faint)),
                             };
                             ui.add_space(6.0);
+                            let mut show_vault = st["show_vault"].as_bool().unwrap_or(false);
+                            kit::setting(ui, "Imagens do cofre no modo imagens", "Desligado, o modo imagens mostra só a biblioteca (os downloads do Pinterest) e as pastas de fora do cofre. O painel de imagens da escrita continua com todas.", p, |ui| {
+                                if kit::toggle(ui, &mut show_vault, p).changed() {
+                                    crate::images_ui::ImagesState::save_settings(&root, serde_json::json!({ "show_vault": show_vault }));
+                                    app.images.show_vault = show_vault;
+                                }
+                            });
+                            ui.add_space(6.0);
                             rescan |= crate::settings_pages::copy_library_ui(app, ui, &root, p);
                             ui.add_space(10.0);
                             ui.label(RichText::new("Pastas de fora do cofre").font(kit::medium(13.0)).color(p.text));

@@ -65,6 +65,9 @@ pub struct ImageEntry {
     /// Parent folder: vault-relative ("" is the vault root) or absolute.
     pub folder: String,
     pub mtime: i64,
+    /// When the file was saved (created); its change time where the system
+    /// does not keep that.
+    pub created: i64,
     pub size: u64,
     pub width: u32,
     pub height: u32,
@@ -80,6 +83,7 @@ pub struct Found {
     pub abs: PathBuf,
     pub folder: String,
     pub mtime: i64,
+    pub created: i64,
     pub size: u64,
     pub external: bool,
     pub origin: Origin,
@@ -122,7 +126,9 @@ pub fn describe(source: &Source, abs: &Path) -> Option<Found> {
     } else {
         key.rsplit_once('/').map(|(f, _)| f.to_string()).unwrap_or_default()
     };
-    Some(Found { key, abs: abs.to_path_buf(), folder, mtime: mtime_ms(&meta), size: meta.len(), external: source.external, origin: source.origin })
+    let mtime = mtime_ms(&meta);
+    let created = meta.created().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as i64).unwrap_or(mtime);
+    Some(Found { key, abs: abs.to_path_buf(), folder, mtime, created, size: meta.len(), external: source.external, origin: source.origin })
 }
 
 /// Every picture under the sources. Dot-folders (`.obsidian`, `.trash`,
@@ -351,6 +357,7 @@ impl Index {
                     name: f.abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
                     folder: f.folder.clone(),
                     mtime: f.mtime,
+                    created: f.created,
                     size: f.size,
                     width: r.width,
                     height: r.height,
@@ -486,7 +493,7 @@ mod tests {
     use super::*;
 
     fn entry(key: &str) -> ImageEntry {
-        ImageEntry { key: key.into(), abs: format!("/v/{key}"), name: key.into(), folder: String::new(), mtime: 1, size: 1, width: 1, height: 1, external: false, origin: Origin::Vault }
+        ImageEntry { key: key.into(), abs: format!("/v/{key}"), name: key.into(), folder: String::new(), mtime: 1, created: 1, size: 1, width: 1, height: 1, external: false, origin: Origin::Vault }
     }
 
     #[test]

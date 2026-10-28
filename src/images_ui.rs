@@ -182,6 +182,39 @@ pub struct ImagesState {
     pub notice: Option<String>,
     /// "Similar pictures" asked before the scan finished.
     pending_similar: Option<String>,
+    /// Whether the vault's own pictures show in image mode (off: only the
+    /// shared library, the external folders and the vault's Pinterest folder).
+    pub show_vault: bool,
+    /// The order of the pictures: saved last first, saved first first, or shuffled.
+    pub order: Order,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Order {
+    Newest,
+    Oldest,
+    Shuffled(u64),
+}
+
+impl Order {
+    fn from_setting(v: &serde_json::Value) -> Order {
+        match v.as_str() {
+            Some("oldest") => Order::Oldest,
+            Some("shuffle") => Order::Shuffled(new_seed()),
+            _ => Order::Newest,
+        }
+    }
+    fn setting(self) -> &'static str {
+        match self {
+            Order::Newest => "newest",
+            Order::Oldest => "oldest",
+            Order::Shuffled(_) => "shuffle",
+        }
+    }
+}
+
+fn new_seed() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1
 }
 
 impl Default for ImagesState {
@@ -215,6 +248,8 @@ impl Default for ImagesState {
             col_edit: None,
             notice: None,
             pending_similar: None,
+            show_vault: false,
+            order: Order::Newest,
         }
     }
 }
@@ -296,6 +331,11 @@ impl ImagesState {
             "auto" => ateliet_core::pictogrep::detect(),
             path => Some(ateliet_core::pictogrep::Home::new(PathBuf::from(path))).filter(|h| h.root.is_dir()),
         };
+        self.show_vault = st["show_vault"].as_bool().unwrap_or(false);
+        if self.order.setting() != st["order"].as_str().unwrap_or("newest") {
+            self.order = Order::from_setting(&st["order"]);
+        }
+        self.shown_key = String::from("\u{0}");
         let external: Vec<String> = st["external"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
         self.collections = shared.as_ref().map(|h| ateliet_core::pictogrep::collection_names(h).into_iter().map(|n| {
             let members = ateliet_core::pictogrep::collection_images(h, &n).into_iter().map(|p| p.to_string_lossy().to_string()).collect();
@@ -398,13 +438,14 @@ impl ImagesState {
     }
 
     fn refresh_shown(&mut self) {
-        let key = format!("{:?}|{:?}|{}|{:?}|{}", self.folder, self.collection, self.query, self.similar_to, self.entries.len());
+        let key = format!("{:?}|{:?}|{}|{:?}|{}|{}|{:?}", self.folder, self.collection, self.query, self.similar_to, self.entries.len(), self.show_vault, self.order);
         if key == self.shown_key {
             return;
         }
         self.shown_key = key;
         let members = self.collection.as_ref().and_then(|c| self.collections.iter().find(|x| &x.0 == c)).map(|x| &x.1);
         let candidates: Vec<usize> = (0..self.entries.len())
+            .filter(|&i| self.visible(&self.entries[i]))
             .filter(|&i| self.folder.as_ref().is_none_or(|f| &self.entries[i].folder == f))
             .filter(|&i| match (&self.collection, members) {
                 (None, _) => true,
@@ -422,7 +463,15 @@ impl ImagesState {
             }
         } else if self.query.trim().is_empty() {
             let mut c = candidates;
-            c.sort_by_key(|&i| std::cmp::Reverse(self.entries[i].mtime));
+            match self.order {
+                Order::Newest => c.sort_by_key(|&i| std::cmp::Reverse(self.entries[i].created)),
+                Order::Oldest => c.sort_by_key(|&i| self.entries[i].created),
+                Order::Shuffled(seed) => {
+                    // the same shuffle until asked again, whatever the scan order
+                    c.sort_by(|&a, &b| self.entries[a].key.cmp(&self.entries[b].key));
+                    images::shuffle(&mut c, seed);
+                }
+            }
             c
         } else {
             let words = images::query_words(&self.query);
@@ -469,11 +518,24 @@ impl ImagesState {
         }
     }
 
+    /// Whether a picture shows in image mode: the vault's own only when
+    /// asked for (its Pinterest folder always, where downloads go without
+    /// a shared library).
+    pub fn visible(&self, e: &ImageEntry) -> bool {
+        self.show_vault || e.origin != ateliet_core::images::Origin::Vault || e.key.starts_with("Pinterest/")
+    }
+
+    /// Change and keep the order of the pictures.
+    pub fn set_order(&mut self, o: Order) {
+        self.order = o;
+        Self::save_settings(&self.root, serde_json::json!({ "order": o.setting() }));
+    }
+
     /// Folders with pictures: (folder, count, cover index).
     pub fn folders(&self) -> Vec<(String, usize, usize)> {
         let mut m: HashMap<&str, (usize, usize, i64)> = HashMap::new();
         // the shared library has its own rows (its collections)
-        for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.origin != ateliet_core::images::Origin::Shared) {
+        for (i, e) in self.entries.iter().enumerate().filter(|(_, e)| e.origin != ateliet_core::images::Origin::Shared && self.visible(e)) {
             let f = m.entry(e.folder.as_str()).or_insert((0, i, i64::MIN));
             f.0 += 1;
             if e.mtime > f.2 {
@@ -536,7 +598,7 @@ impl ImagesState {
         });
         ui.add_space(8.0);
         ui.spacing_mut().item_spacing.y = 2.0;
-        let all = self.entries.len();
+        let all = self.entries.iter().filter(|e| self.visible(e)).count();
         if kit::Row::new("Todas as imagens").icon(icons::IMAGES).trailing(all.to_string()).selected(self.folder.is_none() && self.collection.is_none() && !self.mb.open).show(ui, p).clicked() {
             self.close_moodboards();
             self.folder = None;
@@ -773,6 +835,34 @@ impl ImagesState {
                 ui.label(kit::icon(icons::LAYOUT_GRID, 13.0).color(p.faint));
                 ui.spacing_mut().slider_width = 90.0;
                 ui.add(egui::Slider::new(&mut self.cell, 90.0..=320.0).show_value(false)).on_hover_text("Tamanho das miniaturas");
+                ui.add_space(4.0);
+                // the order: by when they were saved, or shuffled
+                let (glyph, tip) = match self.order {
+                    Order::Newest => (icons::CALENDAR_CLOCK, "Salvas por último primeiro"),
+                    Order::Oldest => (icons::CALENDAR_RANGE, "Na ordem em que foram salvas"),
+                    Order::Shuffled(_) => (icons::SHUFFLE, "Embaralhadas"),
+                };
+                let or = kit::icon_button_sized(ui, glyph, tip, false, p, 26.0, 14.0);
+                let oid = ui.make_persistent_id("images-order");
+                if or.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(oid));
+                }
+                let mut pick = None;
+                egui::popup_below_widget(ui, oid, &or, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(220.0);
+                    for (o, g, l) in [(Order::Newest, icons::CALENDAR_CLOCK, "Salvas por último primeiro"), (Order::Oldest, icons::CALENDAR_RANGE, "Na ordem em que foram salvas"), (Order::Shuffled(0), icons::SHUFFLE, "Embaralhar")] {
+                        let on = std::mem::discriminant(&o) == std::mem::discriminant(&self.order);
+                        if kit::menu_entry(ui, g, l, if on { "✓" } else { "" }, true, false, p) {
+                            pick = Some(o);
+                        }
+                    }
+                });
+                if matches!(self.order, Order::Shuffled(_)) && kit::icon_button_sized(ui, icons::REFRESH_CW, "Embaralhar de novo", false, p, 26.0, 14.0).clicked() {
+                    pick = Some(Order::Shuffled(0));
+                }
+                if let Some(o) = pick {
+                    self.set_order(if let Order::Shuffled(_) = o { Order::Shuffled(new_seed()) } else { o });
+                }
                 if !self.selection.is_empty() {
                     ui.add_space(8.0);
                     ui.label(RichText::new(format!("{} {}", self.selection.len(), if self.selection.len() == 1 { "selecionada" } else { "selecionadas" })).color(p.muted));
