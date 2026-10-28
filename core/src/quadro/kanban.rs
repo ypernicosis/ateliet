@@ -144,6 +144,7 @@ pub fn parse(text: &str) -> Result<Board, String> {
     let quadro = match find_block(&lines, QUADRO, false) {
         Some((v, s, e)) => {
             lines.drain(s..=e);
+            b.kept.quadro_block = true;
             v
         }
         None => Value::Null,
@@ -252,6 +253,12 @@ fn f(v: &Value, k: &str, d: f32) -> f32 {
 
 /// The Quadro's own data: column positions (matched by title, then by
 /// order), loose cards, drawings and their pictures.
+/// Put back the Quadro's data kept elsewhere (when the plugin rewrote the
+/// file without it).
+pub fn restore(b: &mut Board, q: &Value) {
+    read_quadro(b, q);
+}
+
 fn read_quadro(b: &mut Board, q: &Value) {
     if !q.is_object() {
         return;
@@ -296,8 +303,8 @@ fn read_quadro(b: &mut Board, q: &Value) {
     }
 }
 
-fn quadro_json(b: &Board) -> Option<String> {
-    let bound = b.bound_ids();
+/// The Quadro's own data (None when a plain Kanban board has nothing more).
+pub fn quadro_value(b: &Board) -> Option<Value> {
     let elements: Vec<Value> = b.elements.iter().map(|e| e.to_value()).collect();
     if elements.is_empty() && b.cards.is_empty() && b.is_default_layout() {
         return None;
@@ -324,8 +331,11 @@ fn quadro_json(b: &Board) -> Option<String> {
             _ => None,
         })
         .collect();
-    let _ = bound;
-    let v = json!({ "version": 1, "lanes": lanes, "cards": cards, "elements": elements, "files": files });
+    Some(json!({ "version": 1, "lanes": lanes, "cards": cards, "elements": elements, "files": files }))
+}
+
+fn quadro_json(b: &Board) -> Option<String> {
+    let v = quadro_value(b)?;
     // inside a %% comment and a code fence: no "%%" or "```" may appear
     Some(serde_json::to_string(&v).unwrap_or_default().replace('`', "\\u0060").replace('%', "\\u0025"))
 }
@@ -455,6 +465,22 @@ mod tests {
         assert_eq!(back.lanes[0].cards[0].id, target);
         // and writes the same again
         assert_eq!(back.write(), text);
+    }
+
+    #[test]
+    fn restores_what_the_plugin_dropped() {
+        let mut b = parse(PLUGIN).unwrap();
+        let mut c = Card::new("solto");
+        c.x = 10.0;
+        b.cards.push(c);
+        b.lanes[0].x = 50.0;
+        let kept = quadro_value(&b).unwrap();
+        // the plugin saved the board: the block is gone
+        let mut again = parse(PLUGIN).unwrap();
+        assert!(!again.kept.quadro_block && again.cards.is_empty());
+        restore(&mut again, &kept);
+        assert_eq!(again.cards.len(), 1);
+        assert_eq!(again.lanes[0].x, 50.0);
     }
 
     #[test]

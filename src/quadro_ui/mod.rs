@@ -195,6 +195,7 @@ pub struct QuadroEditor {
     pending_fit: Option<String>,
     pending_dup: bool,
     props_open: bool,
+    backup: Option<PathBuf>,
     pub out: Vec<Out>,
 }
 
@@ -238,6 +239,7 @@ impl QuadroEditor {
             pending_fit: None,
             pending_dup: false,
             props_open: false,
+            backup: None,
             out: Vec::new(),
         })
     }
@@ -245,8 +247,14 @@ impl QuadroEditor {
     /// The file was renamed or moved.
     pub fn moved(&mut self, path: &str, abs: PathBuf) {
         if self.path != path {
+            let old = self.backup.take();
             self.path = path.to_string();
             self.abs = abs;
+            if let Some(o) = old {
+                let new = o.with_file_name(format!("{}.json", self.path.replace('/', "__")));
+                let _ = std::fs::rename(&o, &new);
+                self.backup = Some(new);
+            }
             self.disk_mtime = std::fs::metadata(&self.abs).and_then(|m| m.modified()).ok();
         }
     }
@@ -260,12 +268,42 @@ impl QuadroEditor {
         self.board.format == Format::Kanban
     }
 
+    /// Where a Kanban quadro's own data is kept besides the file
+    /// (`<config>/ateliet/quadro/`): the Kanban plugin drops the
+    /// `%% ateliet:quadro %%` block when it rewrites the board, and the
+    /// Quadro puts it back from there.
+    pub fn set_backup_dir(&mut self, dir: PathBuf) {
+        self.backup = Some(dir.join(format!("{}.json", self.path.replace('/', "__"))));
+        if !self.is_kanban() || self.board.kept.quadro_block {
+            return;
+        }
+        let Some(v) = self.backup.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok()) else { return };
+        ateliet_core::quadro::kanban::restore(&mut self.board, &v);
+        self.changed();
+        self.out.push(Out::Toast("O arquivo foi regravado pelo plugin Kanban sem os desenhos e cartões soltos do Quadro; eles foram restaurados.".into()));
+    }
+
+    fn write_backup(&self) {
+        let Some(p) = &self.backup else { return };
+        match ateliet_core::quadro::kanban::quadro_value(&self.board) {
+            Some(v) => {
+                let _ = ateliet_core::quadro::write_atomic(p, &v.to_string());
+            }
+            None => {
+                let _ = std::fs::remove_file(p);
+            }
+        }
+    }
+
     pub fn save(&mut self) {
         self.commit_edit();
         if !self.dirty {
             return;
         }
         let text = self.board.write();
+        if self.is_kanban() {
+            self.write_backup();
+        }
         match ateliet_core::quadro::write_atomic(&self.abs, &text) {
             Ok(()) => {
                 self.dirty = false;
@@ -337,11 +375,20 @@ impl QuadroEditor {
         self.disk_mtime = now;
         let Ok(text) = std::fs::read_to_string(&self.abs) else { return };
         match Board::parse(&self.path, &text) {
-            Ok(b) => {
+            Ok(mut b) => {
                 self.checkpoint();
+                // the Kanban plugin saved the board and left out the Quadro's part
+                let lost = b.format == Format::Kanban && !b.kept.quadro_block;
+                let kept = if lost { ateliet_core::quadro::kanban::quadro_value(&self.board) } else { None };
+                if let Some(v) = &kept {
+                    ateliet_core::quadro::kanban::restore(&mut b, v);
+                }
                 self.board = b;
                 self.after_history();
                 self.dirty = false;
+                if kept.is_some() {
+                    self.changed();
+                }
                 self.out.push(Out::Toast(format!("{} mudou no disco e foi relido.", self.title())));
             }
             Err(e) => self.error = Some(e),

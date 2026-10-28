@@ -117,6 +117,8 @@ pub struct Kept {
     pub frontmatter: String,
     /// Kanban: the settings (`%% kanban:settings %%`).
     pub settings: Map<String, Value>,
+    /// Kanban: the file had a `%% ateliet:quadro %%` block.
+    pub quadro_block: bool,
     /// Kanban: how continuation lines of a card are indented.
     pub indent: String,
     /// Kanban: the archive's heading, and whether the file had one.
@@ -311,18 +313,20 @@ pub fn new_board_text(columns: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     /// Files written by the plugins themselves come out the same when read
-    /// and written back unchanged (`QUADRO_FIXTURES=<folder>`).
+    /// and written back unchanged (`core/tests/quadro/`, and the folder in
+    /// `QUADRO_FIXTURES` when set).
     #[test]
     fn plugin_files_round_trip() {
-        let Ok(dir) = std::env::var("QUADRO_FIXTURES") else { return };
+        let mut dirs = vec![concat!(env!("CARGO_MANIFEST_DIR"), "/tests/quadro").to_string()];
+        dirs.extend(std::env::var("QUADRO_FIXTURES").ok());
         let mut n = 0;
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
+        for e in dirs.iter().flat_map(|d| std::fs::read_dir(d).unwrap()).flatten() {
             let name = e.file_name().to_string_lossy().to_string();
             let text = std::fs::read_to_string(e.path()).unwrap();
             let Ok(mut b) = super::Board::parse(&name, &text) else { continue };
             assert_eq!(b.write(), text, "{name}");
             n += 1;
         }
-        assert!(n > 0, "no quadro files in QUADRO_FIXTURES");
+        assert!(n >= 3, "the plugin files were not found");
     }
 }

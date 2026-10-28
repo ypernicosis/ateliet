@@ -379,7 +379,12 @@ impl App {
         };
         let quadro = if is_quadro {
             match crate::quadro_ui::QuadroEditor::open(path, v.abs(path)) {
-                Ok(q) => Some(Box::new(q)),
+                Ok(mut q) => {
+                    if let Some(c) = &self.cfg {
+                        q.set_backup_dir(c.dir.join("ateliet").join("quadro"));
+                    }
+                    Some(Box::new(q))
+                }
                 Err(e) => {
                     self.toast(format!("Não foi possível abrir {path}: {e}"));
                     return;

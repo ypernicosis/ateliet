@@ -110,7 +110,7 @@ impl QuadroEditor {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if kit::icon_button(ui, icons::IMAGE_DOWN, "Exportar PNG (Ctrl+Shift+E): a seleção, ou tudo", self.export.is_some(), p).clicked() {
+                if kit::icon_button(ui, icons::IMAGE_DOWN, "Exportar PNG: a seleção, ou tudo", self.export.is_some(), p).clicked() {
                     self.export_png(cx);
                 }
                 if kit::icon_button(ui, icons::MAXIMIZE, "Ajustar à tela (Shift+1)", false, p).clicked() {

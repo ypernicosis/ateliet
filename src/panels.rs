@@ -928,7 +928,8 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             Some(crate::sc::View::Pagina(_)) => icons::LAYERS,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
-                            None if t.quadro.is_some() => icons::SQUARE_KANBAN,
+                            None if t.quadro.as_ref().is_some_and(|q| q.is_kanban()) => icons::SQUARE_KANBAN,
+                            None if t.quadro.is_some() => icons::PEN_TOOL,
                             None => icons::FILE_TEXT,
                         };
                         let cy = rect.center().y - 1.0;

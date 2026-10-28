@@ -891,9 +891,6 @@ impl QuadroEditor {
         if cmd_shift(egui::Key::OpenBracket) {
             self.reorder(false);
         }
-        if cmd_shift(egui::Key::E) {
-            self.export_png(cx);
-        }
         // copy, cut, paste (the window turns Ctrl+C/X/V into these events)
         let events: Vec<egui::Event> = ui.input(|i| i.events.clone());
         let mut pasted_text = false;
