@@ -6,7 +6,8 @@
 //! Families: `Proportional` (Inter Regular), `"medium"`, `"bold"` (Inter
 //! SemiBold), `"italic"`, `"icons"` (Lucide; see `icons.rs`); the serifs
 //! `"cormorant"`, `"cormorant-italic"`, `"cormorant-bold"` (map labels) and
-//! `"garamond"`, `"garamond-italic"` (typeset pages).
+//! `"garamond"`, `"garamond-italic"`, `"garamond-bold"` (typeset pages and
+//! math formulas).
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::sync::Arc;
@@ -82,6 +83,28 @@ fn first(paths: &[&str]) -> Option<Vec<u8>> {
 }
 
 pub fn install(ctx: &egui::Context) {
+    ctx.set_fonts(definitions());
+}
+
+/// Fonts a theme asks for, found on the system or in its CSS: the notes'
+/// text (regular, bold, italic), code, and the interface.
+#[derive(Clone, Default, PartialEq)]
+pub struct ThemeFonts {
+    pub text: [Option<(Arc<Vec<u8>>, u32)>; 3],
+    pub mono: Option<(Arc<Vec<u8>>, u32)>,
+    pub interface: [Option<(Arc<Vec<u8>>, u32)>; 3],
+}
+
+/// The app's font families (see the module's notes).
+pub fn definitions() -> FontDefinitions {
+    definitions_with(&ThemeFonts::default())
+}
+
+/// The families with a theme's fonts first: `"theme-text"`,
+/// `"theme-text-bold"`, `"theme-text-italic"` and `"theme-mono"` are the
+/// notes' (they fall back to Inter and the monospace when the theme names
+/// none), and the interface families when it names an interface font.
+pub fn definitions_with(theme: &ThemeFonts) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let builtin: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let builtin_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
@@ -98,6 +121,7 @@ pub fn install(ctx: &egui::Context) {
     put("cormorant-bold", FontData::from_static(CORMORANT_BOLD));
     put("garamond", FontData::from_static(GARAMOND));
     put("garamond-italic", FontData::from_static(GARAMOND_ITALIC));
+    put("garamond-bold", FontData::from_static(GARAMOND_BOLD));
     let sys = first(SYSTEM_SANS).map(|d| put("sys-sans", FontData::from_owned(d))).is_some();
     let mono = first(MONO).map(|d| put("sys-mono", FontData::from_owned(d))).is_some();
 
@@ -115,13 +139,41 @@ pub fn install(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("italic".into()), chain("inter-italic"));
-    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic"] {
+    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold"] {
         fonts.families.insert(FontFamily::Name(f.into()), chain(f));
     }
     fonts.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into(), "inter".into()]);
     let mut m: Vec<String> = if mono { vec!["sys-mono".into()] } else { Vec::new() };
     m.extend(builtin_mono);
     m.push("inter".into());
-    fonts.families.insert(FontFamily::Monospace, m);
-    ctx.set_fonts(fonts);
+    fonts.families.insert(FontFamily::Monospace, m.clone());
+    // the theme's fonts, in front of the chains they replace
+    let mut put_theme = |name: &str, f: &Option<(Arc<Vec<u8>>, u32)>| -> Option<String> {
+        let (data, index) = f.as_ref()?;
+        let mut fd = FontData::from_owned(data.as_ref().clone());
+        fd.index = *index;
+        fonts.font_data.insert(name.to_string(), Arc::new(fd));
+        Some(name.to_string())
+    };
+    let front = |first: Option<String>, mut rest: Vec<String>| {
+        if let Some(f) = first {
+            rest.insert(0, f);
+        }
+        rest
+    };
+    let (t0, t1, t2) = (put_theme("theme-text-0", &theme.text[0]), put_theme("theme-text-1", &theme.text[1]), put_theme("theme-text-2", &theme.text[2]));
+    let tm = put_theme("theme-mono-0", &theme.mono);
+    let (i0, i1, i2) = (put_theme("theme-ui-0", &theme.interface[0]), put_theme("theme-ui-1", &theme.interface[1]), put_theme("theme-ui-2", &theme.interface[2]));
+    // a missing bold or italic face: the regular one, before Inter's
+    fonts.families.insert(FontFamily::Name("theme-text".into()), front(t0.clone(), chain("inter")));
+    fonts.families.insert(FontFamily::Name("theme-text-bold".into()), front(t1.or(t0.clone()), chain("inter-semibold")));
+    fonts.families.insert(FontFamily::Name("theme-text-italic".into()), front(t2.or(t0), chain("inter-italic")));
+    fonts.families.insert(FontFamily::Name("theme-mono".into()), front(tm, m));
+    if i0.is_some() {
+        fonts.families.insert(FontFamily::Proportional, front(i0.clone(), chain("inter")));
+        fonts.families.insert(FontFamily::Name("medium".into()), front(i1.clone().or(i0.clone()), chain("inter-medium")));
+        fonts.families.insert(FontFamily::Name("bold".into()), front(i1.or(i0.clone()), chain("inter-semibold")));
+        fonts.families.insert(FontFamily::Name("italic".into()), front(i2.or(i0), chain("inter-italic")));
+    }
+    fonts
 }

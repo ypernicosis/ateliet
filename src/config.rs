@@ -131,11 +131,13 @@ pub struct Appearance {
     pub css_theme: String,
     /// Its colour variables and the enabled snippets': (light, dark).
     pub theme_vars: Option<std::sync::Arc<(ateliet_core::css_theme::Vars, ateliet_core::css_theme::Vars)>>,
+    /// Fonts the theme and snippets carry in their CSS (`@font-face`).
+    pub theme_fonts: std::sync::Arc<Vec<ateliet_core::css_theme::EmbeddedFont>>,
 }
 
 impl Default for Appearance {
     fn default() -> Self {
-        Appearance { dark: false, accent: [0x8a, 0x5c, 0xf5], font_size: 16.0, css_theme: String::new(), theme_vars: None }
+        Appearance { dark: false, accent: [0x8a, 0x5c, 0xf5], font_size: 16.0, css_theme: String::new(), theme_vars: None, theme_fonts: Default::default() }
     }
 }
 
@@ -150,7 +152,7 @@ impl Appearance {
         };
         let accent = a["accentColor"].as_str().and_then(parse_hex).unwrap_or([0x8a, 0x5c, 0xf5]);
         let font_size = a["baseFontSize"].as_f64().map(|f| f as f32).unwrap_or(16.0).clamp(10.0, 30.0);
-        let mut ap = Appearance { dark, accent, font_size, css_theme: a["cssTheme"].as_str().unwrap_or("").to_string(), theme_vars: None };
+        let mut ap = Appearance { dark, accent, font_size, css_theme: a["cssTheme"].as_str().unwrap_or("").to_string(), theme_vars: None, theme_fonts: Default::default() };
         ap.load_css(cfg);
         ap
     }
@@ -174,6 +176,7 @@ impl Appearance {
             css += &fs::read_to_string(cfg.dir.join("snippets").join(format!("{s}.css"))).unwrap_or_default();
         }
         self.theme_vars = if css.contains("--") { Some(std::sync::Arc::new(ateliet_core::css_theme::variables(&css))) } else { None };
+        self.theme_fonts = std::sync::Arc::new(ateliet_core::css_theme::embedded_fonts(&css));
     }
 
     pub fn save(&self, cfg: &VaultConfig) {

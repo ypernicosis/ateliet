@@ -158,6 +158,11 @@ impl Host for RenderHost<'_> {
         image(ctx, self.vault, self.caches, target, self.source)
     }
 
+    fn abs_path(&self, target: &str) -> Option<std::path::PathBuf> {
+        let p = self.vault.abs(&self.vault.resolve(target, self.source)?);
+        p.exists().then_some(p)
+    }
+
     fn query(&mut self, lang: &str, source: &str) -> Value {
         let k = key(&[lang, source, self.source]);
         let origin = self.source.to_string();

@@ -2,7 +2,9 @@
 //! can use: the colour variables of Obsidian's palette
 //! (`--background-primary`, `--text-normal`, `--interactive-accent`…) for
 //! the light and the dark mode, with `var()`, `calc()`, `rgb()`/`hsl()` and
-//! the accent's `--accent-h/s/l` worked out.
+//! the accent's `--accent-h/s/l` worked out; the typography and spacing of
+//! the notes (`--font-text-theme`, `--h1-size`, `--line-height-normal`,
+//! `--file-line-width`…); and the fonts a theme embeds with `@font-face`.
 
 use std::collections::HashMap;
 
@@ -459,6 +461,155 @@ pub fn accent_vars(rgb: [u8; 3]) -> Vars {
     v
 }
 
+// ── typography ────────────────────────────────────────────────────────────
+
+/// What a theme says of the notes' type and spacing. Sizes are in pixels
+/// at the note's base size; `None` where the theme says nothing.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Typography {
+    /// Font families in order of preference (the CSS list).
+    pub text_font: Vec<String>,
+    pub mono_font: Vec<String>,
+    pub interface_font: Vec<String>,
+    pub line_height: Option<f32>,
+    /// Heading sizes as multiples of the base size, weights, colours.
+    pub heading_size: [Option<f32>; 6],
+    pub heading_weight: [Option<u16>; 6],
+    pub heading_color: [Option<[u8; 4]>; 6],
+    /// The readable line width (px).
+    pub line_width: Option<f32>,
+    /// Space between paragraphs, in multiples of the base size.
+    pub paragraph_spacing: Option<f32>,
+    pub bold_color: Option<[u8; 4]>,
+    pub italic_color: Option<[u8; 4]>,
+    pub link_color: Option<[u8; 4]>,
+    pub quote_border: Option<[u8; 4]>,
+    pub quote_border_width: Option<f32>,
+    pub bullet_color: Option<[u8; 4]>,
+    pub highlight: Option<[u8; 4]>,
+    /// Inline and block code size, as a multiple of the base size.
+    pub code_size: Option<f32>,
+}
+
+/// A length in pixels: px, em/rem (of `base`), %, or a bare number of `per`.
+pub fn length(v: &str, base: f32, per: f32) -> Option<f32> {
+    let v = v.trim();
+    let num = |s: &str| s.trim().parse::<f32>().ok();
+    if let Some(x) = v.strip_suffix("px") {
+        return num(x);
+    }
+    if let Some(x) = v.strip_suffix("rem").or_else(|| v.strip_suffix("em")) {
+        return num(x).map(|n| n * base);
+    }
+    if let Some(x) = v.strip_suffix('%') {
+        return num(x).map(|n| n / 100.0 * base);
+    }
+    if let Some(x) = v.strip_suffix("pt") {
+        return num(x).map(|n| n * 4.0 / 3.0);
+    }
+    num(v).map(|n| n * per)
+}
+
+/// A CSS font list: the families, without quotes and generic names.
+pub fn font_list(v: &str) -> Vec<String> {
+    split_commas(v)
+        .into_iter()
+        .map(|f| f.trim().trim_matches(['"', '\'']).trim().to_string())
+        .filter(|f| !f.is_empty() && !f.starts_with("var(") && !["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-sans-serif", "ui-serif", "ui-monospace", "inherit", "initial", "-apple-system", "BlinkMacSystemFont", "??"].contains(&f.as_str()))
+        .collect()
+}
+
+fn weight(v: &str) -> Option<u16> {
+    match v.trim() {
+        "normal" => Some(400),
+        "bold" => Some(700),
+        "bolder" => Some(800),
+        "lighter" => Some(300),
+        x => x.parse().ok(),
+    }
+}
+
+/// The typography a theme sets, for a base text size (px).
+pub fn typography(vars: &Vars, base: f32) -> Typography {
+    let get = |k: &str| vars.get(k).and_then(|v| resolve(vars, v, 0)).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let col = |k: &str| var_color(vars, k);
+    let fonts = |keys: &[&str]| keys.iter().find_map(|k| get(k).map(|v| font_list(&v)).filter(|l| !l.is_empty())).unwrap_or_default();
+    let mut t = Typography {
+        text_font: fonts(&["--font-text-theme", "--font-text-override", "--font-text"]),
+        mono_font: fonts(&["--font-monospace-theme", "--font-monospace-override", "--font-monospace"]),
+        interface_font: fonts(&["--font-interface-theme", "--font-interface-override", "--font-interface"]),
+        ..Default::default()
+    };
+    t.line_height = get("--line-height-normal").and_then(|v| if v.ends_with("px") || v.ends_with("em") { length(&v, base, 1.0).map(|px| px / base) } else { v.parse().ok() }).filter(|x| (1.0..=3.0).contains(x));
+    for i in 0..6 {
+        let n = i + 1;
+        t.heading_size[i] = get(&format!("--h{n}-size")).and_then(|v| length(&v, base, base)).map(|px| px / base).filter(|x| (0.6..=4.0).contains(x));
+        t.heading_weight[i] = get(&format!("--h{n}-weight")).and_then(|v| weight(&v));
+        t.heading_color[i] = col(&format!("--h{n}-color"));
+    }
+    t.line_width = get("--file-line-width").and_then(|v| length(&v, base, 1.0)).filter(|x| (300.0..=3000.0).contains(x));
+    t.paragraph_spacing = get("--p-spacing").and_then(|v| length(&v, base, base)).map(|px| px / base).filter(|x| (0.0..=4.0).contains(x));
+    t.bold_color = col("--bold-color");
+    t.italic_color = col("--italic-color");
+    t.link_color = col("--link-color");
+    t.quote_border = col("--blockquote-border-color");
+    t.quote_border_width = get("--blockquote-border-thickness").and_then(|v| length(&v, base, 1.0)).filter(|x| (0.0..=12.0).contains(x));
+    t.bullet_color = col("--list-marker-color");
+    t.highlight = col("--text-highlight-bg");
+    t.code_size = get("--code-size").and_then(|v| length(&v, base, base)).map(|px| px / base).filter(|x| (0.5..=1.5).contains(x));
+    t
+}
+
+/// A font a theme carries inside its CSS (`@font-face` with a `data:` URL).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbeddedFont {
+    pub family: String,
+    pub weight: u16,
+    pub italic: bool,
+    pub data: Vec<u8>,
+}
+
+/// The fonts embedded in a style sheet that can be used as they are
+/// (TrueType and OpenType; WOFF ones are skipped).
+pub fn embedded_fonts(css: &str) -> Vec<EmbeddedFont> {
+    use base64::Engine as _;
+    let mut out = Vec::new();
+    let mut rest = css;
+    while let Some(i) = rest.find("@font-face") {
+        rest = &rest[i + 10..];
+        let Some(open) = rest.find('{') else { break };
+        let Some(close) = rest[open..].find('}') else { break };
+        let body = &rest[open + 1..open + close];
+        rest = &rest[open + close..];
+        let prop = |name: &str| -> Option<&str> {
+            let k = body.find(name)?;
+            let after = body[k + name.len()..].trim_start().strip_prefix(':')?;
+            Some(after.split(';').next().unwrap_or(after).trim())
+        };
+        let Some(family) = prop("font-family").map(|f| f.trim_matches(['"', '\'']).to_string()) else { continue };
+        let weight = prop("font-weight").and_then(|w| weight(w.split_whitespace().next().unwrap_or(w))).unwrap_or(400);
+        let italic = prop("font-style").is_some_and(|s| s.contains("italic") || s.contains("oblique"));
+        // the src's data URLs, the first usable one
+        let Some(src_at) = body.find("src") else { continue };
+        let mut src = &body[src_at..];
+        while let Some(d) = src.find("data:") {
+            src = &src[d..];
+            let end = src.find([')', '"', '\'']).unwrap_or(src.len());
+            let url = &src[..end];
+            src = &src[end..];
+            let Some((_, b64)) = url.split_once("base64,") else { continue };
+            let clean: String = b64.chars().filter(|c| !c.is_whitespace()).collect();
+            let Ok(data) = base64::engine::general_purpose::STANDARD.decode(clean.as_bytes()) else { continue };
+            // TrueType, OpenType (CFF) or a collection; not WOFF
+            if data.len() > 12 && (data.starts_with(&[0, 1, 0, 0]) || data.starts_with(b"OTTO") || data.starts_with(b"true") || data.starts_with(b"ttcf")) {
+                out.push(EmbeddedFont { family: family.clone(), weight, italic, data });
+                break;
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,5 +652,38 @@ mod tests {
                 eprintln!("{:12} {mode:5} {}", e.file_name().to_string_lossy(), got.join(" "));
             }
         }
+    }
+
+    #[test]
+    fn typography_of_a_theme() {
+        let css = ":root { --font-text-theme: 'Literata', Georgia, serif; --h1-size: 2em; --h2-size: 1.5rem; --h3-size: 22px; --h1-weight: 400; --h2-color: #ff0000; --line-height-normal: 1.7; --file-line-width: 45rem; --p-spacing: 1.5rem; --bold-color: var(--h2-color); --code-size: 0.875em; --blockquote-border-thickness: 3px; }";
+        let (l, _) = variables(css);
+        let t = typography(&l, 16.0);
+        assert_eq!(t.text_font, ["Literata", "Georgia"]);
+        assert_eq!(t.heading_size[0], Some(2.0));
+        assert_eq!(t.heading_size[1], Some(1.5));
+        assert_eq!(t.heading_size[2], Some(22.0 / 16.0));
+        assert_eq!(t.heading_weight[0], Some(400));
+        assert_eq!(t.heading_color[1].map(|c| c[0]), Some(255));
+        assert_eq!(t.line_height, Some(1.7));
+        assert_eq!(t.line_width, Some(720.0));
+        assert_eq!(t.paragraph_spacing, Some(1.5));
+        assert_eq!(t.bold_color.map(|c| c[0]), Some(255), "through var()");
+        assert_eq!(t.code_size, Some(0.875));
+        assert_eq!(t.quote_border_width, Some(3.0));
+        assert_eq!(typography(&Vars::new(), 16.0), Typography::default());
+    }
+
+    #[test]
+    fn fonts_embedded_in_css() {
+        use base64::Engine as _;
+        let ttf = [0u8, 1, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 7, 7];
+        let woff = *b"wOFF0000000000";
+        let b = |d: &[u8]| base64::engine::general_purpose::STANDARD.encode(d);
+        let css = format!("@font-face {{ font-family: \"Nice\"; font-weight: 700; font-style: italic; src: url(data:font/woff;base64,{}) format('woff'), url(\"data:font/ttf;base64,{}\") format('truetype'); }} @font-face {{ font-family: Other; src: url(data:font/woff;base64,{}); }}", b(&woff), b(&ttf), b(&woff));
+        let f = embedded_fonts(&css);
+        assert_eq!(f.len(), 1, "the WOFF-only face is skipped");
+        assert_eq!((f[0].family.as_str(), f[0].weight, f[0].italic), ("Nice", 700, true));
+        assert_eq!(f[0].data, ttf);
     }
 }

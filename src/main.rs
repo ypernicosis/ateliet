@@ -17,6 +17,7 @@ mod kit;
 mod images_ui;
 mod live;
 mod markdown;
+mod media_ui;
 mod music;
 mod panels;
 mod quadro_ui;
@@ -24,6 +25,7 @@ mod sc;
 mod settings_pages;
 mod templater;
 mod theme;
+mod typo;
 mod update;
 mod vault;
 #[cfg(feature = "clip")]

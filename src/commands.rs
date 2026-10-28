@@ -279,10 +279,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::OpenDaily => app.open_daily(ateliet_core::datefmt::today().date()),
         Cmd::Align(a) => {
             if let Some(t) = app.tabs.get_mut(app.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()) {
-                if crate::align::TextAlign::of_note(&t.text) != a {
-                    t.text = a.set_on(&t.text);
-                    t.last_edit = Some(std::time::Instant::now());
-                }
+                crate::align::apply(ctx, t, a);
             }
         }
         Cmd::ToggleMode => {

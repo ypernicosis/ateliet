@@ -3,7 +3,7 @@
 //! has them, `\frac{a}{b}` as a/b, `\sqrt{x}` as √x. Not a typesetter, but a
 //! formula reads as one instead of as source.
 
-fn symbol(name: &str) -> Option<&'static str> {
+pub fn symbol(name: &str) -> Option<&'static str> {
     Some(match name {
         "alpha" => "α", "beta" => "β", "gamma" => "γ", "delta" => "δ", "epsilon" => "ε", "varepsilon" => "ε", "zeta" => "ζ", "eta" => "η",
         "theta" => "θ", "vartheta" => "ϑ", "iota" => "ι", "kappa" => "κ", "lambda" => "λ", "mu" => "μ", "nu" => "ν", "xi" => "ξ",
