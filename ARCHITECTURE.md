@@ -5,6 +5,7 @@
 │ main.rs     janela (eframe/glow), ícone, vault inicial                                                    │
 │ app.rs      estado: vault, abas, splits, histórico, salvamento, ações, arrastar/colar, modelos             │
 │ editor.rs · live.rs · markdown.rs   editor com realce, Live Preview por bloco, árvore e desenho do Markdown│
+│ align.rs · typo.rs · media_ui.rs    alinhamento por nota, tipografia do tema, players e PDF nas notas      │
 │ panels.rs · commands.rs · settings_pages.rs   barras laterais, paleta e atalhos, configurações             │
 │ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, moodboards, busca por descrição (CLIP)    │
 │ board_ui.rs, board_ui/   storyboard: quadros, camadas, pincéis, ferramentas, referências, exportações      │
@@ -21,7 +22,8 @@
 │   images.rs · clip.rs · pictogrep.rs · pinterest.rs · moodboard.rs   imagens, CLIP, Pictogrep, moodboards  │
 │   board/ · clipstudio.rs                          storyboard: documento, pintura, composição, .clip       │
 │   scriptorium/ · typeset/                         livros, enredo, mundo; composição de páginas e PDF       │
-│   css_theme.rs · texmath.rs · mermaid.rs          cores de temas, TeX → Unicode, fluxogramas               │
+│   css_theme.rs · texmath.rs · texlayout.rs        temas (cores, tipografia, fontes), TeX em texto e caixas │
+│   mermaid.rs, mermaid/ · media.rs                 diagramas Mermaid; páginas de PDF, vídeo pelo ffmpeg     │
 └───────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
