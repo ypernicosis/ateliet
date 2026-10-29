@@ -15,6 +15,8 @@
 //! - `board`    — storyboards: file format, brushes, compositing, tracing
 //! - `moodboard` — reference boards: documents, storage, layout and palettes
 
+pub mod canvas;
+pub mod capture;
 pub mod css_theme;
 pub mod mermaid;
 pub mod moodboard;
@@ -42,4 +44,5 @@ pub mod calendar;
 pub mod scriptorium;
 pub mod typeset;
 pub mod board;
+pub mod journal;
 pub mod quadro;
