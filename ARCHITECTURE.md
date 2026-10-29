@@ -80,6 +80,6 @@ Dataview, Templater, Calendar e o Moodboard do Pictogrep eram plugins e agora fa
 
 Eram o plugin Moodboard do Pictogrep. Os quadros continuam no formato e no lugar do plugin: com biblioteca compartilhada, `data/plugins/moodboard.json` da pasta do Pictogrep (as chaves `index`, `board:<id>` e `prefs`); sem ela, `.obsidian/ateliet/moodboard.json` no cofre. Uma imagem é guardada pelo id do Pictogrep (SHA-256 do caminho absoluto), então os quadros abrem nos dois apps. Cada gravação relê o arquivo e troca só as próprias chaves. O núcleo tem o documento, a geometria (rotação, caixas, alinhamento por guias, organizar, recorte) e a paleta; a interface desenha o quadro com o `Painter` do egui (imagens como malhas com UV, para girar, recortar e espelhar) e usa as prévias do modo imagens no tamanho em que aparecem.
 
-## Journal (proposta)
+## Leitor e Journal (propostas)
 
-O estudo e a arquitetura do modo Journal, com digitalização de notas manuscritas, trechos de EPUB e do Kindle e as ferramentas de colagem, estão em [docs/JOURNAL.md](docs/JOURNAL.md).
+O estudo e a arquitetura do modo Journal, com digitalização de notas manuscritas, trechos de EPUB e do Kindle e as ferramentas de colagem, estão em [docs/JOURNAL.md](docs/JOURNAL.md); o do Leitor (EPUB, PDF e quadrinhos), que vem antes, em [docs/LEITOR.md](docs/LEITOR.md).

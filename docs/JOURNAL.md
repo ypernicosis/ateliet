@@ -69,13 +69,14 @@ O Journal acrescenta o que o Pinterest não tem e a página de referência pede:
 │ journal_ui/   modo Journal: canvas, ferramentas, camadas, painéis de Notas, Imagens e Trechos    │
 │   mod.rs  estado (página, vista, seleção, desfazer, salvamento)   draw.rs  desenho               │
 │   input.rs  ponteiro e teclado    edit.rs  mudanças    panel.rs  barras, inspetor, menus         │
-│   cutout_ui.rs  editor de máscara   reader_ui.rs  leitor de EPUB   scan_ui.rs  digitalização     │
+│   cutout_ui.rs  editor de máscara   scan_ui.rs  digitalização                                    │
+│ reader_ui/    o Leitor (EPUB, PDF, HQ): ver LEITOR.md                                            │
 │ capture.rs    caixa de entrada: servidor local, ateliet://, clippings do Kindle, notificações    │
 └──────────────────────────────────────────────┬──────────────────────────────────────────────────┘
                                                │ chamadas diretas
 ┌──────────────────────────────────────────────▼──────────────────────────────────────────────────┐
 │ core/src/journal/   modelo, formato .md, papel, fluxo de texto, máscaras, adesivos, filtros, PNG │
-│ core/src/epub/      leitura de EPUB: OPF, espinha, sumário, XHTML → blocos, localizadores        │
+│ core/src/reader/    o Leitor: EPUB, PDF, HQ, localizadores, grifos (LEITOR.md)                   │
 │ core/src/capture/   trechos (modelo comum), caixa de entrada, clippings, notebook HTML           │
 │ core/src/ocr/       transcrição: Apple Vision, ONNX, API opcional; tratamento da imagem escaneada│
 │ (reaproveitados)    moodboard · board/brush · typeset · quadro/rough · images · clip · pictogrep  │
@@ -235,13 +236,9 @@ pub struct SourceRef {
 
 Cada trecho vira uma nota curta em `Trechos/` (pasta configurável), com o texto num callout `[!trecho]` e a fonte no frontmatter. Notas, e não um JSON escondido, porque assim os trechos ficam pesquisáveis, ligáveis e consultáveis pelo Dataview mesmo sem o Journal ("todos os trechos de tal livro", "trechos ainda não usados"). Quando um trecho é posto numa página, a página ganha um link para a nota do trecho, e o trecho ganha o backlink: de cada trecho dá para ver onde se escreveu sobre ele.
 
-### 7.1 EPUB (`core/src/epub/`, `src/journal_ui/reader_ui.rs`)
+### 7.1 EPUB, PDF e quadrinhos
 
-- **Leitura**: o EPUB é um ZIP (o `board/zip.rs` lê); `META-INF/container.xml` aponta o OPF; o OPF dá metadados, manifesto e espinha; `nav.xhtml` (EPUB 3) ou `toc.ncx` (EPUB 2) dá o sumário. Cada documento da espinha é convertido de XHTML em blocos (parágrafos, títulos, citações, listas, imagens, ênfases) por um leitor de XML pequeno (`quick-xml`, a única dependência nova aqui). O CSS do livro é ignorado; o texto é desenhado com a tipografia do tema.
-- **Biblioteca**: os EPUBs ficam onde o usuário quiser (no vault, em `Livros/`, ou numa pasta de fora). Cada livro aberto ganha (se o usuário quiser) uma nota de livro com capa, autor e uma consulta Dataview dos seus trechos; a nota fica compatível com as notas de livro que o Scriptorium e os plugins de leitura já usam.
-- **Leitor**: uma aba de leitura com rolagem contínua por capítulo, sumário à esquerda, busca no livro. Selecionar texto mostra uma barra com "Grifar", "Mandar ao Journal" e "Nova nota sobre isto".
-- **Localizador**: cada trecho guarda o índice na espinha, o caminho do elemento (no estilo do EPUB CFI) e os deslocamentos de texto, mais o próprio texto citado com algumas palavras antes e depois. Se o EPUB mudar (outra edição), o trecho é reencontrado pelo texto, como fazem os grifos da web. Clicar na fonte de um trecho abre o livro naquele ponto.
-- **DRM**: arquivos com `META-INF/encryption.xml` cifrando o conteúdo são recusados com uma mensagem clara.
+O leitor de livros, PDFs e quadrinhos virou um documento próprio, [LEITOR.md](LEITOR.md), e vem antes do Journal na ordem de trabalho. Ele produz os trechos de texto e os recortes de região que entram no Journal, com o mesmo `Snippet` e um `Locator` que aponta o lugar exato no livro.
 
 ### 7.2 Kindle
 
@@ -350,12 +347,12 @@ Exportação: PNG e PDF por página ou por caderno, pelo rasterizador e pelo PDF
 
 ## 11. Ordem de implementação
 
-Cada fase entrega algo usável sozinho e prepara a próxima.
+Cada fase entrega algo usável sozinho e prepara a próxima. O Leitor ([LEITOR.md](LEITOR.md), fases 1 a 5) vem antes de tudo: ele já guarda trechos e recortes no vault, e o Journal os recebe quando chegar.
 
 1. **Núcleo da página**: `journal/mod.rs`, o formato `.md` com o bloco JSON e testes de ida e volta byte a byte (como os do Quadro); `canvas.rs` extraído do moodboard; papéis e guias. Na interface, o modo Journal com imagens e texto simples, mover, girar, camadas, desfazer. Arrastar do modo imagens e do modo notas.
 2. **Aparência**: recorte por formas, laço e pincel; borda de adesivo, sombra, fita, borda rasgada; os quatro filtros novos no compositor; gaveta de adesivos.
 3. **Trechos**: o modelo `Snippet`, notas em `Trechos/`, caixa de entrada por pasta, esquema `ateliet://`, importação de `My Clippings.txt` e do HTML do caderno do Kindle, o atalho para iPhone. O painel Trechos.
-4. **EPUB**: leitor, sumário, seleção, localizadores, nota do livro.
+4. **Ler ao lado**: o Leitor e a página do Journal lado a lado, com arrastar trechos e recortes (LEITOR.md, fase 7).
 5. **Texto contornando imagens**: largura por linha no compositor, troca entre texto composto e editor no lugar, fontes manuscritas.
 6. **Digitalização**: perspectiva, limpeza, tinta separada; transcrição pelo Apple Vision; correção de linhas; motor ONNX e a opção pela API.
 7. **Recorte automático e servidor local**: segmentação de primeiro plano (Vision e ONNX); servidor HTTP com token e código QR; o serviço do macOS; o `ateliet.koplugin` e a extensão do KUAL. O plugin do KOReader pode adiantar-se para a fase 3, porque só depende do servidor e do modelo de trecho.
