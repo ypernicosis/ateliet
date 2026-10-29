@@ -191,22 +191,24 @@ fn align_of(it: &Item) -> egui::Align {
     }
 }
 
-/// The plain text as it is typed (the editor and the flow measure this).
-pub fn plain_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32) -> egui::text::LayoutJob {
-    let (reg, _, _, f) = font_of(it);
-    let lh = line_px(it, lay, k);
-    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: egui::FontId::new(lh * f, reg), color, line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
-    job.wrap.max_width = (it.w as f32 * k).max(4.0);
-    job.halign = align_of(it);
-    job
-}
-
 /// The text as it shows: `**bold**`, `*italic*`, `==highlight==` (a red
 /// pencil line under it), `[[links]]` and `#tags` in the accent.
 pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32) -> egui::text::LayoutJob {
+    md_job(it, text, lay, k, color, accent, false)
+}
+
+/// The text as it is typed: formatted as it will show, with the marks
+/// (`**`, `==`, `#`, `[[ ]]`, `- `) kept, faint, so every typed character
+/// is where the cursor expects it.
+pub fn live_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32) -> egui::text::LayoutJob {
+    md_job(it, text, lay, k, color, accent, true)
+}
+
+fn md_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32, live: bool) -> egui::text::LayoutJob {
     let (reg, bold, ital, f) = font_of(it);
     let lh = line_px(it, lay, k);
     let size = lh * f;
+    let mark = color.gamma_multiply(0.32);
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = (it.w as f32 * k).max(4.0);
     job.halign = align_of(it);
@@ -224,16 +226,29 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
         }
         let mut line = raw.to_string();
         let mut heading = false;
-        let t = line.trim_start();
-        if t.starts_with('#') && t.trim_start_matches('#').starts_with(' ') {
+        let t = raw.trim_start();
+        let lead = raw.len() - t.len();
+        // the line's own mark: a heading's hashes, a list's dash
+        let prefix: Option<(usize, &str)> = if t.starts_with('#') && t.trim_start_matches('#').starts_with(' ') {
             heading = true;
-            line = t.trim_start_matches('#').trim_start().to_string();
-        } else if let Some(r) = t.strip_prefix("- [ ] ") {
-            line = format!("☐ {r}");
-        } else if let Some(r) = t.strip_prefix("- [x] ") {
-            line = format!("☑ {r}");
-        } else if let Some(r) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
-            line = format!("• {r}");
+            let hashes = t.len() - t.trim_start_matches('#').len();
+            Some((lead + hashes + 1, ""))
+        } else if t.starts_with("- [ ] ") {
+            Some((lead + 6, "☐ "))
+        } else if t.starts_with("- [x] ") {
+            Some((lead + 6, "☑ "))
+        } else if t.starts_with("- ") || t.starts_with("* ") {
+            Some((lead + 2, "• "))
+        } else {
+            None
+        };
+        if let Some((n, shown)) = prefix {
+            if live {
+                job.append(&raw[..n], 0.0, fmt(&reg, mark, false));
+            } else if !shown.is_empty() {
+                job.append(shown, 0.0, fmt(&reg, color, false));
+            }
+            line = raw[n..].to_string();
         }
         let (mut b, mut i, mut m) = (heading, false, false);
         let mut buf = String::new();
@@ -246,18 +261,27 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
                 buf.clear();
             }
         };
+        // a mark: shown faint while typing, gone otherwise
+        let put_mark = |job: &mut egui::text::LayoutJob, s: &str, b: bool, i: bool| {
+            if live {
+                let fam = if b { &bold } else if i { &ital } else { &reg };
+                job.append(s, 0.0, fmt(fam, mark, false));
+            }
+        };
         while j < chars.len() {
             let c = chars[j];
             let next = chars.get(j + 1).copied();
             if c == '*' && next == Some('*') {
                 flush(&mut job, &mut buf, b, i, m, color);
                 b = !b;
+                put_mark(&mut job, "**", b, i);
                 j += 2;
                 continue;
             }
             if c == '=' && next == Some('=') {
                 flush(&mut job, &mut buf, b, i, m, color);
                 m = !m;
+                put_mark(&mut job, "==", b, i);
                 j += 2;
                 continue;
             }
@@ -268,6 +292,7 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
                 if opens || closes {
                     flush(&mut job, &mut buf, b, i, m, color);
                     i = !i;
+                    put_mark(&mut job, &c.to_string(), b, i);
                     j += 1;
                     continue;
                 }
@@ -276,9 +301,15 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
                 if let Some(end) = chars[j + 2..].windows(2).position(|w| w == [']', ']']) {
                     flush(&mut job, &mut buf, b, i, m, color);
                     let inner: String = chars[j + 2..j + 2 + end].iter().collect();
-                    let shown = inner.split_once('|').map(|(_, s)| s.to_string()).unwrap_or_else(|| inner.split('#').next().unwrap_or("").to_string());
-                    let mut s = shown;
-                    flush(&mut job, &mut s, b, i, m, accent);
+                    if live {
+                        put_mark(&mut job, "[[", b, i);
+                        let mut s = inner;
+                        flush(&mut job, &mut s, b, i, m, accent);
+                        put_mark(&mut job, "]]", b, i);
+                    } else {
+                        let mut s = inner.split_once('|').map(|(_, s)| s.to_string()).unwrap_or_else(|| inner.split('#').next().unwrap_or("").to_string());
+                        flush(&mut job, &mut s, b, i, m, accent);
+                    }
                     j += end + 4;
                     continue;
                 }
@@ -298,6 +329,14 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
             j += 1;
         }
         flush(&mut job, &mut buf, b, i, m, color);
+    }
+    // the first line indented (the rest at the box's edge)
+    let indent = it.style.indent as f32 * k;
+    if indent > 0.0 {
+        match job.sections.first_mut() {
+            Some(s) => s.leading_space = indent,
+            None => job.append("", indent, egui::TextFormat { font_id: egui::FontId::new(size, reg.clone()), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() }),
+        }
     }
     job
 }
@@ -327,7 +366,7 @@ pub fn text_origin(galley: &egui::Galley, pv: &PageView, it: &Item) -> Pos2 {
 /// Where the rows of a text start (char indices), laid out at the scale
 /// the page is shown at (so what is typed and what flows agree).
 pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout, k: f32) -> Vec<usize> {
-    let job = plain_job(it, text, lay, k, Color32::BLACK);
+    let job = live_job(it, text, lay, k, Color32::BLACK, Color32::BLACK);
     let galley = ctx.fonts(|f| f.layout_job(job));
     let mut out = Vec::with_capacity(galley.rows.len());
     let mut n = 0;
@@ -545,7 +584,7 @@ impl Journal {
         }
         let target = it.picture().unwrap_or_default();
         let polaroid = it.mask.as_ref().is_some_and(|m| m.shape == "polaroide");
-        let tex = self.picture(ctx, cx, &target, source, it.look.filter.as_deref());
+        let tex = self.anim_texture(ctx, cx, it).or_else(|| self.picture(ctx, cx, &target, source, it.look.filter.as_deref()));
         let Some((t, _)) = tex else {
             polygon(painter, &scr, None, ink_color(p).gamma_multiply(0.07));
             painter.text(Rect::from_points(&scr).center(), egui::Align2::CENTER_CENTER, if target.is_empty() { "Sem imagem".to_string() } else { format!("{} não encontrada", target.rsplit('/').next().unwrap_or(&target)) }, egui::FontId::proportional((pv.k * 2.2).clamp(8.0, 12.0)), p.faint);
@@ -585,15 +624,28 @@ impl Journal {
             }
         }
         if !image_drawn {
-            if let Some(kind) = nb.cover_texture.as_deref().filter(|k| !k.is_empty()) {
-                let key = format!("{kind}{}", nb.cover);
-                if !self.cover_tex.contains_key(&key) {
-                    let (w, h) = (480u32, (480.0 * nb.size.h / nb.size.w) as u32);
-                    let img = journal::texture::render(kind, [base.r(), base.g(), base.b()], w, h);
-                    let c = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
-                    self.cover_tex.insert(key.clone(), ctx.load_texture(format!("journal-cover:{key}"), c, egui::TextureOptions::LINEAR));
+            // the cover's material (even "lisa" has a board's light and edges),
+            // made at its real size in the background; plain colour meanwhile
+            let kind = nb.cover_texture.clone().unwrap_or_default();
+            let key = format!("{kind}{}{}x{}", nb.cover, nb.size.w, nb.size.h);
+            if !self.cover_tex.contains_key(&key) {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let (rgb, w, h, repaint) = ([base.r(), base.g(), base.b()], nb.size.w as f32, nb.size.h as f32, ctx.clone());
+                let k2 = kind.clone();
+                std::thread::spawn(move || {
+                    let img = journal::texture::render(&k2, rgb, w, h);
+                    let _ = tx.send(egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw()));
+                    repaint.request_repaint();
+                });
+                self.cover_tex.insert(key.clone(), super::CoverTex::Making(rx));
+            }
+            if let Some(super::CoverTex::Making(rx)) = self.cover_tex.get(&key) {
+                if let Ok(img) = rx.try_recv() {
+                    let opts = egui::TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..egui::TextureOptions::LINEAR };
+                    self.cover_tex.insert(key.clone(), super::CoverTex::Ready(ctx.load_texture(format!("journal-cover:{key}"), img, opts)));
                 }
-                let t = &self.cover_tex[&key];
+            }
+            if let Some(super::CoverTex::Ready(t)) = self.cover_tex.get(&key) {
                 painter.add(egui::epaint::RectShape::filled(rect, 3.0, Color32::WHITE).with_texture(t.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
             }
         }

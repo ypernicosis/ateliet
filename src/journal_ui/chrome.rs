@@ -52,7 +52,7 @@ impl Journal {
                     Payload::Picture(k) => format!("{}  {}", icons::IMAGE, k.rsplit('/').next().unwrap_or(k)),
                     Payload::Note(n) => format!("{}  {}", icons::FILE_TEXT, n.rsplit('/').next().unwrap_or(n).trim_end_matches(".md")),
                     Payload::Snippet(n) => format!("{}  {}", icons::QUOTE, n.rsplit('/').next().unwrap_or(n).trim_end_matches(".md")),
-                    Payload::Frame(b, _, i) => format!("{}  {} · quadro {}", icons::CLAPPERBOARD, b.rsplit('/').next().unwrap_or(b).trim_end_matches(".storyboard"), i + 1),
+                    Payload::Board(b) => format!("{}  {}", icons::CLAPPERBOARD, b.rsplit('/').next().unwrap_or(b).trim_end_matches(".storyboard")),
                 };
                 egui::Area::new(egui::Id::new("journal-carry")).fixed_pos(h + vec2(14.0, 10.0)).order(egui::Order::Tooltip).interactable(false).show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(RichText::new(label).size(12.0)));
@@ -87,6 +87,17 @@ impl Journal {
                         if let Some(f) = font_menu(ui, "journal-nb-font", &cur, true, p).filter(|f| *f != cur) {
                             b.set_setting("fonte", (f != "tema").then_some(f.as_str()));
                             b.nb.font = (f != "tema").then_some(f);
+                        }
+                        if let Some(sz) = size_menu(ui, "journal-nb-size", b.nb.text_size, true, p) {
+                            b.nb.text_size = sz;
+                            let v = format!("{sz}");
+                            b.set_setting("tamanho-letra", ((sz - 1.0).abs() > 1e-6).then_some(v.as_str()));
+                        }
+                        let wm = b.nb.wrap_to_margin;
+                        let tip = if wm { "Começado no meio da linha, o texto volta à margem na linha seguinte (clique: manter onde começou)" } else { "Começado no meio da linha, o texto segue alinhado onde começou (clique: voltar à margem)" };
+                        if kit::icon_button(ui, if wm { icons::CORNER_DOWN_LEFT } else { icons::ALIGN_LEFT }, tip, wm, p).clicked() {
+                            b.nb.wrap_to_margin = !wm;
+                            b.set_setting("quebra", Some(if wm { "bloco" } else { "margem" }));
                         }
                     }
                     if matches!(self.tool, Tool::Pen | Tool::Line) {
@@ -261,15 +272,30 @@ impl Journal {
                     edit_item(b, n, &id, |i| i.style.font = f);
                     b.pending_reflow = Some((n, id.clone()));
                 }
-                let size = it.style.size();
-                if kit::icon_button(ui, icons::MINUS, "Letra menor", false, p).clicked() && size > 0.65 {
-                    edit_item(b, n, &id, |i| i.style.size = ((size - 0.15) * 100.0).round() / 100.0);
+                if let Some(sz) = size_menu(ui, ("journal-size", &id), it.style.size(), false, p) {
+                    edit_item(b, n, &id, |i| i.style.size = if (sz - 1.0).abs() < 1e-6 { 0.0 } else { sz });
                     b.pending_reflow = Some((n, id.clone()));
                 }
-                ui.label(RichText::new(format!("{:.0}%", size * 100.0)).size(11.5).color(p.muted));
-                if kit::icon_button(ui, icons::PLUS, "Letra maior", false, p).clicked() && size < 1.6 {
-                    edit_item(b, n, &id, |i| i.style.size = ((size + 0.15) * 100.0).round() / 100.0);
-                    b.pending_reflow = Some((n, id.clone()));
+                // writing begun mid-line: back to the margin, or kept there
+                let lay = b.layout(n);
+                let (c0, c1) = lay.column_at(it.x + it.w / 2.0);
+                if it.style.indent > 0.0 || it.x > c0 + 0.5 {
+                    let to_margin = it.style.indent > 0.0;
+                    let tip = if to_margin { "As linhas seguintes voltam à margem da coluna (clique: manter onde o texto começa)" } else { "As linhas seguintes começam onde o texto começa (clique: voltar à margem da coluna)" };
+                    if kit::icon_button(ui, if to_margin { icons::CORNER_DOWN_LEFT } else { icons::ALIGN_LEFT }, tip, to_margin, p).clicked() {
+                        edit_item(b, n, &id, |i| {
+                            if to_margin {
+                                i.x += i.style.indent;
+                                i.w -= i.style.indent;
+                                i.style.indent = 0.0;
+                            } else {
+                                i.style.indent = ((i.x - c0) * 100.0).round() / 100.0;
+                                i.w = c1 - c0;
+                                i.x = c0;
+                            }
+                        });
+                        b.pending_reflow = Some((n, id.clone()));
+                    }
                 }
                 let big = it.style.lines() > 1.0;
                 if kit::icon_button(ui, icons::HEADING, if big { "Uma linha da pauta" } else { "Duas linhas da pauta (maior)" }, big, p).clicked() {
@@ -352,8 +378,32 @@ impl Journal {
                 if kit::icon_button(ui, icons::TEXT, "Legenda", false, p).clicked() {
                     self.caption(b, n, it);
                 }
-                if it.extra.contains_key("storyboard") && kit::icon_button(ui, icons::REFRESH_CW, "Desenhar de novo do storyboard", false, p).clicked() {
-                    self.refresh_frame(ui.ctx(), cx, it);
+                if let Some((board, de, ate, anim)) = super::boards::board_of(it) {
+                    if it.extra.contains_key("quadro") {
+                        if kit::icon_button(ui, icons::REFRESH_CW, "Desenhar de novo do storyboard", false, p).clicked() {
+                            self.refresh_frame(ui.ctx(), cx, it);
+                        }
+                    } else {
+                        if kit::icon_button(ui, icons::SCISSORS, "Trecho do storyboard: de que quadro a que quadro, ou quanto tempo", false, p).clicked() {
+                            let ctx = ui.ctx().clone();
+                            self.open_board_dialog(&ctx, cx, &board, anim, Some((de, ate)), super::boards::Target::Edit(n, id.clone()));
+                        }
+                        if anim {
+                            let paused = it.extra.get("pausado").and_then(|v| v.as_bool()).unwrap_or(false);
+                            if kit::icon_button(ui, if paused { icons::PLAY } else { icons::PAUSE }, if paused { "Tocar" } else { "Pausar" }, false, p).clicked() {
+                                edit_item(b, n, &id, |i| {
+                                    if paused {
+                                        i.extra.remove("pausado");
+                                    } else {
+                                        i.extra.insert("pausado".into(), serde_json::json!(true));
+                                    }
+                                });
+                            }
+                        }
+                        if kit::icon_button(ui, icons::REFRESH_CW, "Desenhar de novo do storyboard", false, p).clicked() {
+                            self.place_board(b, cx, &board, de, ate, anim, super::boards::Target::Edit(n, id.clone()));
+                        }
+                    }
                 }
                 if kit::icon_button(ui, icons::BOOKMARK_PLUS, "Guardar como adesivo", false, p).clicked() {
                     self.save_sticker(cx, b, n, it);
@@ -684,6 +734,32 @@ impl Journal {
 
 /// The page an action without a place goes to: the right one shown (or
 /// the left).
+/// The sizes of type, within the line of the ruling.
+pub const SIZES: &[(f64, &str)] = &[(0.8, "Pequena"), (1.0, "Normal"), (1.2, "Média"), (1.45, "Grande")];
+
+/// A menu of the sizes; the size picked, if one was.
+pub fn size_menu(ui: &mut egui::Ui, salt: impl std::hash::Hash, current: f64, above: bool, p: crate::theme::Palette) -> Option<f64> {
+    let name = SIZES.iter().find(|s| (s.0 - current).abs() < 0.01).map(|s| s.1.to_string()).unwrap_or_else(|| format!("{:.0}%", current * 100.0));
+    let r = kit::chip(ui, Some(icons::HEADING), &name, false, p).on_hover_text("Tamanho da letra (Ctrl/Cmd+= e Ctrl/Cmd+- ao escrever)");
+    let id = ui.make_persistent_id(salt);
+    if r.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let mut out = None;
+    let side = if above { egui::AboveOrBelow::Above } else { egui::AboveOrBelow::Below };
+    egui::popup::popup_above_or_below_widget(ui, id, &r, side, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(150.0);
+        for (v, label) in SIZES {
+            let on = (v - current).abs() < 0.01;
+            let text = RichText::new(*label).size(13.0 * *v as f32).color(if on { p.accent_strong } else { p.text });
+            if ui.add(egui::Button::new(text).frame(false).min_size(vec2(140.0, 26.0))).clicked() {
+                out = Some(*v);
+            }
+        }
+    });
+    out
+}
+
 /// A menu of the Journal's fonts, each name in its own face; the font
 /// picked, if one was.
 pub fn font_menu(ui: &mut egui::Ui, salt: impl std::hash::Hash, current: &str, above: bool, p: crate::theme::Palette) -> Option<String> {

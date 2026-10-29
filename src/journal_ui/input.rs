@@ -987,7 +987,18 @@ impl Journal {
         let x = if at.0 - c0 > 8.0 && at.0 < c1 - 10.0 { at.0 } else { c0 };
         let y = lay.text_top(at.1 - lay.paper.line() * 0.5, 1.0);
         b.checkpoint();
-        let mut it = Item::new(Kind::Text, x, y, (c1 - x).max(10.0), lay.paper.line());
+        // begun mid-line: the box from the margin, the first line indented
+        // (or, kept to where it began, the box from there)
+        let mut it = if b.nb.wrap_to_margin && x > c0 {
+            let mut it = Item::new(Kind::Text, c0, y, c1 - c0, lay.paper.line());
+            it.style.indent = ((x - c0) * 100.0).round() / 100.0;
+            it
+        } else {
+            Item::new(Kind::Text, x, y, (c1 - x).max(10.0), lay.paper.line())
+        };
+        if (b.nb.text_size - 1.0).abs() > 1e-6 {
+            it.style.size = b.nb.text_size;
+        }
         // the notebook's font; in the margin, its hand
         let margin = lay.margin.is_some_and(|m| lay.columns[m] == (c0, c1));
         it.style.font = if margin { b.nb.margin_font.clone().unwrap_or_else(|| "mao".into()) } else { b.nb.font.clone().unwrap_or_default() };
@@ -1014,6 +1025,9 @@ impl Journal {
         b.checkpoint();
         let mut it = Item::new(Kind::Text, col.0, top, col.1 - col.0, lay.paper.line());
         it.style.font = b.nb.font.clone().unwrap_or_default();
+        if (b.nb.text_size - 1.0).abs() > 1e-6 {
+            it.style.size = b.nb.text_size;
+        }
         if pv.n == 0 {
             it.style.color = Some(cover_ink(&b.nb.cover));
         }
@@ -1050,7 +1064,7 @@ impl Journal {
             it.y += pv.lay.paper.line() * it.style.lines();
         }
         let text = super::flow_text(&it);
-        let g = ctx.fonts(|f| f.layout_job(draw::plain_job(&it, &text, &pv.lay, pv.k, Color32::BLACK)));
+        let g = ctx.fonts(|f| f.layout_job(draw::live_job(&it, &text, &pv.lay, pv.k, Color32::BLACK, Color32::BLACK)));
         let origin = draw::text_origin(&g, pv, &it);
         let c = g.cursor_from_pos(pv.s(at) - origin);
         Some(c.ccursor.index)
@@ -1073,11 +1087,30 @@ impl Journal {
         if it.kind == Kind::Excerpt && !journal::excerpt_parts(it.content()).title.is_empty() {
             it.y += pv.lay.paper.line() * it.style.lines();
         }
+        // Ctrl/Cmd+= and Ctrl/Cmd+-: the next size up or down, while typing
+        let (bigger, smaller) = ui.input_mut(|i| {
+            let cmd = egui::Modifiers::COMMAND;
+            let up = i.consume_key(cmd, egui::Key::Equals) || i.consume_key(cmd, egui::Key::Plus) || i.consume_key(cmd | egui::Modifiers::SHIFT, egui::Key::Equals);
+            (up, i.consume_key(cmd, egui::Key::Minus))
+        });
+        if bigger || smaller {
+            let sizes: Vec<f64> = super::chrome::SIZES.iter().map(|s| s.0).collect();
+            let now = it.style.size();
+            let next = if bigger { sizes.iter().copied().find(|s| *s > now + 0.01) } else { sizes.iter().rev().copied().find(|s| *s < now - 0.01) };
+            if let Some(sz) = next {
+                if let Some(slot) = b.page(n).and_then(|pg| pg.item_mut(&id)) {
+                    slot.style.size = if (sz - 1.0).abs() < 1e-6 { 0.0 } else { sz };
+                }
+                it.style.size = sz;
+                b.touch(n);
+            }
+        }
         let lay = pv.lay.clone();
         let k = pv.k;
         let ink = it.style.color.as_deref().and_then(draw::hex).unwrap_or(draw::ink_color(p));
         let buf = b.editing.as_ref().map(|e| e.buf.clone()).unwrap_or_default();
-        let now = ui.fonts(|f| f.layout_job(draw::plain_job(&it, if buf.is_empty() { " " } else { &buf }, &lay, k, ink)));
+        let accent = p.accent_strong;
+        let now = ui.fonts(|f| f.layout_job(draw::live_job(&it, if buf.is_empty() { " " } else { &buf }, &lay, k, ink, accent)));
         let origin = draw::text_origin(&now, &pv, &it);
         let cap = lay.rows_from(it.y, it.style.lines()).max(1);
         let rows = now.rows.len().max(1);
@@ -1096,16 +1129,31 @@ impl Journal {
             st.store(ui.ctx(), edit_id);
         }
         let it2 = it.clone();
-        let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| f.layout_job(draw::plain_job(&it2, text, &lay, k, ink)));
+        let lay2 = lay.clone();
+        let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| f.layout_job(draw::live_job(&it2, text, &lay2, k, ink, accent)));
         let Some(e) = b.editing.as_mut() else { return };
         let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(edit_id);
         // typed text never shows past the page
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         child.set_clip_rect(pv.clip.intersect(ui.clip_rect()));
+        // the cursor is drawn here (egui's fills the whole ruled row), and
+        // a selection is a soft wash, as a marker on paper
+        child.visuals_mut().text_cursor.stroke = Stroke::new(0.0_f32, Color32::TRANSPARENT);
+        child.visuals_mut().selection.bg_fill = p.accent_soft.gamma_multiply(0.7);
+        child.visuals_mut().selection.stroke = Stroke::NONE;
         let out = te.show(&mut child);
         let buf_len = e.buf.chars().count();
         b.caret = out.cursor_range.map(|c| out.galley_pos + out.galley.pos_from_cursor(&c.primary).center().to_vec2());
         let resp = out.response;
+        if let (Some(c), true) = (out.cursor_range, resp.has_focus()) {
+            let size = lh * draw::font_of(&it).3;
+            let row = out.galley.pos_from_cursor(&c.primary).translate(out.galley_pos.to_vec2());
+            // the line the letters sit on, read from the row's glyphs
+            let r = out.galley.rows.get(c.primary.rcursor.row).or(out.galley.rows.last());
+            let base = r.and_then(|r| r.glyphs.first().map(|g| out.galley_pos.y + g.pos.y)).or_else(|| out.galley.rows.iter().find_map(|r| r.glyphs.first().map(|g| out.galley_pos.y + g.pos.y - r.rect.min.y)).map(|d| row.min.y + d)).unwrap_or(row.max.y - size * 0.2);
+            self.caret(ui, &pv, egui::pos2(row.min.x, base), size, ink, resp.changed() || c.primary != b.last_cursor.unwrap_or(c.primary));
+            b.last_cursor = Some(c.primary);
+        }
         if resp.changed() {
             // saved a moment after the last key, typing or not
             b.touch(n);
@@ -1136,13 +1184,44 @@ impl Journal {
         }
     }
 
+    /// The cursor of the text being typed: a thin stroke of the ink, from
+    /// the line up to the height of the capitals, that glides to where it
+    /// goes and fades in and out instead of blinking.
+    fn caret(&mut self, ui: &egui::Ui, pv: &PageView, base: Pos2, size: f32, ink: Color32, moved: bool) {
+        let ctx = ui.ctx();
+        let id = egui::Id::new("journal-caret");
+        let x = ctx.animate_value_with_time(id.with("x"), base.x, 0.06);
+        let y = ctx.animate_value_with_time(id.with("y"), base.y, 0.08);
+        let now = ctx.input(|i| i.time);
+        if moved {
+            ctx.data_mut(|d| d.insert_temp(id.with("t"), now));
+        }
+        let since = now - ctx.data(|d| d.get_temp::<f64>(id.with("t"))).unwrap_or(now);
+        // steady while typing, then a slow breath
+        let a = if since < 0.6 { 1.0 } else { 0.55 + 0.45 * ((since - 0.6) * std::f64::consts::PI / 0.7).cos() as f32 };
+        let w = (size * 0.075).clamp(1.2, 3.0);
+        ui.painter_at(pv.clip).line_segment([egui::pos2(x, y - size * 0.82), egui::pos2(x, y + size * 0.14)], Stroke::new(w, ink.gamma_multiply(a.clamp(0.1, 1.0))));
+        ctx.request_repaint_after(std::time::Duration::from_millis(33));
+    }
+
     fn draw_selection(&mut self, ui: &egui::Ui, b: &mut Book, views: &[PageView], p: crate::theme::Palette) {
         let Some(pv) = views.iter().find(|v| v.n == b.sel_page) else { return };
         let painter = ui.painter_at(pv.clip_across.union(pv.clip));
         let items = b.sel_items();
+        let editing = b.editing.as_ref().map(|e| e.id.clone());
         for it in &items {
-            let c: Vec<Pos2> = it.corners().iter().map(|q| pv.s(*q)).collect();
-            painter.add(egui::Shape::closed_line(c, Stroke::new(1.5_f32, p.accent_strong)));
+            // the text being typed has no frame: it is writing on the page
+            if editing.as_deref() == Some(it.id.as_str()) {
+                continue;
+            }
+            let mut c: Vec<Pos2> = it.corners().iter().map(|q| pv.s(*q)).collect();
+            if it.kind.is_text() {
+                // a picked text: a light dotted line round it
+                c.push(c[0]);
+                painter.add(egui::Shape::dotted_line(&c, p.accent_strong.gamma_multiply(0.6), 5.0, 1.0));
+            } else {
+                painter.add(egui::Shape::closed_line(c, Stroke::new(1.5_f32, p.accent_strong)));
+            }
         }
         if items.len() == 1 && b.editing.is_none() && b.crop.is_none() {
             let it = &items[0];
@@ -1530,25 +1609,10 @@ impl Journal {
                 let Some(s) = self.snippet(cx.vault, &path) else { return };
                 self.place_snippet(b, n, &lay, Some(at), &path, &s);
             }
-            Payload::Frame(board, id, index) => {
-                match super::boards::save_frame(cx, &board, &id, index) {
-                    Ok((rel, frame, (w, h))) => {
-                        self.out.push(super::Out::Rescan);
-                        let (c0, c1) = lay.main_column();
-                        let fw = (c1 - c0).min(lay.w * 0.8);
-                        let fh = fw * h as f64 / w.max(1) as f64;
-                        b.checkpoint();
-                        let it = super::boards::frame_item(&rel, &board, &frame, at.0 - fw / 2.0, at.1 - fh / 2.0, fw, fh);
-                        let id = it.id.clone();
-                        if let Some(p) = b.page(n) {
-                            p.items.push(it);
-                        }
-                        b.sel_page = n;
-                        b.sel = vec![id];
-                        b.touch(n);
-                    }
-                    Err(e) => self.out.push(super::Out::Toast(format!("Não foi possível trazer o quadro: {e}"))),
-                }
+            Payload::Board(board) => {
+                // the whole storyboard, playing; cut it from the balloon
+                let last = ateliet_core::journal::storyboard::clip(&cx.vault.abs(&board)).map(|c| c.len().saturating_sub(1)).unwrap_or(0);
+                self.place_board(b, cx, &board, 0, last, true, super::boards::Target::New(n, at));
             }
         }
     }

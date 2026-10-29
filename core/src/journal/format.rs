@@ -11,10 +11,10 @@
 //! pagina: 3
 //! ---
 //!
-//! ## ^j-txt1
+//! %% j:txt1 %%
 //! Text on the ruling, in Markdown.
 //!
-//! ## ^j-img1
+//! %% j:img1 %%
 //! ![[Salentin.jpg]]
 //! Hubert Salentin, 1882.
 //!
@@ -118,6 +118,11 @@ pub struct Notebook {
     /// The font new texts are written in (`fonte`), and the margin's.
     pub font: Option<String>,
     pub margin_font: Option<String>,
+    /// The size new texts are written at (`tamanho-letra`, 1 the normal).
+    pub text_size: f64,
+    /// Writing begun mid-line wraps back to the column's margin
+    /// (`quebra: margem`) or keeps to where it began (`quebra: bloco`).
+    pub wrap_to_margin: bool,
     pub pages: Vec<PageRef>,
 }
 
@@ -148,6 +153,8 @@ impl Notebook {
             daily: fm.get("diario").and_then(|v| v.as_bool()).unwrap_or(false),
             font: get("fonte").filter(|f| !f.is_empty()),
             margin_font: get("fonte-margem").filter(|f| !f.is_empty()),
+            text_size: fm.get("tamanho-letra").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.replace(',', ".").parse().ok()))).filter(|v| (0.5..=2.0).contains(v)).unwrap_or(1.0),
+            wrap_to_margin: get("quebra").as_deref() != Some("bloco"),
             pages: Vec::new(),
         })
     }
@@ -275,10 +282,26 @@ pub struct Page {
     pub tail: String,
 }
 
-/// `## ^j-<id>` on a line of its own.
+/// A section's mark: `%% j:<id> %%` (a comment, hidden in Obsidian's and
+/// the Ateliet's reading and Live Preview), or the older `## ^j-<id>`.
 fn section_id(line: &str) -> Option<&str> {
-    let rest = line.trim_end_matches('\r').strip_prefix("## ^j-")?.trim_end();
+    let l = line.trim_end_matches('\r').trim_end();
+    let rest = match l.strip_prefix("%% j:") {
+        Some(r) => r.strip_suffix("%%")?.trim_end(),
+        None => l.strip_prefix("## ^j-")?,
+    };
     (!rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')).then_some(rest)
+}
+
+/// Does the note still mark its sections the old way (as headings)?
+pub fn is_legacy(text: &str) -> bool {
+    let mut fence = false;
+    text.lines().any(|l| {
+        if l.trim_start().starts_with("```") || l.trim_start().starts_with("~~~") {
+            fence = !fence;
+        }
+        !fence && l.starts_with("## ^j-") && section_id(l).is_some()
+    })
 }
 
 fn escape(json: &str) -> String {
@@ -388,12 +411,23 @@ impl Page {
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
             }
-            out.push_str("## ^j-");
+            out.push_str("%% j:");
             out.push_str(id);
-            out.push('\n');
+            out.push_str(" %%\n");
             out.push_str(body);
         };
-        for id in &self.order {
+        // a page that changed reads, as a note, in the order of the page:
+        // top to bottom, and left to right on a line
+        let v = self.value();
+        let unchanged = self.raw.as_ref().is_some_and(|(_, old)| *old == v);
+        let order: Vec<String> = if unchanged {
+            self.order.clone()
+        } else {
+            let mut placed: Vec<&super::Item> = self.items.iter().filter(|i| i.body.is_some()).collect();
+            placed.sort_by_key(|a| ((a.y * 2.0).round() as i64, (a.x * 10.0).round() as i64));
+            placed.iter().map(|i| i.id.clone()).chain(self.order.iter().filter(|id| self.loose.iter().any(|(l, _)| l == *id)).cloned()).collect()
+        };
+        for id in &order {
             if done.contains(id) {
                 continue;
             }
@@ -416,7 +450,6 @@ impl Page {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push('\n');
         }
-        let v = self.value();
         match &self.raw {
             Some((raw, old)) if *old == v => out.push_str(raw),
             _ => {
@@ -543,7 +576,8 @@ mod tests {
     use super::super::{Kind, Item};
     use super::*;
 
-    const SAMPLE: &str = "---\njournal: página\ncaderno: \"[[Natureza]]\"\npagina: 3\ndata: 2023-11-05\ntags: [escócia, florestas]\n---\n\nIntrodução escrita no Obsidian.\n\n## ^j-txt1\n> [!trecho] The Mountain Birch Project · Mossy Earth\n> Montane woodland is ==rare==. 100%\n\n## ^j-mg1\nEsse vídeo me foi recomendado… #paisagem\n\n```\n## ^j-falso\n```\n\n## ^j-solto\nEscrito no Obsidian.\n\n%% ateliet:journal\n{\"v\":1,\"lado\":\"direita\",\"items\":[{\"id\":\"txt1\",\"kind\":\"trecho\",\"x\":10.0,\"y\":20.0,\"w\":80.0,\"h\":40.0,\"futuro\":{\"a\":1}},{\"id\":\"mg1\",\"kind\":\"texto\",\"x\":5.0,\"y\":20.0,\"w\":30.0,\"h\":60.0},{\"id\":\"img9\",\"kind\":\"imagem\",\"x\":0.0,\"y\":0.0,\"w\":1.0,\"h\":1.0}]}\n%%\n";
+    const SAMPLE: &str = "---\njournal: página\ncaderno: \"[[Natureza]]\"\npagina: 3\ndata: 2023-11-05\ntags: [escócia, florestas]\n---\n\nIntrodução escrita no Obsidian.\n\n%% j:txt1 %%\n> [!trecho] The Mountain Birch Project · Mossy Earth\n> Montane woodland is ==rare==. 100%\n\n%% j:mg1 %%\nEsse vídeo me foi recomendado… #paisagem\n\n```\n%% j:falso %%\n```\n\n%% j:solto %%\nEscrito no Obsidian.\n\n%% ateliet:journal\n{\"v\":1,\"lado\":\"direita\",\"items\":[{\"id\":\"txt1\",\"kind\":\"trecho\",\"x\":10.0,\"y\":20.0,\"w\":80.0,\"h\":40.0,\"futuro\":{\"a\":1}},{\"id\":\"mg1\",\"kind\":\"texto\",\"x\":5.0,\"y\":20.0,\"w\":30.0,\"h\":60.0},{\"id\":\"img9\",\"kind\":\"imagem\",\"x\":0.0,\"y\":0.0,\"w\":1.0,\"h\":1.0}]}\n%%\n";
+    const LEGACY: &str = "---\njournal: página\ncaderno: \"[[Natureza]]\"\npagina: 3\ndata: 2023-11-05\ntags: [escócia, florestas]\n---\n\nIntrodução escrita no Obsidian.\n\n## ^j-txt1\n> [!trecho] The Mountain Birch Project · Mossy Earth\n> Montane woodland is ==rare==. 100%\n\n## ^j-mg1\nEsse vídeo me foi recomendado… #paisagem\n\n```\n## ^j-falso\n```\n\n## ^j-solto\nEscrito no Obsidian.\n\n%% ateliet:journal\n{\"v\":1,\"lado\":\"direita\",\"items\":[{\"id\":\"txt1\",\"kind\":\"trecho\",\"x\":10.0,\"y\":20.0,\"w\":80.0,\"h\":40.0,\"futuro\":{\"a\":1}},{\"id\":\"mg1\",\"kind\":\"texto\",\"x\":5.0,\"y\":20.0,\"w\":30.0,\"h\":60.0},{\"id\":\"img9\",\"kind\":\"imagem\",\"x\":0.0,\"y\":0.0,\"w\":1.0,\"h\":1.0}]}\n%%\n";
 
     #[test]
     fn unchanged_page_is_the_same_text() {
@@ -551,7 +585,7 @@ mod tests {
         assert_eq!(p.items.len(), 3);
         assert_eq!(p.loose.len(), 1);
         assert_eq!(p.items[0].content(), "> [!trecho] The Mountain Birch Project · Mossy Earth\n> Montane woodland is ==rare==. 100%");
-        assert!(p.items[1].content().ends_with("```\n## ^j-falso\n```"));
+        assert!(p.items[1].content().ends_with("```\n%% j:falso %%\n```"));
         assert!(p.items[2].body.is_none());
         assert_eq!(p.items[0].extra["futuro"]["a"], 1);
         assert_eq!(p.number(), 3);
@@ -613,6 +647,22 @@ mod tests {
         let (m2, c2) = merge(&ours, &base, &disk2);
         assert_eq!(c2, vec!["txt1".to_string()]);
         assert!(m2.items[0].content().contains("Floresta"));
+    }
+
+    #[test]
+    fn old_headings_read_and_become_comments() {
+        let p = Page::parse(LEGACY);
+        assert!(is_legacy(LEGACY));
+        assert_eq!(p.items.len(), 3);
+        assert!(p.items[1].content().starts_with("Esse vídeo"));
+        let mut q = p.clone();
+        q.items[0].x = 50.0;
+        let t = q.write();
+        assert!(!is_legacy(&t), "{t}");
+        assert!(t.contains("%% j:txt1 %%"));
+        // the note reads in the page's order now: the margin (x 5) first
+        assert!(t.find("%% j:mg1 %%").unwrap() < t.find("%% j:txt1 %%").unwrap());
+        assert_eq!(Page::parse(&t).items[0].content(), p.items[0].content());
     }
 
     #[test]
