@@ -182,6 +182,11 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             }
             if icon_button(ui, icons::IMAGES, "Modo imagem (Ctrl+Shift+I)", app.images_mode, p).clicked() {
                 app.images_mode = !app.images_mode;
+                app.journal_mode = false;
+            }
+            if icon_button(ui, icons::NOTEBOOK_PEN, "Journal (Ctrl+Shift+J)", app.journal_mode, p).clicked() {
+                app.journal_mode = !app.journal_mode;
+                app.images_mode = false;
             }
             storyboards_button(app, ui, p);
             if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
@@ -416,6 +421,7 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                 }
                 app.images.show_similar(&path);
                 app.images_mode = true;
+                app.journal_mode = false;
             }
             FileCmd::Reveal | FileCmd::External => {
                 if let Some(v) = &app.vault {

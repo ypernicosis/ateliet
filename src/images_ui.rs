@@ -265,6 +265,8 @@ pub enum ImageAction {
     CollectionNote(String),
     /// Show or hide a side panel (true: the left one).
     TogglePanel(bool),
+    /// Put pictures on the Journal's open page.
+    SendToJournal(Vec<String>),
 }
 
 impl ImagesState {
@@ -1001,6 +1003,11 @@ impl ImagesState {
                         }
                         ui.close_menu();
                     }
+                    if kit::menu_item(ui, icons::NOTEBOOK_PEN, "Mandar ao Journal", p) {
+                        let idx = self.dragged(i);
+                        action = Some(ImageAction::SendToJournal(self.keys_of(&idx)));
+                        ui.close_menu();
+                    }
                     if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
                         let _ = open::that(&self.entries[i].abs);
                         ui.close_menu();
@@ -1061,6 +1068,57 @@ impl ImagesState {
             }
         });
         action
+    }
+
+    /// The pictures in the Journal's panel: search, squares to drag onto a
+    /// page.
+    pub fn material_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        self.poll(ui.ctx());
+        kit::search_field(ui, &mut self.query, "Buscar imagens", p);
+        ui.add_space(8.0);
+        // the vault's own pictures too (image mode may hide them)
+        let keep = self.show_vault;
+        self.show_vault = true;
+        self.refresh_shown();
+        self.show_vault = keep;
+        if self.shown.is_empty() {
+            ui.label(RichText::new(if self.scanning.is_some() { "Procurando imagens…" } else { "Nenhuma imagem." }).size(12.5).color(p.faint));
+            return;
+        }
+        let gap = 6.0;
+        let avail_w = ui.available_width() - 14.0;
+        let cols = ((avail_w + gap) / (96.0 + gap)).floor().max(2.0) as usize;
+        let cell = ((avail_w - gap * (cols as f32 - 1.0)) / cols as f32).floor();
+        let rows = self.shown.len().div_ceil(cols);
+        let shown = self.shown.clone();
+        egui::ScrollArea::vertical().id_salt("journal-pictures").auto_shrink([false, false]).show_rows(ui, cell + gap, rows, |ui, range| {
+            for r in range {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for c in 0..cols {
+                        let Some(&i) = shown.get(r * cols + c) else { break };
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click_and_drag());
+                        ui.painter().rect_filled(rect, 6.0, p.bg_hover);
+                        if let Some(t) = self.thumb(i) {
+                            let e = &self.entries[i];
+                            let k = (e.width.max(1) as f32 / e.height.max(1) as f32).max(1e-3);
+                            let uv = if k > 1.0 { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0 / k, 1.0)) } else { egui::Rect::from_center_size(egui::pos2(0.5, 0.5), egui::vec2(1.0, k)) };
+                            ui.painter().add(egui::epaint::RectShape::filled(rect, 6.0, Color32::WHITE).with_texture(t, uv));
+                        }
+                        if resp.hovered() {
+                            ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        }
+                        if resp.drag_started() {
+                            resp.dnd_set_drag_payload(crate::journal_ui::Payload::Picture(self.entries[i].key.clone()));
+                        }
+                        let name = self.entries[i].name.clone();
+                        resp.on_hover_text(name);
+                    }
+                });
+                ui.add_space(gap - ui.spacing().item_spacing.y);
+            }
+        });
     }
 
     /// Pictures like this one (from the file explorer).

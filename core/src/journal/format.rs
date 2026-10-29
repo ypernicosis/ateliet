@@ -420,6 +420,33 @@ impl Page {
         out
     }
 
+    /// The json block as it is now (what the backup copy keeps).
+    pub fn block_value(&self) -> Value {
+        self.value()
+    }
+
+    /// Does the note have its block? (A plugin that rewrites the note may
+    /// leave it out.)
+    pub fn has_block(&self) -> bool {
+        self.raw.is_some()
+    }
+
+    /// Puts back a block lost from the note, from its backup copy: the
+    /// items come back and find their sections again.
+    pub fn restore(&mut self, v: &Value) {
+        let Some(m) = v.as_object() else { return };
+        let items: Vec<Item> = m.get("items").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|i| serde_json::from_value::<Item>(i.clone()).ok()).collect()).unwrap_or_default();
+        self.meta = m.clone();
+        self.items = items;
+        let loose = std::mem::take(&mut self.loose);
+        for (id, body) in loose {
+            match self.items.iter_mut().find(|i| i.id == id && i.body.is_none()) {
+                Some(it) => it.body = Some(body),
+                None => self.loose.push((id, body)),
+            }
+        }
+    }
+
     /// The note's frontmatter, as json.
     pub fn frontmatter(&self) -> Map<String, Value> {
         yaml(&self.head)
@@ -471,6 +498,33 @@ impl Page {
     }
 }
 
+/// A page changed here (`ours`, from `base` as it was read) and on disk
+/// (`disk`) at once: what each side changed is kept. Where both changed the
+/// same section, the disk's version stays; those ids come back.
+pub fn merge(ours: &Page, base: &Page, disk: &Page) -> (Page, Vec<String>) {
+    let mut out = ours.clone();
+    let mut conflicts = Vec::new();
+    out.head = if ours.head != base.head && disk.head == base.head { ours.head.clone() } else { disk.head.clone() };
+    out.order = disk.order.clone();
+    out.tail = disk.tail.clone();
+    out.raw = disk.raw.clone();
+    let body_of = |p: &Page, id: &str| -> Option<String> { p.item(id).and_then(|i| i.body.clone()).or_else(|| p.loose.iter().find(|(l, _)| l == id).map(|(_, b)| b.clone())) };
+    for it in out.items.iter_mut() {
+        let b = body_of(base, &it.id);
+        let d = body_of(disk, &it.id);
+        if it.body != b {
+            if d != b {
+                conflicts.push(it.id.clone());
+                it.body = d;
+            }
+        } else {
+            it.body = d;
+        }
+    }
+    out.loose = disk.loose.iter().filter(|(id, _)| !out.items.iter().any(|i| &i.id == id)).cloned().collect();
+    (out, conflicts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{Kind, Item};
@@ -512,6 +566,40 @@ mod tests {
         assert_eq!(q.meta["lado"], "direita");
         assert_eq!(q.loose.len(), 1);
         assert_eq!(q.write(), text);
+    }
+
+    #[test]
+    fn a_lost_block_comes_back() {
+        let p = Page::parse(SAMPLE);
+        let backup = p.block_value();
+        let cut = &SAMPLE[..SAMPLE.find(BLOCK).unwrap()];
+        let mut q = Page::parse(cut);
+        assert!(!q.has_block() && q.items.is_empty() && q.loose.len() == 3);
+        q.restore(&backup);
+        assert_eq!(q.items.len(), 3);
+        assert_eq!(q.loose.len(), 1);
+        assert!(q.item("mg1").unwrap().content().starts_with("Esse vídeo"));
+    }
+
+    #[test]
+    fn both_sides_keep_their_changes() {
+        let base = Page::parse(SAMPLE);
+        let mut ours = base.clone();
+        ours.items[1].x = 99.0;
+        ours.items[0].set_content("> [!trecho] Mudado aqui");
+        let disk_text = SAMPLE.replace("Esse vídeo me foi recomendado…", "Editado no Obsidian.").replace("pagina: 3", "pagina: 3\nhumor: bom");
+        let disk = Page::parse(&disk_text);
+        let (m, c) = merge(&ours, &base, &disk);
+        assert!(c.is_empty());
+        assert_eq!(m.items[1].x, 99.0);
+        assert!(m.items[1].content().starts_with("Editado no Obsidian."));
+        assert_eq!(m.items[0].content(), "> [!trecho] Mudado aqui");
+        assert!(m.head.contains("humor: bom"));
+        // the same section changed on both sides: the disk's stays
+        let disk2 = Page::parse(&SAMPLE.replace("Montane woodland", "Floresta"));
+        let (m2, c2) = merge(&ours, &base, &disk2);
+        assert_eq!(c2, vec!["txt1".to_string()]);
+        assert!(m2.items[0].content().contains("Floresta"));
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub enum Cmd {
     Calendar,
     ChangeVault,
     ImageMode,
+    JournalMode,
+    SendToJournal,
     NewStoryboard,
     NewQuadro,
     NewDrawing,
@@ -78,6 +80,8 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Calendar, "calendar:show-calendar-view", "Calendário: Abrir"),
     (Cmd::ChangeVault, "app:open-vault", "Abrir outro cofre"),
     (Cmd::ImageMode, "images:toggle-mode", "Imagens: Alternar modo imagem"),
+    (Cmd::JournalMode, "journal:toggle-mode", "Journal: Abrir os cadernos"),
+    (Cmd::SendToJournal, "journal:send-selection", "Journal: Mandar a seleção ao Journal"),
     (Cmd::NewStoryboard, "storyboard:new", "Storyboard: Novo storyboard"),
     (Cmd::NewQuadro, "quadro:new", "Novo quadro"),
     (Cmd::NewDrawing, "quadro:new-drawing", "Quadro: Novo desenho (Excalidraw)"),
@@ -122,6 +126,7 @@ pub(crate) fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
         Cmd::NewFromTemplate => KeyboardShortcut::new(Modifiers::ALT, Key::N),
         Cmd::Settings => KeyboardShortcut::new(cmd, Key::Comma),
         Cmd::ImageMode => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::I),
+        Cmd::JournalMode => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::J),
         Cmd::Back => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowLeft),
         Cmd::ReplaceTemplates => KeyboardShortcut::new(Modifiers::ALT, Key::R),
         Cmd::Forward => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::ArrowRight),
@@ -219,6 +224,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
                 app.images.open(&root, ctx);
             }
             app.images_mode = true;
+            app.journal_mode = false;
             app.images.open_pinterest();
         }
         Cmd::InsertPicture => {
@@ -331,7 +337,15 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.right_open = true;
             app.right_tab = crate::app::RightTab::Calendar;
         }
-        Cmd::ImageMode => app.images_mode = !app.images_mode,
+        Cmd::ImageMode => {
+            app.images_mode = !app.images_mode;
+            app.journal_mode = false;
+        }
+        Cmd::JournalMode => {
+            app.journal_mode = !app.journal_mode;
+            app.images_mode = false;
+        }
+        Cmd::SendToJournal => app.send_to_journal(ctx),
         Cmd::ChangeVault => {
             app.save_all();
             app.vault = None;

@@ -12,9 +12,11 @@
 //!
 //! - `paper`  — sizes, papers and columns, and where the ruling falls on a page.
 //! - `format` — reading and writing the index note and the page notes.
+//! - `cut`    — a picture cut out with its mask, for the sticker drawer.
 //!
 //! Lengths are millimetres of the page, from its top left corner.
 
+pub mod cut;
 pub mod format;
 pub mod paper;
 
@@ -22,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use format::{Notebook, Page, PageRef};
-pub use paper::{Columns, Paper, PageSize, Ruling};
+pub use paper::{Columns, Layout, PageSize, Paper, Ruling};
 
 /// What an item is. Unknown kinds (from a newer version) are kept by name.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -246,6 +248,9 @@ pub struct Flow {
     pub prev: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next: Option<String>,
+    /// This box starts a new paragraph (the text broke at a line's end).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub para: bool,
 }
 
 /// A stroke drawn by hand: points with their width (mm).
@@ -339,6 +344,33 @@ impl Item {
             extra: Map::new(),
             body: None,
         }
+    }
+
+    /// Round what was measured with the pointer to what matters on paper
+    /// (a hundredth of a millimetre; points to 1/10000 of the box), so the
+    /// note's json stays short.
+    pub fn tidy(&mut self) {
+        let r = |v: &mut f64, k: f64| *v = (*v * k).round() / k;
+        for v in [&mut self.x, &mut self.y, &mut self.w, &mut self.h, &mut self.r] {
+            r(v, 100.0);
+        }
+        if let Some(c) = self.crop.as_mut() {
+            for v in [&mut c.x, &mut c.y, &mut c.w, &mut c.h] {
+                r(v, 10000.0);
+            }
+        }
+        for s in self.strokes.iter_mut() {
+            for q in s.pts.iter_mut() {
+                r(&mut q[0], 10000.0);
+                r(&mut q[1], 10000.0);
+                r(&mut q[2], 1000.0);
+            }
+        }
+        for q in self.pts.iter_mut().chain(self.mask.iter_mut().flat_map(|m| m.pts.iter_mut())) {
+            r(&mut q[0], 10000.0);
+            r(&mut q[1], 10000.0);
+        }
+        r(&mut self.look.border, 100.0);
     }
 
     /// The section's text without the blank lines that close it.

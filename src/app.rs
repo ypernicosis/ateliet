@@ -167,6 +167,9 @@ pub struct App {
     pub recent: Vec<String>,
     /// Image mode: the picture library in the centre, the note on the right.
     pub images_mode: bool,
+    /// The Journal's notebooks fill the window (the third mode).
+    pub journal_mode: bool,
+    pub journal: crate::journal_ui::Journal,
     pub images: crate::images_ui::ImagesState,
     pub sc: Option<crate::sc::Sc>,
     pub binder: crate::sc::binder::Binder,
@@ -233,6 +236,8 @@ impl App {
             recent: Vec::new(),
             images_mode: false,
             images: Default::default(),
+            journal_mode: false,
+            journal: Default::default(),
             sc: None,
             binder: Default::default(),
             form: None,
@@ -286,6 +291,9 @@ impl App {
         self.caches = Caches::default();
         self.images = Default::default();
         self.images_mode = false;
+        self.journal.save_all();
+        self.journal = Default::default();
+        self.journal_mode = false;
         self.vault = Some(Vault::open(&root, ctx.clone()));
         self.sc = Some(crate::sc::Sc::load(&cfg.dir));
         self.cfg = Some(cfg);
@@ -599,6 +607,7 @@ impl App {
         for i in 0..self.tabs.len() {
             self.save_tab(i);
         }
+        self.journal.save_all();
     }
 
     pub fn new_note(&mut self, folder: &str) {
@@ -1099,6 +1108,7 @@ impl eframe::App for App {
             }
             self.caches.docs.retain(|p, _| !changed.contains(p));
             self.images.changed(&changed);
+            self.journal.changed(&changed);
             for p in &changed {
                 self.caches.images.remove(p);
             }
@@ -1128,7 +1138,7 @@ impl eframe::App for App {
         commands::shortcuts(self, ctx);
 
         self.sprint_tick();
-        if self.focus.is_some() && !self.images_mode {
+        if self.focus.is_some() && !self.images_mode && !self.journal_mode {
             self.central(ctx);
             self.focus_hud(ctx);
             commands::show_palette(self, ctx);
@@ -1137,7 +1147,9 @@ impl eframe::App for App {
             return;
         }
         panels::ribbon(self, ctx);
-        if self.images_mode {
+        if self.journal_mode {
+            self.journal_mode_ui(ctx);
+        } else if self.images_mode {
             self.image_mode(ctx);
         } else {
             if self.left_open {
@@ -1299,6 +1311,15 @@ impl App {
             Some(crate::images_ui::ImageAction::TogglePanel(left)) => {
                 let i = if left { 0 } else { 1 };
                 self.images.panels[i] = !self.images.panels[i];
+            }
+            Some(crate::images_ui::ImageAction::SendToJournal(keys)) => {
+                if self.journal.book.is_some() {
+                    self.journal.pending_pictures.extend(keys);
+                    self.images_mode = false;
+                    self.journal_mode = true;
+                } else {
+                    self.toast("Abra um caderno no Journal para mandar imagens a ele.");
+                }
             }
             None => {}
         }

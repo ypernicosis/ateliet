@@ -10,6 +10,7 @@
 │ images_ui.rs · vision.rs   modo imagens, coleções, visualizador, moodboards, busca por descrição (CLIP)    │
 │ board_ui.rs, board_ui/   storyboard: quadros, camadas, pincéis, ferramentas, referências, exportações      │
 │ quadro_ui/  Quadro: Kanban e Excalidraw no canvas (desenho, ponteiro, edição, painéis e menus)             │
+│ journal_ui/ · journal_mode.rs   Journal: estante, página dupla, ferramentas, painéis de material          │
 │ sc/         Scriptorium, Enredo, Mundo, Mapas, Diagramação, Capa, Compositor, Trilha                       │
 │ dv.rs · templater.rs · daily.rs   Dataview, Templater, notas diárias e calendário                          │
 │ vault.rs · host.rs · config.rs · update.rs   arquivos e watcher, caches, configurações, autoatualização    │
@@ -23,6 +24,7 @@
 │   images.rs · clip.rs · pictogrep.rs · pinterest.rs · moodboard.rs   imagens, CLIP, Pictogrep, moodboards  │
 │   board/ · clipstudio.rs                          storyboard: documento, pintura, composição, .clip       │
 │   quadro/                                         Kanban, Excalidraw, LZString, traço rabiscado, PNG      │
+│   journal/ · capture/ · canvas.rs                 cadernos e páginas, trechos e caixa de entrada, geometria│
 │   scriptorium/ · typeset/                         livros, enredo, mundo; composição de páginas e PDF       │
 │   css_theme.rs · texmath.rs · texlayout.rs        temas (cores, tipografia, fontes), TeX em texto e caixas │
 │   mermaid.rs, mermaid/ · media.rs                 diagramas Mermaid; páginas de PDF, vídeo pelo ffmpeg     │
@@ -80,6 +82,14 @@ Dataview, Templater, Calendar e o Moodboard do Pictogrep eram plugins e agora fa
 
 Eram o plugin Moodboard do Pictogrep. Os quadros continuam no formato e no lugar do plugin: com biblioteca compartilhada, `data/plugins/moodboard.json` da pasta do Pictogrep (as chaves `index`, `board:<id>` e `prefs`); sem ela, `.obsidian/ateliet/moodboard.json` no cofre. Uma imagem é guardada pelo id do Pictogrep (SHA-256 do caminho absoluto), então os quadros abrem nos dois apps. Cada gravação relê o arquivo e troca só as próprias chaves. O núcleo tem o documento, a geometria (rotação, caixas, alinhamento por guias, organizar, recorte) e a paleta; a interface desenha o quadro com o `Painter` do egui (imagens como malhas com UV, para girar, recortar e espelhar) e usa as prévias do modo imagens no tamanho em que aparecem.
 
-## Leitor e Journal (propostas)
+## Journal (`core/src/journal/`, `core/src/capture/`, `src/journal_ui/`)
 
-O estudo e a arquitetura do modo Journal, com digitalização de notas manuscritas, trechos do Leitor e as ferramentas de colagem, estão em [docs/JOURNAL.md](docs/JOURNAL.md); o do Leitor (EPUB, PDF e quadrinhos), que vem antes, em [docs/LEITOR.md](docs/LEITOR.md).
+O plano está em [docs/JOURNAL.md](docs/JOURNAL.md), com o que já foi feito na seção 14; o do Leitor (EPUB, PDF e quadrinhos), ainda proposta, em [docs/LEITOR.md](docs/LEITOR.md).
+
+- **Modelo** (`journal/mod.rs`): `Item` com caixa em milímetros da página (`x, y, w, h, r`), camada pela ordem, recorte (`Crop` do moodboard), máscara (`Mask`: forma de molde ou contorno), aparência (`Look`: filtro, borda de adesivo, sombra), âncora (legenda presa à imagem), `Flow` (caixa anterior e seguinte de um texto que continua) e o que não conhece em `extra`. O conteúdo de texto não está no item: é a seção da nota (`body`).
+- **Papel** (`paper.rs`): tamanhos, papéis e colunas como escritos no frontmatter, e `Layout`, onde caem numa página as linhas da pauta, as linhas de base do texto (no papel liso também, sem aparecer), o cabeçalho e a linha das colunas Cornell (no quadriculado, sobre a grade) e as colunas, espelhadas entre página da esquerda e da direita.
+- **Formato** (`format.rs`): a nota-índice (`Notebook`, com as páginas lidas da pasta e ordenadas por `pagina`) e a página (`Page`): o que vem antes da primeira seção, as seções `## ^j-<id>` em ordem (fora de blocos de código), as seções sem item (escritas no Obsidian) e o bloco `%% ateliet:journal %%`, com `` ` `` e `%` escapados. O bloco lido é regravado igual quando o valor não mudou, então ler e gravar dá o mesmo texto. `merge` junta uma página mudada aqui e no disco; `restore` devolve um bloco perdido a partir da cópia. `cut.rs` recorta uma imagem com a máscara num PNG com transparência (cobertura do polígono com 4×4 amostras por pixel).
+- **Trechos** (`capture/`): `Snippet` e `SourceRef`, a nota do trecho (callout `[!trecho]`, fonte no frontmatter) e a caixa de entrada, que importa e apaga o que encontra na pasta (arquivos mexidos há menos de dois segundos esperam).
+- **Geometria** (`canvas.rs`): caixas, rotação e encaixe, tirados do moodboard (que os reexporta) e estendidos com linhas fixas (margens, colunas, pauta).
+- **Filtros**: os quatro novos (granulado com semente fixa por imagem, fotocópia, retícula, impressão caseira) estão em `typeset::compose::filter`, junto dos do compositor, e servem também às páginas compostas.
+- **Interface**: `journal_ui/mod.rs` guarda o estado (estante procurada em segundo plano, caderno aberto, páginas carregadas sob demanda, desfazer por instantâneos das páginas carregadas, salvamento 1,5 s depois da última mudança que relê o disco e junta, cópia do bloco em `.obsidian/ateliet/journal/`) e a recomposição do texto que continua: a sequência de caixas é refeita do começo, cada caixa leva o que cabe até a última linha da página, o resto vai para a seguinte (criada na página seguinte, na coluna de mesmo papel) e caixas vazias saem. As quebras são medidas com as fontes do egui numa escala fina. `draw.rs` desenha papel, lombada e itens (texto com as linhas de base na pauta, imagens como malhas recortadas pelo polígono da máscara, triangulado por orelhas); `input.rs` trata ponteiro, teclado, edição no lugar (um `TextEdit` com o mesmo layout do texto desenhado), recorte e o que é solto na página; `chrome.rs` tem a barra, o balão e os painéis; `shelf.rs` a estante, o caderno novo e as miniaturas. `src/journal_mode.rs` liga o Journal ao app: renomear várias páginas de uma vez (por nomes temporários, com os links reescritos numa passada) e "Mandar ao Journal".

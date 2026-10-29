@@ -403,6 +403,19 @@ Cada fase entrega algo usável sozinho e prepara a próxima. O Leitor ([LEITOR.m
 - **Texto que continua**: a ligação entre caixas de páginas diferentes é a parte mais delicada do modelo, porque cada página é um arquivo. A sequência fica guardada nas duas pontas (`flow` com o id da caixa seguinte e da anterior) e é refeita pela ordem das páginas quando uma delas some.
 - **Transcrição**: a qualidade em letra cursiva em português é o maior risco técnico do projeto, e ele é contido pelo desenho: a imagem é sempre o original, e a transcrição só serve para busca e para quem quiser corrigi-la.
 
+## 14. Estado da implementação
+
+O que já está no código, fase por fase, e o que falta. O núcleo está em `core/src/journal/`, `core/src/capture/` e `core/src/canvas.rs`; a interface em `src/journal_ui/` e `src/journal_mode.rs`.
+
+1. **O caderno: feito.** Nota-índice e páginas no formato da seção 6, com testes de ida e volta byte a byte, de junção com mudanças feitas no disco e de restauração do bloco perdido. Papéis (liso, pautado, quadriculado, pontilhado), colunas (Cornell nas quatro posições, duas colunas), tamanhos. Estante com capas, caderno novo com folha de rosto, página dupla com lombada e volume, virar páginas (setas, `PageUp`/`PageDown`, deslize no trackpad, `Ctrl/Cmd+G`), marcador, miniaturas com reordenação (os arquivos são renomeados e os links seguem), página nova no fim ou depois da atual, apagar página, a barra que some. Falta: marcadores extras em lingueta, a vista de uma página só, virar clicando no canto, escolher a imagem da capa pela interface (`capa-imagem` no frontmatter já é lida).
+2. **Escrever e colar: feito.** Texto na pauta, com continuação na página seguinte na coluna de mesmo papel; imagens do painel de Imagens; notas ao vivo e cópia com `Alt` pelo painel de Notas; mover, girar, redimensionar, encaixe nas linhas da página e nos outros itens, camadas, travar, duplicar, desfazer; itens que passam para a outra página ou atravessam a lombada; legenda presa à imagem. Diferente do plano: o texto é editado como Markdown puro num campo no lugar e exibido com negrito, itálico, grifo, links e tags formatados, e não pelo editor Live Preview do modo escrita. Falta: a lista de camadas sob demanda.
+3. **Trechos: em parte.** Feitos o modelo `Snippet`, as notas em `Trechos/`, a caixa de entrada por pasta, o painel Trechos (com os já usados marcados) e "Journal: Mandar a seleção ao Journal". Faltam o esquema `ateliet://` e tudo o que depende do Leitor, que ainda não existe ("Ler ao lado", recortes de região).
+4. **Aparência: em parte.** Feitos o recorte retangular, as formas de molde, a borda de adesivo com sombra, a fita adesiva, os quatro filtros novos no compositor e a gaveta de adesivos (o recorte vira um PNG com transparência em `Adesivos/`, e a forma dele fica em `.obsidian/ateliet/journal/adesivos.json` para a borda seguir o contorno). "Deixar a pauta aparecer" deixa a imagem um pouco translúcida, em vez de um modo de mistura de verdade. Faltam o laço e o pincel de máscara e a borda rasgada.
+5. **Texto contornando imagens: não feito**, a não ser as fontes manuscritas (Caveat, embutida). O campo `wrap` já existe no formato.
+6. **Digitalização: não feita.** As fotos que chegam pela caixa de entrada viram trechos com imagem, que podem ser postos na página, mas sem perspectiva, limpeza, separação da tinta nem transcrição.
+7. **Recorte automático: não feito.**
+8. **Integrações: em parte.** Feitos a página do dia nos cadernos diários, "Mandar ao Journal" no menu das imagens do modo imagens e a consulta Dataview da nota-índice. Faltam os modelos com o Templater, moodboard → Journal, a página como cartão no Quadro, a página aberta como aba no modo escrita e a exportação em PNG e PDF.
+
 ## Fontes consultadas
 
 - Pinterest, [Create a collage](https://help.pinterest.com/en/article/create-a-collage)
