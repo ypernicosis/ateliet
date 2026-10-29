@@ -54,6 +54,29 @@ pub fn image_id(path: &Path) -> String {
     hex(&Sha256::digest(clean(path).to_string_lossy().as_bytes()))
 }
 
+/// The ids a picture may have been saved under: its own, and, inside the
+/// library folder, the ones from the other spellings of that folder's name
+/// (`pictogrep`, `Pictogrep`). The Mac's disk takes either, so the same
+/// file can be reached by both, and each gives a different id.
+pub fn image_ids(home: Option<&Home>, path: &Path) -> Vec<String> {
+    let path = clean(path);
+    let mut out = vec![image_id(&path)];
+    let Some(home) = home else { return out };
+    let (Some(parent), Some(name)) = (home.root.parent(), home.root.file_name().and_then(|n| n.to_str())) else { return out };
+    let Ok(rest) = path.strip_prefix(&home.root) else { return out };
+    let mut cap = name.to_lowercase();
+    if let Some(f) = cap.get(..1).map(str::to_uppercase) {
+        cap.replace_range(..1, &f);
+    }
+    for alt in [name.to_lowercase(), cap] {
+        let id = image_id(&parent.join(alt).join(rest));
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -134,8 +157,9 @@ fn candidates() -> Vec<PathBuf> {
     }
     if let Some(home) = dirs::home_dir() {
         out.push(home.join(".local").join("share").join("pictogrep"));
-        out.push(home.join("Library").join("Application Support").join("Pictogrep"));
+        // Pictogrep's own spelling first: ids hash the path as written
         out.push(home.join("Library").join("Application Support").join("pictogrep"));
+        out.push(home.join("Library").join("Application Support").join("Pictogrep"));
     }
     if let Ok(p) = std::env::var("LOCALAPPDATA") {
         out.push(PathBuf::from(p).join("Pictogrep"));
@@ -143,14 +167,15 @@ fn candidates() -> Vec<PathBuf> {
     out
 }
 
-/// Finds the shared library: a running Pictogrep says where its folder is;
-/// otherwise the first known location that holds a Pictogrep library.
+/// Finds the shared library on disk, the same whether Pictogrep runs or not;
+/// only when no known location holds one is a running Pictogrep asked.
 pub fn detect() -> Option<Home> {
-    if let Some(home) = running_instance().map(|(_, h)| h) {
-        remember(&home);
+    if let Some(home) = candidates().into_iter().map(Home::new).find(|h| h.looks_valid()) {
         return Some(home);
     }
-    candidates().into_iter().map(Home::new).find(|h| h.looks_valid())
+    let home = running_instance().map(|(_, h)| h)?;
+    remember(&home);
+    Some(home)
 }
 
 fn agent(timeout: Duration) -> ureq::Agent {
@@ -932,6 +957,16 @@ pub fn storage_set(home: &Home, id: &str, key: &str, value: Value) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_survive_the_folder_spelling() {
+        let pic = Path::new("/Users/a/Library/Application Support/pictogrep/library/x.jpg");
+        let home = Home::new(PathBuf::from("/Users/a/Library/Application Support/Pictogrep"));
+        let ids = image_ids(Some(&home), Path::new("/Users/a/Library/Application Support/Pictogrep/library/x.jpg"));
+        assert_eq!(ids[0], image_id(Path::new("/Users/a/Library/Application Support/Pictogrep/library/x.jpg")));
+        assert!(ids.contains(&image_id(pic)));
+        assert_eq!(image_ids(Some(&home), Path::new("/elsewhere/x.jpg")).len(), 1);
+    }
 
     fn temp_home(tag: &str) -> Home {
         let dir = std::env::temp_dir().join(format!("ateliet-pg-{tag}-{}", std::process::id()));

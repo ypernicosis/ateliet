@@ -784,7 +784,9 @@ impl ImagesState {
             self.mb.board = None;
         }
         if self.mb.ids_gen != self.entries_gen {
-            self.mb.ids = self.entries.iter().enumerate().map(|(i, e)| (ateliet_core::pictogrep::image_id(Path::new(&e.abs)), i)).collect();
+            // every spelling a board may have saved, so boards keep their
+            // pictures however the library folder was reached
+            self.mb.ids = self.entries.iter().enumerate().flat_map(|(i, e)| ateliet_core::pictogrep::image_ids(self.shared.as_ref(), Path::new(&e.abs)).into_iter().map(move |id| (id, i))).collect();
             self.mb.ids_gen = self.entries_gen;
         }
         // pictures sent from the mosaic to a board
