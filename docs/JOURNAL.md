@@ -254,7 +254,9 @@ Não há um caminho único; o Kindle é fechado, e cada aparelho permite uma coi
 3. **Kindle de tinta eletrônica.** O aparelho não envia nada pela rede, mas grava cada grifo e nota em `documents/My Clippings.txt`. Quando o Kindle é ligado ao computador por USB (o volume `Kindle` aparece), o Ateliet oferece importar os grifos novos. O parser lê os blocos separados por `==========` (título e autor, tipo, posição e data, texto), em inglês e em português, e lembra o que já importou pelo hash de cada bloco.
 4. **Exportação do caderno do Kindle.** O app do Kindle exporta as notas e grifos de um livro em HTML (por e-mail no celular, por arquivo no computador). Soltar esse arquivo no Ateliet importa todos os trechos.
 
-O que não dá para fazer, e o documento deixa registrado para não virar promessa: ler a seleção dentro do app do Kindle sem que o usuário toque em "Compartilhar" ou "Copiar", e baixar os grifos de `read.amazon.com` sem um login da Amazon guardado pelo Ateliet (o que não vale o risco). Os limites de cópia da editora continuam valendo nos caminhos 1 e 2.
+5. **Kindle de tinta eletrônica com jailbreak.** Aqui o Kindle passa a rodar código do Ateliet e envia o trecho sozinho, pelo Wi‑Fi, no momento em que ele é grifado. Ver 7.4.
+
+O que não dá para fazer num Kindle sem jailbreak, e o documento deixa registrado para não virar promessa: ler a seleção dentro do app do Kindle sem que o usuário toque em "Compartilhar" ou "Copiar", e baixar os grifos de `read.amazon.com` sem um login da Amazon guardado pelo Ateliet (o que não vale o risco). Os limites de cópia da editora continuam valendo nos caminhos 1 e 2.
 
 ### 7.3 Caixa de entrada e servidor local (`core/src/capture/inbox.rs`, `src/capture.rs`)
 
@@ -262,6 +264,29 @@ O que não dá para fazer, e o documento deixa registrado para não virar promes
 - **Esquema de URL**: `ateliet://capture?text=…&title=…&author=…&url=…`, registrado no `Info.plist` (`CFBundleURLTypes`) no macOS e num arquivo `.desktop` no Linux. Serve para o Atalhos no próprio Mac e para favoritos do navegador.
 - **Servidor local**: um servidor HTTP mínimo (`tiny_http`, numa thread) em `127.0.0.1`, com `POST /capture`. Desligado por padrão para a rede; ligado, escuta na rede local com um token gerado pelo app e mostrado como código QR em Configurações, para que só o atalho configurado consiga enviar. O Pictogrep já usa uma porta local; o Ateliet usa outra.
 - Cada trecho que chega mostra um aviso discreto ("Trecho de *Livro* chegou") com "Pôr na página aberta" e "Guardar". O painel **Trechos** do Journal lista os que ainda não foram usados.
+
+### 7.4 Kindle com jailbreak (`kindle/` no repositório)
+
+Com o jailbreak (WinterBreak, AdBreak ou outro), o Kindle roda o KUAL, o lançador de extensões, e o KOReader, o leitor livre que abre EPUB, PDF e CBZ e aceita plugins em Lua. Isso abre dois caminhos, um para cada leitor, e os dois falam com o mesmo servidor local do Ateliet (7.3).
+
+**No KOReader: `ateliet.koplugin` (o caminho principal).** O KOReader já tem um plugin de exportação (`exporter.koplugin`) com destinos remotos como o Readwise, e plugins de terceiros já põem botões próprios no menu que aparece ao selecionar texto. O plugin do Ateliet faz as duas coisas:
+
+- **Botão "Ateliet" no menu da seleção**: manda o trecho na hora, com a nota escrita no KOReader, se houver. Um toque longo abre um campo de comentário antes de enviar.
+- **Destino "Ateliet" no Exportador**: manda de uma vez todos os grifos de um livro, ou de todos os livros, para quem grifa primeiro e organiza depois.
+- **O que vai junto**: título, autor, idioma, capítulo, página, o `xpointer` do KOReader (o caminho do trecho no XHTML do EPUB) e o `partial_md5` com que o KOReader identifica o arquivo. O `xpointer` é o mesmo tipo de caminho que o localizador do leitor de EPUB do Ateliet usa (7.1). Por isso, se o mesmo EPUB está no vault, clicar na fonte do trecho abre o livro no Ateliet exatamente naquele parágrafo. Um livro sem cópia no vault ainda gera a nota do trecho, só sem esse salto.
+- **Fila sem rede**: sem Wi‑Fi, ou com o Mac desligado, o trecho vai para `koreader/ateliet/fila.jsonl` no Kindle e é reenviado quando o KOReader se conectar. Ligado por USB, o Ateliet também lê essa fila diretamente, e cada trecho tem um id, então nada é importado duas vezes.
+- **Livros nos dois sentidos (opcional)**: o plugin lista os EPUBs do vault (`GET /books`) e baixa os escolhidos para o Kindle. Assim, o livro lido no Kindle é o mesmo arquivo do leitor do Ateliet, e os localizadores batem.
+- **Configuração**: o endereço do Mac e o token aparecem em Ateliet › Configurações › Kindle e são digitados uma vez no menu do plugin. O plugin testa a conexão com `GET /ping`.
+
+O plugin é Lua puro, usa as bibliotecas que o KOReader já traz (`socket.http`, `json`, `NetworkMgr` para ligar o Wi‑Fi) e não precisa de nada instalado fora da pasta `koreader/plugins/`. Também funciona no KOReader de Kobo, PocketBook e Android, que leem o mesmo plugin.
+
+**No leitor da Amazon: extensão do KUAL que vigia os grifos.** O leitor original não aceita botões novos, mas grava cada grifo e nota em `documents/My Clippings.txt` no momento em que eles são feitos. A extensão `ateliet` do KUAL instala um pequeno serviço em shell que confere esse arquivo a cada poucos segundos, separa as entradas novas com o mesmo parser de 7.2 (escrito de novo em shell e `awk`, ou num binário estático para ARM) e as manda ao Ateliet com o `curl` do próprio sistema do Kindle. O efeito, para quem lê, é o mesmo: grifou, chegou. A fila sem rede funciona como no plugin. O menu do KUAL tem "Ligar", "Desligar", "Enviar pendentes agora" e "Testar conexão".
+
+Este caminho tem dois limites. O leitor da Amazon só dá ao `My Clippings.txt` o texto e a posição Kindle (um número), sem o caminho no EPUB, então o salto para o parágrafo exato não existe aqui. E manter o serviço rodando depois de reiniciar o Kindle exige um job de inicialização no sistema, o que muda arquivos fora da área do usuário. A extensão oferece as duas formas: ligar à mão pelo KUAL a cada reinício, ou instalar o job (com o aviso).
+
+**No Ateliet.** Nada de novo além da seção 7.3: o servidor recebe os trechos em `POST /capture` com o token, ganha `GET /ping` e `GET /books`, e marca a origem como `KOReader` ou `KindleNativo`. Quando o Kindle aparece como volume USB, o Ateliet procura a fila do plugin e o `My Clippings.txt`, e oferece copiar o `ateliet.koplugin` e a extensão do KUAL para o aparelho, ou atualizá-los se forem mais antigos que os do app.
+
+**Riscos.** O jailbreak depende da versão do firmware. Uma atualização automática da Amazon pode fechá-lo, e o Kindle pode precisar ficar fora do Wi‑Fi da Amazon. O plugin do KOReader não depende de nada da Amazon, então sobrevive a isso enquanto o KOReader rodar. A extensão do leitor original depende do formato do `My Clippings.txt` e do `curl` do sistema, e é a parte mais frágil.
 
 ## 8. Digitalizar as notas escritas à mão (`core/src/ocr/`, `src/journal_ui/scan_ui.rs`)
 
@@ -333,7 +358,7 @@ Cada fase entrega algo usável sozinho e prepara a próxima.
 4. **EPUB**: leitor, sumário, seleção, localizadores, nota do livro.
 5. **Texto contornando imagens**: largura por linha no compositor, troca entre texto composto e editor no lugar, fontes manuscritas.
 6. **Digitalização**: perspectiva, limpeza, tinta separada; transcrição pelo Apple Vision; correção de linhas; motor ONNX e a opção pela API.
-7. **Recorte automático e servidor local**: segmentação de primeiro plano (Vision e ONNX); servidor HTTP com token e código QR; o serviço do macOS.
+7. **Recorte automático e servidor local**: segmentação de primeiro plano (Vision e ONNX); servidor HTTP com token e código QR; o serviço do macOS; o `ateliet.koplugin` e a extensão do KUAL. O plugin do KOReader pode adiantar-se para a fase 3, porque só depende do servidor e do modelo de trecho.
 8. **Integrações restantes**: modelos com Templater, página do dia, moodboard ↔ Journal, cartão no Quadro, exportação do caderno.
 
 ## 12. Dependências novas e riscos
@@ -352,3 +377,6 @@ Cada fase entrega algo usável sozinho e prepara a próxima.
 - Social Media Today, [Pinterest adds collage remix and sharing options](https://www.socialmediatoday.com/news/pinterest-adds-collage-remix-sharing-options/727961/)
 - Hongkiat, [How to export Kindle notes and highlights](https://www.hongkiat.com/blog/export-kindle-highlights/)
 - Web Highlights, [How to export Kindle highlights](https://web-highlights.com/tutorials/pdf-web-highlighter/how-to-export-kindle-highlights)
+- KOReader, [Module koplugin.exporter](https://koreader.rocks/doc/modules/koplugin.exporter.html)
+- TRMNL, [Turn your Amazon Kindle into a TRMNL](https://usetrmnl.com/guides/turn-your-amazon-kindle-into-a-trmnl) (WinterBreak e limites de firmware)
+- MobileRead, [discussão sobre WinterBreak e o firmware 5.18](https://www.mobileread.com/forums/showthread.php?p=4573295)
