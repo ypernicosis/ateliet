@@ -423,32 +423,7 @@ pub fn board_collection(name: &str) -> String {
 
 // ── geometry ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
-pub struct Rect {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-impl Rect {
-    pub fn intersects(&self, o: &Rect) -> bool {
-        self.x < o.x + o.w && self.x + self.w > o.x && self.y < o.y + o.h && self.y + self.h > o.y
-    }
-
-    pub fn contains_rect(&self, o: &Rect) -> bool {
-        o.x >= self.x && o.y >= self.y && o.x + o.w <= self.x + self.w && o.y + o.h <= self.y + self.h
-    }
-}
-
-pub fn rot_pt(x: f64, y: f64, cx: f64, cy: f64, deg: f64) -> (f64, f64) {
-    if deg == 0.0 {
-        return (x, y);
-    }
-    let (s, c) = deg.to_radians().sin_cos();
-    let (dx, dy) = (x - cx, y - cy);
-    (cx + dx * c - dy * s, cy + dx * s + dy * c)
-}
+pub use crate::canvas::{rot_pt, snap, Guide, Rect};
 
 /// The box around items, rotation counted.
 pub fn bbox<'a>(items: impl IntoIterator<Item = &'a Item>) -> Rect {
@@ -516,58 +491,6 @@ pub fn arrange(items: &mut [Item], which: &[usize]) -> bool {
         row_h = row_h.max(it.h);
     }
     true
-}
-
-/// A snapping guide: a vertical (`v`) or horizontal line at `at`, drawn from
-/// `from` to `to` along the other axis.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Guide {
-    pub v: bool,
-    pub at: f64,
-    pub from: f64,
-    pub to: f64,
-}
-
-/// Aligns a moving box's edges and centre with nearby boxes within `th`.
-pub fn snap(bb0: Rect, mut dx: f64, mut dy: f64, others: &[Rect], th: f64) -> (f64, f64, Vec<Guide>) {
-    let b = Rect { x: bb0.x + dx, y: bb0.y + dy, ..bb0 };
-    let mx = [b.x, b.x + b.w / 2.0, b.x + b.w];
-    let my = [b.y, b.y + b.h / 2.0, b.y + b.h];
-    let mut best_x: Option<(f64, f64, Rect)> = None;
-    let mut best_y: Option<(f64, f64, Rect)> = None;
-    for o in others {
-        for m in mx {
-            for v in [o.x, o.x + o.w / 2.0, o.x + o.w] {
-                let d = v - m;
-                if d.abs() < th && best_x.is_none_or(|bx| d.abs() < bx.0.abs()) {
-                    best_x = Some((d, v, *o));
-                }
-            }
-        }
-        for m in my {
-            for v in [o.y, o.y + o.h / 2.0, o.y + o.h] {
-                let d = v - m;
-                if d.abs() < th && best_y.is_none_or(|by| d.abs() < by.0.abs()) {
-                    best_y = Some((d, v, *o));
-                }
-            }
-        }
-    }
-    if let Some((d, ..)) = best_x {
-        dx += d;
-    }
-    if let Some((d, ..)) = best_y {
-        dy += d;
-    }
-    let nb = Rect { x: bb0.x + dx, y: bb0.y + dy, ..bb0 };
-    let mut guides = Vec::new();
-    if let Some((_, at, o)) = best_x {
-        guides.push(Guide { v: true, at, from: nb.y.min(o.y), to: (nb.y + nb.h).max(o.y + o.h) });
-    }
-    if let Some((_, at, o)) = best_y {
-        guides.push(Guide { v: false, at, from: nb.x.min(o.x), to: (nb.x + nb.w).max(o.x + o.w) });
-    }
-    (dx, dy, guides)
 }
 
 /// One corner or edge dragged: the new box of an item resized from the

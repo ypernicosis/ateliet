@@ -23,6 +23,8 @@ pub const CORMORANT_BOLD: &[u8] = include_bytes!("../assets/fonts/CormorantGaram
 pub const GARAMOND: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Medium.ttf");
 pub const GARAMOND_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-MediumItalic.ttf");
 pub const GARAMOND_BOLD: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Bold.ttf");
+/// A handwriting face (Caveat), for the Journal's comments meant to look written.
+pub const HAND: &[u8] = include_bytes!("../assets/fonts/Caveat-Regular.ttf");
 pub const GARAMOND_BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-BoldItalic.ttf");
 /// The faces of the ready-made book styles (Diagramação), only for typesetting.
 const BOOK_SERIFS: [&[u8]; 14] = [
@@ -122,6 +124,7 @@ pub fn definitions_with(theme: &ThemeFonts) -> FontDefinitions {
     put("garamond", FontData::from_static(GARAMOND));
     put("garamond-italic", FontData::from_static(GARAMOND_ITALIC));
     put("garamond-bold", FontData::from_static(GARAMOND_BOLD));
+    put("hand", FontData::from_static(HAND));
     let sys = first(SYSTEM_SANS).map(|d| put("sys-sans", FontData::from_owned(d))).is_some();
     let mono = first(MONO).map(|d| put("sys-mono", FontData::from_owned(d))).is_some();
 
@@ -139,7 +142,7 @@ pub fn definitions_with(theme: &ThemeFonts) -> FontDefinitions {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("italic".into()), chain("inter-italic"));
-    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold"] {
+    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold", "hand"] {
         fonts.families.insert(FontFamily::Name(f.into()), chain(f));
     }
     fonts.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into(), "inter".into()]);

@@ -15,6 +15,8 @@ mod host;
 mod icons;
 mod kit;
 mod images_ui;
+mod journal_mode;
+mod journal_ui;
 mod live;
 mod markdown;
 mod media_ui;

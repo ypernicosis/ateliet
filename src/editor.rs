@@ -721,7 +721,7 @@ pub fn utf16_to_byte(s: &str, u: usize) -> usize {
 }
 
 /// The selection of an editor, as sorted char indices.
-fn selection(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
+pub(crate) fn selection(ctx: &egui::Context, id: egui::Id) -> Option<(usize, usize)> {
     let r = egui::TextEdit::load_state(ctx, id)?.cursor.char_range()?;
     let (a, b) = (r.primary.index, r.secondary.index);
     Some((a.min(b), a.max(b)))

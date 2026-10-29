@@ -32,7 +32,7 @@ pub const TEMPLATES: [(&str, &str); 17] = [
     ("texto-moldura", "Texto com moldura ilustrada"),
 ];
 
-pub const FILTERS: [(&str, &str); 6] = [("", "Nenhum"), ("pb", "Preto e branco"), ("sepia", "Sépia"), ("contraste", "Alto contraste"), ("noite", "Noite"), ("desfoque", "Desfoque")];
+pub const FILTERS: [(&str, &str); 10] = [("", "Nenhum"), ("pb", "Preto e branco"), ("sepia", "Sépia"), ("contraste", "Alto contraste"), ("noite", "Noite"), ("desfoque", "Desfoque"), ("granulado", "Granulado"), ("fotocopia", "Fotocópia"), ("reticula", "Retícula"), ("impressao", "Impressão caseira")];
 
 pub const ZONE_NAMES: [(&str, &str); 6] = [("capa", "Capa"), ("contracapa", "Contracapa"), ("lombada", "Lombada"), ("orelha-esq", "Orelha esquerda"), ("orelha-dir", "Orelha direita"), ("tudo", "Capa aberta inteira")];
 
@@ -952,6 +952,67 @@ pub fn filter(rgba: &mut [u8], w: u32, h: u32, name: &str) {
                         }
                     }
                 }
+            }
+        }
+        // film grain: the same noise every time for the same picture
+        "granulado" => {
+            let seed = (w as u64).wrapping_mul(0x9e37_79b9) ^ h as u64;
+            for (i, c) in rgba.chunks_mut(4).enumerate() {
+                let mut x = seed ^ (i as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                x ^= x >> 29;
+                x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+                x ^= x >> 32;
+                let n = ((x & 0xff) as f32 / 255.0 - 0.5) * 38.0;
+                for v in c.iter_mut().take(3) {
+                    *v = (*v as f32 + n).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+        // a photocopy: grey, the middle tones pushed to paper or toner
+        "fotocopia" => {
+            for c in rgba.chunks_mut(4) {
+                let l = (0.2126 * c[0] as f32 + 0.7152 * c[1] as f32 + 0.0722 * c[2] as f32) / 255.0;
+                let t = ((l - 0.32) / 0.36).clamp(0.0, 1.0);
+                let v = t * t * (3.0 - 2.0 * t);
+                let v = (0.1 + 0.87 * v) * 255.0;
+                c[0] = v.round() as u8;
+                c[1] = v.round() as u8;
+                c[2] = (v * 0.98).round() as u8;
+            }
+        }
+        // halftone: a dot per cell, as large as the cell is dark
+        "reticula" => {
+            let cell = ((w.max(h) as f32) / 72.0).max(3.0);
+            let src = rgba.to_vec();
+            let (wi, hi) = (w as usize, h as usize);
+            let lum = |x: usize, y: usize| {
+                let i = (y.min(hi - 1) * wi + x.min(wi - 1)) * 4;
+                (0.2126 * src[i] as f32 + 0.7152 * src[i + 1] as f32 + 0.0722 * src[i + 2] as f32) / 255.0
+            };
+            for y in 0..hi {
+                for x in 0..wi {
+                    let (cx, cy) = (((x as f32 / cell).floor() + 0.5) * cell, ((y as f32 / cell).floor() + 0.5) * cell);
+                    let l = lum(cx as usize, cy as usize);
+                    let r = (1.0 - l).max(0.0).sqrt() * cell * 0.62;
+                    let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                    let ink = (r - d + 0.5).clamp(0.0, 1.0);
+                    let v = (255.0 * (1.0 - ink * 0.9)).round() as u8;
+                    let i = (y * wi + x) * 4;
+                    rgba[i] = v;
+                    rgba[i + 1] = v;
+                    rgba[i + 2] = v;
+                }
+            }
+        }
+        // a home printer: less colour, the blacks lifted, a little warm
+        "impressao" => {
+            for c in rgba.chunks_mut(4) {
+                let (r, g, b) = (c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0);
+                let l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                let k = |v: f32, warm: f32| ((0.09 + 0.86 * (l + (v - l) * 0.72)) + warm) * 255.0;
+                c[0] = k(r, 0.012).round().clamp(0.0, 255.0) as u8;
+                c[1] = k(g, 0.0).round().clamp(0.0, 255.0) as u8;
+                c[2] = k(b, -0.02).round().clamp(0.0, 255.0) as u8;
             }
         }
         _ => {}
