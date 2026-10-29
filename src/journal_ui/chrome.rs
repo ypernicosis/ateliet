@@ -93,6 +93,11 @@ impl Journal {
                             let v = format!("{sz}");
                             b.set_setting("tamanho-letra", ((sz - 1.0).abs() > 1e-6).then_some(v.as_str()));
                         }
+                        let (g, name, next) = align_step(&b.nb.align);
+                        if kit::icon_button(ui, g, &format!("Alinhamento dos textos novos: {name} (clique: o próximo)"), !b.nb.align.is_empty(), p).clicked() {
+                            b.nb.align = next.to_string();
+                            b.set_setting("alinhamento", (!next.is_empty()).then_some(next));
+                        }
                         let wm = b.nb.wrap_to_margin;
                         let tip = if wm { "Começado no meio da linha, o texto volta à margem na linha seguinte (clique: manter onde começou)" } else { "Começado no meio da linha, o texto segue alinhado onde começou (clique: voltar à margem)" };
                         if kit::icon_button(ui, if wm { icons::CORNER_DOWN_LEFT } else { icons::ALIGN_LEFT }, tip, wm, p).clicked() {
@@ -172,15 +177,22 @@ impl Journal {
                             self.out.push(Out::Rescan);
                         }
                         kit::menu_sep(ui, p);
-                        if let Some(path) = b.page_ref(cur).map(|r| r.path.clone()) {
-                            if kit::menu_item(ui, icons::EXTERNAL_LINK, &format!("Abrir a página {cur} como nota"), p) {
-                                b.save(true, &mut self.out);
-                                self.out.push(Out::Open(path));
+                        // both pages of the spread (the left one too)
+                        let (l, r) = b.spread_pages();
+                        let shown: Vec<usize> = [l, r].into_iter().flatten().filter(|n| *n > 0).collect();
+                        for &pn in &shown {
+                            if let Some(path) = b.page_ref(pn).map(|r| r.path.clone()) {
+                                if kit::menu_item(ui, icons::EXTERNAL_LINK, &format!("Abrir a página {pn} como nota"), p) {
+                                    b.save(true, &mut self.out);
+                                    self.out.push(Out::Open(path));
+                                }
                             }
                         }
-                        if b.count() > 1 && kit::menu_danger(ui, icons::TRASH_2, &format!("Apagar a página {cur}"), p) {
-                            b.commit_edit();
-                            b.delete_page(cur, &mut self.out);
+                        for &pn in &shown {
+                            if b.count() > 1 && kit::menu_danger(ui, icons::TRASH_2, &format!("Apagar a página {pn}"), p) {
+                                b.commit_edit();
+                                b.delete_page(pn, &mut self.out);
+                            }
                         }
                     });
                 });
@@ -270,11 +282,11 @@ impl Journal {
                 let current = super::draw::effective_font(it).to_string();
                 if let Some(f) = font_menu(ui, ("journal-font", &id), &current, false, p) {
                     edit_item(b, n, &id, |i| i.style.font = f);
-                    b.pending_reflow = Some((n, id.clone()));
+                    b.pending_reflow.push((n, id.clone()));
                 }
                 if let Some(sz) = size_menu(ui, ("journal-size", &id), it.style.size(), false, p) {
                     edit_item(b, n, &id, |i| i.style.size = if (sz - 1.0).abs() < 1e-6 { 0.0 } else { sz });
-                    b.pending_reflow = Some((n, id.clone()));
+                    b.pending_reflow.push((n, id.clone()));
                 }
                 // writing begun mid-line: back to the margin, or kept there
                 let lay = b.layout(n);
@@ -294,20 +306,16 @@ impl Journal {
                                 i.x = c0;
                             }
                         });
-                        b.pending_reflow = Some((n, id.clone()));
+                        b.pending_reflow.push((n, id.clone()));
                     }
                 }
                 let big = it.style.lines() > 1.0;
                 if kit::icon_button(ui, icons::HEADING, if big { "Uma linha da pauta" } else { "Duas linhas da pauta (maior)" }, big, p).clicked() {
                     edit_item(b, n, &id, |i| i.style.lines = if big { 0.0 } else { 2.0 });
-                    b.pending_reflow = Some((n, id.clone()));
+                    b.pending_reflow.push((n, id.clone()));
                 }
-                let (g, next) = match it.style.align.as_str() {
-                    "centro" => (icons::ALIGN_CENTER, "direita"),
-                    "direita" => (icons::ALIGN_RIGHT, ""),
-                    _ => (icons::ALIGN_LEFT, "centro"),
-                };
-                if kit::icon_button(ui, g, "Alinhamento", false, p).clicked() {
+                let (g, name, next) = align_step(&it.style.align);
+                if kit::icon_button(ui, g, &format!("Alinhamento: {name} (clique: o próximo)"), false, p).clicked() {
                     edit_item(b, n, &id, |i| i.style.align = next.to_string());
                 }
                 self.swatches(ui, b, n, &id, INKS, |i, c| i.style.color = c, it.style.color.clone(), p);
@@ -348,7 +356,8 @@ impl Journal {
                 if kit::icon_button(ui, icons::STAR, if sticker { "Sem borda de adesivo" } else { "Borda de adesivo" }, sticker, p).clicked() {
                     edit_item(b, n, &id, |i| {
                         i.look.border = if sticker { 0.0 } else { 1.8 };
-                        i.look.shadow = !sticker;
+                        // stuck down: no shadow under a sticker
+                        i.look.shadow = false;
                     });
                 }
                 let r = kit::icon_button(ui, icons::SLIDERS_HORIZONTAL, "Filtro", it.look.filter.is_some(), p);
@@ -368,7 +377,7 @@ impl Journal {
                     if kit::menu_check(ui, it.look.multiply, "Deixar a pauta aparecer", p) {
                         edit_item(b, n, &id, |i| i.look.multiply = !i.look.multiply);
                     }
-                    if kit::menu_check(ui, it.look.shadow, "Sombra", p) {
+                    if it.look.border <= 0.0 && kit::menu_check(ui, it.look.shadow, "Sombra", p) {
                         edit_item(b, n, &id, |i| i.look.shadow = !i.look.shadow);
                     }
                 });
@@ -734,6 +743,16 @@ impl Journal {
 
 /// The page an action without a place goes to: the right one shown (or
 /// the left).
+/// The alignment's icon, its name, and the one after it.
+fn align_step(a: &str) -> (&'static str, &'static str, &'static str) {
+    match a {
+        "centro" => (icons::ALIGN_CENTER, "centralizado", "direita"),
+        "direita" => (icons::ALIGN_RIGHT, "à direita", "justificado"),
+        "justificado" => (icons::ALIGN_JUSTIFY, "justificado", ""),
+        _ => (icons::ALIGN_LEFT, "à esquerda", "centro"),
+    }
+}
+
 /// The sizes of type, within the line of the ruling.
 pub const SIZES: &[(f64, &str)] = &[(0.8, "Pequena"), (1.0, "Normal"), (1.2, "Média"), (1.45, "Grande")];
 
