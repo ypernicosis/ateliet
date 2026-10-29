@@ -164,22 +164,22 @@ fontes:
 tags: [escócia, florestas]
 ---
 
-## ^j-txt1
+%% j:txt1 %%
 > [!trecho] The Mountain Birch Project · Mossy Earth
 > Montane woodland is a virtually extinct habitat in Scotland. Of the 5.1% of
 > native forests in the Scottish Highlands, ==only a mere 4% exists above
 > altitudes of 400 metres==. …
 > — [vídeo](https://mossy.earth/projects/the-mountain-birch-project)
 
-## ^j-mg1
+%% j:mg1 %%
 Esse vídeo me foi recomendado no YouTube e eu cliquei porque há algo na
 Escócia… #paisagem
 
-## ^j-img1
+%% j:img1 %%
 ![[Salentin – Betendes Mädchen.jpg]]
 Hubert Salentin, 1882. *Betendes Mädchen mit einem Kranz aus Rosen*.
 
-## ^j-scan1
+%% j:scan1 %%
 ![[Scans/2023-11-05 p1.jpg]]
 > [!transcricao]- Transcrição
 > This painting feels so fairytale to me. The painter does not do it justice…
@@ -189,7 +189,7 @@ Hubert Salentin, 1882. *Betendes Mädchen mit einem Kranz aus Rosen*.
 %%
 ```
 
-O papel, o tamanho e as colunas vêm do caderno; uma página só os guarda se forem diferentes (uma página pautada num caderno quadriculado, por exemplo). Cada item com conteúdo tem uma seção com um id de bloco (`^j-…`). O JSON só guarda o que não é texto: posição, tamanho, rotação, camada, máscara, filtros, borda, ligação entre legenda e imagem. Por isso:
+O papel, o tamanho e as colunas vêm do caderno; uma página só os guarda se forem diferentes (uma página pautada num caderno quadriculado, por exemplo). Cada item com conteúdo tem uma seção, aberta por um comentário com o id do item (`%% j:…%%`, escondido na leitura). O JSON só guarda o que não é texto: posição, tamanho, rotação, camada, máscara, filtros, borda, ligação entre legenda e imagem. Por isso:
 
 - no Obsidian, a página abre como uma nota legível, na ordem de leitura, com as imagens e as transcrições;
 - a busca do Ateliet e o Dataview encontram o texto dos trechos, dos comentários e das transcrições;
@@ -219,7 +219,7 @@ pub struct Page {
 }
 
 pub struct Item {
-    pub id: String,              // também o id do bloco ^j-…
+    pub id: String,              // também a marca da seção (%% j:… %%)
     pub kind: Kind,
     pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub r: f64,   // em mm da página
     pub locked: bool,
@@ -431,6 +431,28 @@ O que torna a escrita fluida num caderno de papel, e nos editores feitos para es
 - **Trocar de letra sem sair da linha.** O balão do texto (fonte, tamanho, cor, alinhamento) fica disponível durante a digitação, fora do modo imersivo, e usá-lo não encerra a edição.
 
 Ficaram de fora, para depois: som de escrita, papel com textura no modo imersivo, e o "modo de frase" que esmaece também as outras frases do próprio texto.
+
+## 16. Notas e Journal sincronizados
+
+Uma página do Journal é uma nota, e deve ler-se como nota no modo notas e no Obsidian, sem nada que só faça sentido para o Journal. O que se viu ao abrir uma página como nota foram as marcas de seção (`## ^j-txt…`), que o Markdown mostra como títulos entre cada texto. A forma de manter os dois lados iguais, sem que um atrapalhe o outro:
+
+- **As marcas são comentários.** Cada seção começa com `%% j:<id> %%`. Comentários `%% %%` são escondidos pelo Obsidian (leitura e Live Preview) e pelo Ateliet, e não entram na busca nem no Dataview; o texto entre eles é Markdown comum. As páginas antigas são lidas e regravadas no formato novo ao abrir.
+- **A nota segue a página.** Quando a página muda, as seções são gravadas na ordem em que se lê a página: de cima para baixo e, na mesma altura, da esquerda para a direita (a margem Cornell ao lado do texto a que responde). No modo notas a página vira um texto corrido na ordem certa.
+- **O que se escreve na nota entra na página.** Texto escrito no modo notas ou no Obsidian fora de qualquer seção (no começo da nota) ou numa seção sem item vira um texto da página, nas primeiras linhas livres depois do que já está na coluna, em vez de ficar invisível no Journal. Editar o texto de uma seção muda o item correspondente.
+- **Os dois lados ao mesmo tempo.** O Journal relê uma página que mudou no disco quando não há nada seu por gravar; quando há, junta as mudanças (cada lado fica com o que mudou; na mesma seção, fica a do disco e há um aviso). O modo notas relê a nota quando o Journal a grava, se ela não tem mudanças suas.
+- **Imagens e animações são arquivos do cofre.** Embeds `![[…]]` comuns, que aparecem na nota; os storyboards entram como PNG animado, que toca nos dois.
+
+Ficaram como limites: a posição dos itens só existe no Journal (a nota não sabe que um texto está na margem), e o que é escrito na nota entra na página sempre na coluna principal.
+
+## 17. Texturas das capas
+
+As primeiras texturas eram ruído somado à cor, pixel a pixel, numa imagem pequena esticada sobre a capa: sem escala física, viravam listras e sujeira. As atuais seguem três regras:
+
+- **Relevo iluminado, não padrão pintado.** Cada material é um mapa de altura em milímetros (os fios de um tecido, o grão de um couro, as fibras de um papel), iluminado de cima à esquerda com a normal da superfície; um mapa plano dá exatamente a cor da capa, e o material aparece como luz e sombra.
+- **Escala real.** As texturas são feitas a 6 px/mm no tamanho do caderno, com detalhes nunca menores que a tela consegue mostrar (fio de linho de 0,75 mm, trama de tecido de 1,8 mm, grão de couro de 1,6 mm, pontos a cada 3,5 mm), e com mipmaps para a estante.
+- **Contraste baixo e o resto da capa.** O material muda poucos por cento a cor; toda capa ganha uma luz geral suave e bordas um pouco mais escuras. O marmorizado é a exceção: veios de duas tintas tiradas da cor da capa e de uma tinta clara, com ruído distorcido por ruído, como tinta espalhada.
+
+Cada textura: **linho** (fios irregulares nos dois sentidos, com nós e tons por fio), **tecido** (trama de um sobre um, fios desiguais), **papel kraft** (manchas de polpa, fibras no sentido da folha, pintas escuras), **couro** (grão em seixos de Voronoi, dobras largas), **marmorizada**, **cortiça** (grânulos de tons diferentes, poros) e **pontilhada** (pequenos afundados em fileiras alternadas).
 
 ## Fontes consultadas
 

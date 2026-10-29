@@ -32,8 +32,8 @@ pub enum Payload {
     Picture(String),
     Note(String),
     Snippet(String),
-    /// A frame of a storyboard: the file, the frame's id and place.
-    Frame(String, String, usize),
+    /// A storyboard, whole (it goes on the page as an animation).
+    Board(String),
 }
 
 /// What the Journal asks the app to do.
@@ -76,6 +76,12 @@ pub enum Panel {
     Snippets,
     Stickers,
     Storyboards,
+}
+
+/// A cover's texture: being made in the background, or made.
+pub enum CoverTex {
+    Making(std::sync::mpsc::Receiver<egui::ColorImage>),
+    Ready(egui::TextureHandle),
 }
 
 /// A storyboard's frames, drawn small in the background for the panel.
@@ -179,6 +185,8 @@ pub struct Book {
     caret: Option<egui::Pos2>,
     /// The view was brought close by the immersive mode (and goes back).
     auto_zoom: bool,
+    /// Where the typing cursor was last frame (it stays lit after a move).
+    last_cursor: Option<egui::epaint::text::cursor::Cursor>,
 }
 
 pub struct Journal {
@@ -213,9 +221,11 @@ pub struct Journal {
     pub pending_pictures: Vec<String>,
     /// Storyboards opened in the panel: path → their frames.
     pub boards: HashMap<String, (u64, BoardThumbs)>,
-    pub open_board: Option<String>,
+    /// The window cutting a storyboard, and the animations playing.
+    pub board_dlg: Option<boards::BoardDialog>,
+    anims: HashMap<String, boards::Anim>,
     /// Cover textures made: (texture, colour) → picture.
-    cover_tex: HashMap<String, egui::TextureHandle>,
+    cover_tex: HashMap<String, CoverTex>,
     /// Covers of the shelf's notebooks: index note → (modified, cover page).
     covers: HashMap<String, (u64, Page)>,
 }
@@ -243,7 +253,8 @@ impl Default for Journal {
             immersive: false,
             pending_pictures: Vec::new(),
             boards: HashMap::new(),
-            open_board: None,
+            board_dlg: None,
+            anims: HashMap::new(),
             cover_tex: HashMap::new(),
             covers: HashMap::new(),
         }
@@ -261,6 +272,49 @@ impl Loaded {
         let page = Page::parse(&text);
         let mtime = std::fs::metadata(&abs).and_then(|m| m.modified()).ok();
         Loaded { path: path.to_string(), abs, base: page.clone(), page, dirty: false, changed_at: None, mtime }
+    }
+}
+
+/// What was written on the page from the notes mode, outside the Journal's
+/// sections (at the top of the note, or in a section with no item), goes
+/// on the page as text: the first free lines after what is there. A page
+/// still marked the old way is written again the new way.
+fn adopt_notes_text(l: &mut Loaded, lay: &Layout) {
+    let mut changed = false;
+    if let Ok(text) = std::fs::read_to_string(&l.abs) {
+        changed |= format::is_legacy(&text);
+    }
+    let mut pieces: Vec<(Option<String>, String)> = Vec::new();
+    // the top of the note, after the frontmatter
+    let fm_end = ateliet_core::syntax::frontmatter(&l.page.head).map(|f| f.block.end).unwrap_or(0);
+    let rest = l.page.head[fm_end..].to_string();
+    if !rest.trim().is_empty() {
+        pieces.push((None, rest.trim().to_string()));
+        l.page.head = format!("{}\n\n", l.page.head[..fm_end].trim_end());
+    }
+    for (id, body) in std::mem::take(&mut l.page.loose) {
+        if body.trim().is_empty() {
+            continue;
+        }
+        pieces.push((Some(id), body.trim_end().to_string()));
+    }
+    let (c0, c1) = lay.main_column();
+    let s = lay.paper.line();
+    for (id, text) in pieces {
+        let low = l.page.items.iter().filter(|i| i.x < c1 && i.x + i.w > c0).map(|i| i.bbox().y + i.bbox().h).fold(0.0_f64, f64::max);
+        let top = lay.text_top(low.max(lay.first_baseline() - s) + 0.01, 1.0);
+        let rows = text.lines().count().max(1) as f64;
+        let mut it = Item::new(Kind::Text, c0, top, c1 - c0, rows * s);
+        if let Some(id) = id {
+            it.id = id;
+        }
+        it.set_content(&text);
+        l.page.items.push(it);
+        changed = true;
+    }
+    if changed {
+        l.dirty = true;
+        l.changed_at = Some(Instant::now());
     }
 }
 
@@ -299,6 +353,7 @@ impl Book {
             turned: None,
             caret: None,
             auto_zoom: false,
+            last_cursor: None,
         };
         b.cover_ref.path = b.nb.path.clone();
         if b.nb.pages.is_empty() {
@@ -414,9 +469,17 @@ impl Book {
         if !self.loaded.contains_key(&path) {
             let mut l = Loaded::read(&self.root, &path);
             self.restore_backup(&mut l);
+            if n > 0 {
+                let lay = self.layout_for(n, &l.page);
+                adopt_notes_text(&mut l, &lay);
+            }
             self.loaded.insert(path.clone(), l);
         }
         self.loaded.get_mut(&path)
+    }
+
+    fn layout_for(&self, n: usize, page: &Page) -> Layout {
+        Layout::new(&self.nb.size, page.paper().unwrap_or(self.nb.paper), self.nb.columns, n % 2 == 1)
     }
 
     pub fn page(&mut self, n: usize) -> Option<&mut Page> {
@@ -1065,6 +1128,7 @@ impl Journal {
             }
         });
         self.new_notebook_dialog(ctx, cx);
+        self.board_dialog_ui(ctx, cx);
         if std::mem::take(&mut self.close_requested) {
             self.close(cx.vault);
         }

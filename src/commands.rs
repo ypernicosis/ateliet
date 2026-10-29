@@ -366,6 +366,11 @@ pub fn shortcuts(app: &mut App, ctx: &egui::Context) {
         }
         return;
     }
+    // typing in the Journal: its keys are the text's (the app's shortcuts
+    // would act on the note behind it)
+    if app.journal_mode && ctx.wants_keyboard_input() {
+        return;
+    }
     if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::P))) {
         app.palette_ui = Some(Palette::commands());
         return;

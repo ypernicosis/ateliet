@@ -235,6 +235,10 @@ pub struct TextStyle {
     /// The type smaller or larger within its line (1 by default).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub size: f64,
+    /// The first line starts this far in (mm); the others at the box's
+    /// edge: writing begun mid-line wraps back to the column's margin.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub indent: f64,
 }
 
 impl TextStyle {

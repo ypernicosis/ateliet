@@ -1399,8 +1399,9 @@ impl App {
     fn drops_and_paste(&mut self, ctx: &egui::Context) {
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         let board = self.tabs.get(self.active).is_some_and(|t| t.board.is_some());
-        let note = self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.quadro.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
-        if !dropped.is_empty() && !self.images_mode {
+        // in the Journal, the note behind it is not where things go
+        let note = !self.journal_mode && self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.quadro.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
+        if !dropped.is_empty() && !self.images_mode && !self.journal_mode {
             if board {
                 if let Some(b) = self.tabs.get_mut(self.active).and_then(|t| t.board.as_mut()) {
                     b.add_reference_paths(&dropped);

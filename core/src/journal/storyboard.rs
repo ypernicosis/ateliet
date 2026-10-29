@@ -83,6 +83,81 @@ pub fn file_name(board_path: &str, f: &Frame) -> String {
     export::frame_file_name(base, f.index, &f.name)
 }
 
+/// A storyboard's timeline: its frames per second and how long each frame
+/// is held (in frames of the timeline).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clip {
+    pub fps: u32,
+    pub frames: Vec<(Frame, u32)>,
+}
+
+impl Clip {
+    /// When frame `i` starts, in seconds.
+    pub fn start(&self, i: usize) -> f32 {
+        self.frames.iter().take(i).map(|f| f.1).sum::<u32>() as f32 / self.fps.max(1) as f32
+    }
+
+    /// How long frames `from..=to` last, in seconds.
+    pub fn span(&self, from: usize, to: usize) -> f32 {
+        self.frames.iter().skip(from).take(to.saturating_sub(from) + 1).map(|f| f.1).sum::<u32>() as f32 / self.fps.max(1) as f32
+    }
+
+    pub fn len(&self) -> usize {
+        self.frames.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.frames.is_empty()
+    }
+}
+
+/// The timeline of a storyboard file.
+pub fn clip(abs: &Path) -> Result<Clip, String> {
+    let doc = BoardDoc::open(abs)?;
+    let frames = frames_of(&doc).into_iter().map(|f| {
+        let d = doc.frame(f.index)["duration"].as_f64().unwrap_or(24.0).round().clamp(1.0, 65535.0) as u32;
+        (f, d)
+    }).collect();
+    Ok(Clip { fps: doc.fps().max(1), frames })
+}
+
+/// Frames `from..=to` drawn no larger than `max_side`, each with how long
+/// it is held (seconds).
+pub fn render_span(abs: &Path, from: usize, to: usize, max_side: u32) -> Result<Vec<(RgbaImage, f32)>, String> {
+    let mut doc = BoardDoc::open(abs)?;
+    let mut pics = Pictures::default();
+    let scale = scale_for(&doc, max_side);
+    let fps = doc.fps().max(1) as f32;
+    let n = doc.frame_count();
+    if n == 0 {
+        return Err("o storyboard não tem quadros".into());
+    }
+    let to = to.min(n - 1);
+    Ok((from.min(to)..=to).map(|i| {
+        let (w, h, px) = export::frame_rgba(&mut doc, &mut pics, i, scale, false, false);
+        let d = doc.frame(i)["duration"].as_f64().unwrap_or(24.0).max(1.0) as f32 / fps;
+        (RgbaImage::from_raw(w, h, px).unwrap_or_default(), d)
+    }).collect())
+}
+
+/// Frames as an animated PNG (it plays in Obsidian and in browsers).
+pub fn apng(frames: &[(RgbaImage, f32)]) -> Vec<u8> {
+    let imgs: Vec<(u32, u32, Vec<u8>)> = frames.iter().map(|(i, _)| (i.width(), i.height(), i.as_raw().clone())).collect();
+    let delays: Vec<(u16, u16)> = frames.iter().map(|(_, d)| ((d * 1000.0).round().clamp(1.0, 65535.0) as u16, 1000)).collect();
+    export::apng(&imgs, &delays)
+}
+
+/// The picture a storyboard is saved as on a page: a span, animated or one
+/// frame.
+pub fn span_file_name(board_path: &str, from: usize, to: usize, animated: bool) -> String {
+    let base = export::safe(board_path.rsplit('/').next().unwrap_or(board_path).trim_end_matches(".storyboard"));
+    if animated {
+        format!("{base} {}–{}.png", from + 1, to + 1)
+    } else {
+        format!("{base} {}.png", from + 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +180,14 @@ mod tests {
         assert_eq!(f.index, 1);
         assert_eq!(img.width(), 64);
         assert_eq!(file_name("Pasta/Cena.storyboard", &all[0].0), "Cena 001 Abertura.png");
+        let c = clip(&path).unwrap();
+        assert_eq!(c.len(), 2);
+        assert!(c.span(0, 1) > c.start(1));
+        let span = render_span(&path, 1, 5, 64).unwrap();
+        assert_eq!(span.len(), 1);
+        let png = apng(&render_span(&path, 0, 1, 32).unwrap());
+        assert!(png.windows(4).any(|w| w == b"acTL"));
+        assert_eq!(span_file_name("A/Cena.storyboard", 0, 1, true), "Cena 1–2.png");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
