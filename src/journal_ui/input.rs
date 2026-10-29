@@ -1148,10 +1148,13 @@ impl Journal {
         if let (Some(c), true) = (out.cursor_range, resp.has_focus()) {
             let size = lh * draw::font_of(&it).3;
             let row = out.galley.pos_from_cursor(&c.primary).translate(out.galley_pos.to_vec2());
-            // the line the letters sit on, read from the row's glyphs
-            let r = out.galley.rows.get(c.primary.rcursor.row).or(out.galley.rows.last());
-            let base = r.and_then(|r| r.glyphs.first().map(|g| out.galley_pos.y + g.pos.y)).or_else(|| out.galley.rows.iter().find_map(|r| r.glyphs.first().map(|g| out.galley_pos.y + g.pos.y - r.rect.min.y)).map(|d| row.min.y + d)).unwrap_or(row.max.y - size * 0.2);
-            self.caret(ui, &pv, egui::pos2(row.min.x, base), size, ink, resp.changed() || c.primary != b.last_cursor.unwrap_or(c.primary));
+            // the line the letters sit on: measured once on a sample in the
+            // same type (an empty box, or an empty last line, has no letters
+            // to read it from), counted from the top of the cursor's row
+            let sample = ui.fonts(|f| f.layout_job(draw::live_job(&it, "Ag", &pv.lay, k, ink, accent)));
+            let base_off = sample.rows.first().and_then(|r| r.glyphs.first().map(|g| g.pos.y - r.rect.min.y)).unwrap_or(lh * 0.8);
+            let base = row.min.y + base_off;
+            self.caret(ui, &pv, egui::pos2(row.min.x, base), size, lh, ink, resp.changed() || c.primary != b.last_cursor.unwrap_or(c.primary));
             b.last_cursor = Some(c.primary);
         }
         if resp.changed() {
@@ -1187,11 +1190,24 @@ impl Journal {
     /// The cursor of the text being typed: a thin stroke of the ink, from
     /// the line up to the height of the capitals, that glides to where it
     /// goes and fades in and out instead of blinking.
-    fn caret(&mut self, ui: &egui::Ui, pv: &PageView, base: Pos2, size: f32, ink: Color32, moved: bool) {
+    #[allow(clippy::too_many_arguments)]
+    fn caret(&mut self, ui: &egui::Ui, pv: &PageView, base: Pos2, size: f32, lh: f32, ink: Color32, moved: bool) {
         let ctx = ui.ctx();
-        let id = egui::Id::new("journal-caret");
-        let x = ctx.animate_value_with_time(id.with("x"), base.x, 0.06);
-        let y = ctx.animate_value_with_time(id.with("y"), base.y, 0.08);
+        let root = egui::Id::new("journal-caret");
+        // it glides along a line as letters come; a jump (another line, a
+        // click elsewhere, another text) puts it there at once: a fresh
+        // animation starts where it is going
+        let last: Option<Pos2> = ctx.data(|d| d.get_temp(root.with("at")));
+        let mut gen: u64 = ctx.data(|d| d.get_temp(root.with("gen"))).unwrap_or(0);
+        if last.is_none_or(|l| (l.y - base.y).abs() > lh * 0.5 || (l.x - base.x).abs() > size * 2.5) {
+            gen += 1;
+            ctx.data_mut(|d| d.insert_temp(root.with("gen"), gen));
+        }
+        ctx.data_mut(|d| d.insert_temp(root.with("at"), base));
+        let id = root.with(gen);
+        let x = ctx.animate_value_with_time(id.with("x"), base.x, 0.05);
+        let y = base.y;
+        let id = root;
         let now = ctx.input(|i| i.time);
         if moved {
             ctx.data_mut(|d| d.insert_temp(id.with("t"), now));
