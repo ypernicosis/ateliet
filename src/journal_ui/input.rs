@@ -94,7 +94,7 @@ impl Book {
                     }
                 }
                 self.touch(pn);
-                self.pending_reflow = Some((pn, pid));
+                self.pending_reflow.push((pn, pid));
             }
             if let Some((nn, _)) = f.next.as_ref().and_then(|p| self.find(p)) {
                 let nid = f.next.clone().unwrap();
@@ -256,10 +256,21 @@ impl Journal {
         let Some(mut b) = self.book.take() else { return };
         let ctx = ui.ctx().clone();
         // not while typing: the text in the box is not the one being typed
-        if let Some((n, id)) = b.pending_reflow.take_if(|_| b.editing.is_none()) {
+        if b.editing.is_none() && !b.pending_reflow.is_empty() {
             let k = b.views(ui.available_rect_before_wrap()).0.first().map(|v| v.k).unwrap_or(4.0).max(2.0);
             let mut m = |it: &Item, text: &str, lay: &journal::Layout| draw::row_starts(&ctx, it, text, lay, k);
-            b.reflow(n, &id, &mut m);
+            let mut queue = std::mem::take(&mut b.pending_reflow);
+            queue.dedup();
+            let mut guard = 0;
+            while let Some((n, id)) = (!queue.is_empty()).then(|| queue.remove(0)) {
+                b.reflow(n, &id, &mut m);
+                // what making room pushed past the page flows on too
+                queue.extend(std::mem::take(&mut b.pending_reflow));
+                guard += 1;
+                if guard > 200 {
+                    break;
+                }
+            }
             // typing went past the last line: go on in the next box
             if let Some((typed, before)) = b.continue_edit.take() {
                 let next = b.find(&typed).and_then(|(pn, _)| b.page(pn).and_then(|p| p.item(&typed)).and_then(|i| i.flow.as_ref()).and_then(|f| f.next.clone()));
@@ -832,7 +843,7 @@ impl Journal {
             }
             Drag::Resize { page, id, orig, .. } => {
                 if orig.kind.is_text() {
-                    b.pending_reflow = Some((page, id));
+                    b.pending_reflow.push((page, id));
                 }
                 b.touch(page);
             }
@@ -972,13 +983,13 @@ impl Journal {
         // a click on an empty spot starts writing there (the second click,
         // when something was selected)
         if self.tool == Tool::Write || !had {
-            self.write_at(b, pv, at);
+            self.write_at(ctx, b, pv, at);
         }
     }
 
     /// A new text whose first line sits on the line under the point, as
     /// wide as the column there.
-    fn write_at(&mut self, b: &mut Book, pv: &PageView, at: (f64, f64)) {
+    fn write_at(&mut self, ctx: &egui::Context, b: &mut Book, pv: &PageView, at: (f64, f64)) {
         let lay = &pv.lay;
         if at.1 > lay.last_baseline() + 1.0 || at.1 < 0.0 || at.0 < 0.0 || at.0 > lay.w {
             return;
@@ -986,6 +997,16 @@ impl Journal {
         let (c0, c1) = lay.column_at(at.0);
         let x = if at.0 - c0 > 8.0 && at.0 < c1 - 10.0 { at.0 } else { c0 };
         let y = lay.text_top(at.1 - lay.paper.line() * 0.5, 1.0);
+        // never a new text over one already there: its first line would fall
+        // on that text, so that text is the one written in (where clicked)
+        let line = MRect { x: if b.nb.wrap_to_margin { c0 } else { x }, y, w: c1 - x, h: lay.paper.line() };
+        let under = b.page(pv.n).and_then(|p| p.items.iter().rev().find(|i| i.kind.is_text() && i.bbox().intersects(&line)).map(|i| i.id.clone()));
+        if let Some(id) = under {
+            let at_char = self.char_at(ctx, b, pv, &id, at);
+            self.edit(b, pv.n, &id, false);
+            b.edit_cursor = at_char;
+            return;
+        }
         b.checkpoint();
         // begun mid-line: the box from the margin, the first line indented
         // (or, kept to where it began, the box from there)
@@ -999,6 +1020,7 @@ impl Journal {
         if (b.nb.text_size - 1.0).abs() > 1e-6 {
             it.style.size = b.nb.text_size;
         }
+        it.style.align = b.nb.align.clone();
         // the notebook's font; in the margin, its hand
         let margin = lay.margin.is_some_and(|m| lay.columns[m] == (c0, c1));
         it.style.font = if margin { b.nb.margin_font.clone().unwrap_or_else(|| "mao".into()) } else { b.nb.font.clone().unwrap_or_default() };
@@ -1028,6 +1050,7 @@ impl Journal {
         if (b.nb.text_size - 1.0).abs() > 1e-6 {
             it.style.size = b.nb.text_size;
         }
+        it.style.align = b.nb.align.clone();
         if pv.n == 0 {
             it.style.color = Some(cover_ink(&b.nb.cover));
         }
@@ -1059,12 +1082,16 @@ impl Journal {
     /// The char of a text under a point of its page.
     fn char_at(&self, ctx: &egui::Context, b: &mut Book, pv: &PageView, id: &str, at: (f64, f64)) -> Option<usize> {
         let mut it = b.page(pv.n)?.item(id)?.clone();
-        it.style.align = String::new();
+        // centred and right-aligned text is typed from the left; justified
+        // stays justified (only its finished lines open up)
+        if it.style.align != "justificado" {
+            it.style.align = String::new();
+        }
         if it.kind == Kind::Excerpt && !journal::excerpt_parts(it.content()).title.is_empty() {
             it.y += pv.lay.paper.line() * it.style.lines();
         }
         let text = super::flow_text(&it);
-        let g = ctx.fonts(|f| f.layout_job(draw::live_job(&it, &text, &pv.lay, pv.k, Color32::BLACK, Color32::BLACK)));
+        let g = ctx.fonts(|f| draw::lay_out(f, &it, draw::live_job(&it, &text, &pv.lay, pv.k, Color32::BLACK, Color32::BLACK)));
         let origin = draw::text_origin(&g, pv, &it);
         let c = g.cursor_from_pos(pv.s(at) - origin);
         Some(c.ccursor.index)
@@ -1083,7 +1110,11 @@ impl Journal {
             b.editing = None;
             return;
         };
-        it.style.align = String::new();
+        // centred and right-aligned text is typed from the left; justified
+        // stays justified (only its finished lines open up)
+        if it.style.align != "justificado" {
+            it.style.align = String::new();
+        }
         if it.kind == Kind::Excerpt && !journal::excerpt_parts(it.content()).title.is_empty() {
             it.y += pv.lay.paper.line() * it.style.lines();
         }
@@ -1110,7 +1141,7 @@ impl Journal {
         let ink = it.style.color.as_deref().and_then(draw::hex).unwrap_or(draw::ink_color(p));
         let buf = b.editing.as_ref().map(|e| e.buf.clone()).unwrap_or_default();
         let accent = p.accent_strong;
-        let now = ui.fonts(|f| f.layout_job(draw::live_job(&it, if buf.is_empty() { " " } else { &buf }, &lay, k, ink, accent)));
+        let now = ui.fonts(|f| draw::lay_out(f, &it, draw::live_job(&it, if buf.is_empty() { " " } else { &buf }, &lay, k, ink, accent)));
         let origin = draw::text_origin(&now, &pv, &it);
         let cap = lay.rows_from(it.y, it.style.lines()).max(1);
         let rows = now.rows.len().max(1);
@@ -1118,8 +1149,19 @@ impl Journal {
         let line_mm = lay.paper.line() * it.style.lines();
         // the box grows with the text as it is typed
         let head = if it.y != b.page(n).and_then(|pg| pg.item(&id)).map(|i| i.y).unwrap_or(it.y) { 1 } else { 0 };
+        let mut grew = None;
         if let Some(slot) = b.page(n).and_then(|pg| pg.item_mut(&id)) {
+            let old_bottom = slot.y + slot.h;
             slot.h = (rows.min(cap) + head) as f64 * line_mm;
+            if slot.y + slot.h > old_bottom + 0.01 {
+                grew = Some(((slot.x, slot.x + slot.w), old_bottom, slot.y + slot.h));
+            }
+        }
+        // what is under it moves down as the text grows
+        if let Some((xs, ob, nb)) = grew {
+            for t in b.make_room(n, &id, xs, ob, nb) {
+                b.touch(t);
+            }
         }
         let rect = Rect::from_min_size(origin, vec2(it.w as f32 * k, (cap as f32 + 1.0) * lh));
         let edit_id = egui::Id::new(("journal-edit", &id));
@@ -1130,7 +1172,7 @@ impl Journal {
         }
         let it2 = it.clone();
         let lay2 = lay.clone();
-        let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| f.layout_job(draw::live_job(&it2, text, &lay2, k, ink, accent)));
+        let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| draw::lay_out(f, &it2, draw::live_job(&it2, text, &lay2, k, ink, accent)));
         let Some(e) = b.editing.as_mut() else { return };
         let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(edit_id);
         // typed text never shows past the page
@@ -1578,7 +1620,6 @@ impl Journal {
                     it.kind = Kind::Sticker;
                     it.mask = cx.config_dir.as_ref().and_then(|c| super::chrome::sticker_mask(c, &rel)).filter(|m| m.shape != "polaroide");
                     it.look.border = 1.8;
-                    it.look.shadow = true;
                     it.w = it.w.min(50.0);
                     it.h = it.w * aspect;
                 }
@@ -1605,7 +1646,7 @@ impl Journal {
                     if let Some(p) = b.page(n) {
                         p.items.push(it);
                     }
-                    b.pending_reflow = Some((n, id.clone()));
+                    b.pending_reflow.push((n, id.clone()));
                     b.sel_page = n;
                     b.sel = vec![id];
                 } else {
@@ -1661,7 +1702,7 @@ impl Journal {
             if let Some(p) = b.page(n) {
                 p.items.push(it);
             }
-            b.pending_reflow = Some((n, id.clone()));
+            b.pending_reflow.push((n, id.clone()));
         }
         if let Some(p) = b.page(n) {
             p.add_source(note.trim_end_matches(".md"));

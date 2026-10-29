@@ -183,6 +183,76 @@ pub fn line_px(it: &Item, lay: &Layout, k: f32) -> f32 {
     (lay.paper.line() * it.style.lines()) as f32 * k
 }
 
+/// A text laid out: justified (`justificado`) by widening the spaces
+/// between words, never the letters. Each row that is not a paragraph's
+/// last gets the room left up to the margin shared among its spaces (after
+/// the first line's indent, which stays); a row whose spaces would open
+/// wider than three spaces each (a narrow box, a long word, few words)
+/// stays ragged, as typesetters leave it. The room is given as space before
+/// the words, so the text and its characters are untouched (the cursor and
+/// the editor see the same text), and the rows are checked to break where
+/// they broke before; if they do not, the text is left unjustified.
+pub fn lay_out(f: &egui::epaint::Fonts, it: &Item, job: egui::text::LayoutJob) -> std::sync::Arc<egui::Galley> {
+    if it.style.align != "justificado" || !job.wrap.max_width.is_finite() {
+        return f.layout_job(job);
+    }
+    let plain = f.layout_job(job.clone());
+    let width = job.wrap.max_width;
+    // (char index of a word, room before it)
+    let mut room: Vec<(usize, f32)> = Vec::new();
+    let mut ci = 0;
+    let n_rows = plain.rows.len();
+    for (ri, row) in plain.rows.iter().enumerate() {
+        let gl = &row.glyphs;
+        let last_of_paragraph = row.ends_with_newline || ri + 1 == n_rows;
+        if !last_of_paragraph {
+            if let (Some(start), Some(end)) = (gl.iter().position(|g| !g.chr.is_whitespace()), gl.iter().rposition(|g| !g.chr.is_whitespace())) {
+                let words: Vec<usize> = (start + 1..=end).filter(|&i| !gl[i].chr.is_whitespace() && gl[i - 1].chr.is_whitespace()).collect();
+                let space = gl.iter().find(|g| g.chr == ' ').map(|g| g.advance_width).unwrap_or(gl[end].advance_width * 0.3).max(0.5);
+                // a hair short of the margin, so the row cannot spill over
+                let free = width - gl[end].max_x() - 0.75;
+                if !words.is_empty() && free > 0.0 {
+                    let per = free / words.len() as f32;
+                    if per <= space * 3.0 {
+                        room.extend(words.iter().map(|&i| (ci + i, per)));
+                    }
+                }
+            }
+        }
+        ci += gl.len() + usize::from(row.ends_with_newline);
+    }
+    if room.is_empty() {
+        return plain;
+    }
+    let bytes: Vec<usize> = job.text.char_indices().map(|(b, _)| b).collect();
+    let cuts: Vec<(usize, f32)> = room.iter().filter_map(|(c, r)| bytes.get(*c).map(|b| (*b, *r))).collect();
+    let mut wide = job.clone();
+    // the space after a row's last word counts in egui's wrapping: with the
+    // last word at the margin, that space would not fit and the word would
+    // go down; the wrap gets that space's room (no word is narrower than a
+    // space, so no word moves up), and the rows are checked all the same
+    let trailing = plain.rows.iter().filter_map(|r| r.glyphs.last().filter(|g| g.chr.is_whitespace()).map(|g| g.advance_width)).fold(0.0_f32, f32::max);
+    wide.wrap.max_width = width + trailing + 0.25;
+    wide.sections.clear();
+    for s in &job.sections {
+        let mut from = s.byte_range.start;
+        let mut lead = s.leading_space;
+        for &(b, r) in cuts.iter().filter(|(b, _)| *b >= s.byte_range.start && *b < s.byte_range.end) {
+            if b == from {
+                lead += r;
+                continue;
+            }
+            wide.sections.push(egui::text::LayoutSection { leading_space: lead, byte_range: from..b, format: s.format.clone() });
+            from = b;
+            lead = r;
+        }
+        wide.sections.push(egui::text::LayoutSection { leading_space: lead, byte_range: from..s.byte_range.end, format: s.format.clone() });
+    }
+    let justified = f.layout_job(wide);
+    let same = justified.rows.len() == plain.rows.len() && justified.rows.iter().zip(&plain.rows).all(|(a, b)| a.glyphs.len() == b.glyphs.len() && a.ends_with_newline == b.ends_with_newline);
+    if same { justified } else { plain }
+}
+
 fn align_of(it: &Item) -> egui::Align {
     match it.style.align.as_str() {
         "centro" => egui::Align::Center,
@@ -414,7 +484,10 @@ fn polygon(painter: &egui::Painter, pts: &[Pos2], uv: Option<(&[egui::Pos2], egu
     painter.add(mesh);
 }
 
-/// The rounded margin of a sticker round its cut, and its shadow.
+/// The rounded margin of a sticker round its cut, flat on the paper (a
+/// sticker is stuck down, it casts nothing), with a hairline at its edge so
+/// the white of the margin parts from the paper; or, for a picture with no
+/// margin that asks for one, its shadow.
 fn sticker_edge(painter: &egui::Painter, pts: &[Pos2], r: f32, color: Color32, shadow: bool) {
     let draw = |off: egui::Vec2, c: Color32, painter: &egui::Painter| {
         let moved: Vec<Pos2> = pts.iter().map(|p| *p + off).collect();
@@ -427,8 +500,18 @@ fn sticker_edge(painter: &egui::Painter, pts: &[Pos2], r: f32, color: Color32, s
             }
         }
     };
-    if shadow {
-        draw(vec2(r * 0.25 + 1.0, r * 0.35 + 1.5), Color32::from_black_alpha(40), painter);
+    if r > 0.3 {
+        // the hairline: the margin drawn a touch wider in a faint grey first
+        let line = r + 0.6;
+        let grey = Color32::from_black_alpha(22);
+        polygon(painter, pts, None, grey);
+        for i in 0..pts.len() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            painter.line_segment([a, b], Stroke::new(2.0 * line, grey));
+            painter.circle_filled(a, line, grey);
+        }
+    } else if shadow {
+        draw(vec2(1.0, 1.5), Color32::from_black_alpha(40), painter);
     }
     draw(egui::Vec2::ZERO, color, painter);
 }
@@ -468,7 +551,7 @@ impl Journal {
         match &it.kind {
             Kind::Text => {
                 let job = rich_job(it, it.content(), &pv.lay, pv.k, it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p)), p.accent_strong);
-                let g = ctx.fonts(|f| f.layout_job(job));
+                let g = ctx.fonts(|f| lay_out(f, it, job));
                 galley_on_lines(painter, g, pv, it, ink);
             }
             Kind::Excerpt => {
@@ -498,7 +581,7 @@ impl Journal {
                     let lh = line_px(it, &pv.lay, pv.k);
                     job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
                 }
-                let g = ctx.fonts(|f| f.layout_job(job));
+                let g = ctx.fonts(|f| lay_out(f, &body, job));
                 let at = text_origin(&g, pv, &body);
                 painter.galley(at, g, color);
             }
@@ -519,7 +602,7 @@ impl Journal {
                 inner.w -= 3.0;
                 inner.y += 4.0;
                 let job = rich_job(&inner, &text, &pv.lay, pv.k, ink_color(p), p.accent_strong);
-                let g = ctx.fonts(|f| f.layout_job(job));
+                let g = ctx.fonts(|f| lay_out(f, &inner, job));
                 let at = text_origin(&g, pv, &inner);
                 let clip = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_min_max(r.min + vec2(0.0, head_h), r.max)));
                 clip.galley(at, g, ink_color(p));

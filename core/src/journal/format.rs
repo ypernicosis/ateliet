@@ -123,6 +123,9 @@ pub struct Notebook {
     /// Writing begun mid-line wraps back to the column's margin
     /// (`quebra: margem`) or keeps to where it began (`quebra: bloco`).
     pub wrap_to_margin: bool,
+    /// How new texts are aligned (`alinhamento`: `centro`, `direita`,
+    /// `justificado`; left when absent).
+    pub align: String,
     pub pages: Vec<PageRef>,
 }
 
@@ -155,6 +158,7 @@ impl Notebook {
             margin_font: get("fonte-margem").filter(|f| !f.is_empty()),
             text_size: fm.get("tamanho-letra").and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.replace(',', ".").parse().ok()))).filter(|v| (0.5..=2.0).contains(v)).unwrap_or(1.0),
             wrap_to_margin: get("quebra").as_deref() != Some("bloco"),
+            align: get("alinhamento").filter(|a| matches!(a.as_str(), "centro" | "direita" | "justificado")).unwrap_or_default(),
             pages: Vec::new(),
         })
     }
