@@ -2,7 +2,7 @@
 
 O Leitor abre livros em EPUB, documentos em PDF e quadrinhos (CBZ, CBR, CB7 e pastas de imagens) dentro do Ateliet. Ele tem dois compromissos. O primeiro é ser imersivo e minimalista: quando se lê, só a página aparece. O segundo é servir de fonte para o Journal ([JOURNAL.md](JOURNAL.md)): todo trecho pode ser selecionado e guardado, e toda região de página pode ser recortada e posta numa página do Journal.
 
-Este documento passa a vir antes do Journal na ordem de trabalho. O Leitor é útil sozinho (lê, grifa, guarda trechos e recortes no vault) e entrega ao Journal o material que ele vai organizar. A seção 7.1 do JOURNAL.md, que descrevia só um leitor de EPUB, foi substituída por este documento.
+Este documento passa a vir antes do Journal na ordem de trabalho. O Leitor é útil sozinho (lê, grifa, guarda trechos e recortes no vault) e entrega ao Journal o material que ele vai organizar.
 
 ## 1. O que já existe no Ateliet
 
@@ -71,7 +71,7 @@ pub enum Locator {
 pub struct Quote { pub exact: String, pub before: String, pub after: String }
 ```
 
-A citação com algumas palavras antes e depois permite reencontrar um trecho quando o arquivo muda (outra edição, outro EPUB do mesmo livro). É o mesmo tipo de caminho que o `xpointer` do KOReader usa, então os trechos mandados do Kindle com jailbreak (JOURNAL.md, 7.4) caem no mesmo parágrafo quando o livro é aberto aqui.
+A citação com algumas palavras antes e depois permite reencontrar um trecho quando o arquivo muda (outra edição, outro EPUB do mesmo livro).
 
 ## 4. Os formatos
 
@@ -83,13 +83,13 @@ A citação com algumas palavras antes e depois permite reencontrar um trecho qu
 - **Paginação**: os blocos de cada capítulo passam pelo compositor do Ateliet (`typeset`), com justificação por Knuth–Plass e hifenização no idioma do livro, na largura e na altura da página atual. A composição de um capítulo roda em segundo plano e é guardada em cache por (capítulo, largura, altura, fonte, tamanho); mudar a fonte recompõe e mantém a posição pelo `Locator`. Existe também o modo rolagem contínua, sem páginas.
 - **Notas de rodapé**: links com `epub:type="noteref"` abrem a nota numa janelinha sobre o texto, sem sair da página.
 - **EPUB de layout fixo** (livros infantis, alguns quadrinhos): quando cada item da espinha é uma página com uma imagem só, o livro é lido como uma HQ (4.3). Layout fixo com HTML arbitrário não é desenhado com fidelidade, porque o Ateliet não tem um motor de HTML; ele cai para o refluxo, com um aviso.
-- **DRM**: conteúdo cifrado (`META-INF/encryption.xml` com algoritmo de DRM) é recusado com uma mensagem clara. Livros da Amazon (AZW, KFX) não são lidos.
+- **DRM**: conteúdo cifrado (`META-INF/encryption.xml` com algoritmo de DRM) é recusado com uma mensagem clara. Os formatos da Amazon (AZW, KFX) não são lidos.
 
 ### 4.2 PDF (`pdf.rs`)
 
 - **Desenho**: o `hayro` desenha cada página na escala da tela. Em zoom alto, a página é desenhada em blocos (o egui tem limite de tamanho de textura), só os visíveis. O documento analisado fica em memória enquanto está aberto.
 - **Camada de texto**: um `Device` próprio passa pela página sem desenhar e anota cada glifo: o caractere (`as_unicode()`) e o quadrilátero (pela transformação do glifo e as métricas da fonte). Os glifos são agrupados em linhas pela linha de base e em blocos por distância, o que dá uma ordem de leitura razoável em uma ou duas colunas. Hifens de fim de linha são juntados ao copiar ("pala-/vra" vira "palavra"), e ligaduras (`ﬁ`) são desfeitas.
-- **PDF escaneado** (sem texto): a página se lê e se recorta normalmente, mas não se seleciona texto. A transcrição do Journal (JOURNAL.md, seção 8) pode gerar uma camada de texto depois, página por página.
+- **PDF escaneado** (sem texto): a página se lê e se recorta normalmente, mas não se seleciona texto. A transcrição do Journal (JOURNAL.md, seção 9) pode gerar uma camada de texto depois, página por página.
 - **Imersão**: o leitor detecta as margens brancas de cada página e oferece "cortar margens", que amplia o texto no espaço da tela; página simples ou dupla; ajuste à largura ou à página.
 - **Sumário**: os marcadores (*outlines*) do PDF; sem eles, só a busca e a lista de páginas.
 
@@ -123,7 +123,7 @@ Funciona no EPUB e no PDF com texto. Arrastar seleciona, encaixando em palavras;
 
 - **Grifar**, com quatro cores. O grifo fica no livro (6.3).
 - **Nota**: grifa e abre um campo curto para escrever ao lado.
-- **Journal**: guarda o trecho como `Snippet` (JOURNAL.md, seção 7): uma nota em `Trechos/` com o texto num callout `[!trecho]`, a fonte no frontmatter e o `Locator`. Se uma página do Journal estiver aberta ao lado (6.4), o trecho já entra nela como item de trecho citado.
+- **Journal**: guarda o trecho como `Snippet` (JOURNAL.md, seção 8): uma nota em `Trechos/` com o texto num callout `[!trecho]`, a fonte no frontmatter e o `Locator`. Se uma página do Journal estiver aberta ao lado (6.4), o trecho já entra nela como item de trecho citado.
 - **Copiar**: o texto, ou o texto com a citação ("…" — Autor, *Título*, cap./p.), à escolha em Configurações.
 
 ### 6.2 Recorte de região (`crop.rs`)
@@ -174,7 +174,6 @@ Enquanto o Journal não existir, o Leitor funciona sozinho: os trechos e os reco
 - **Dataview**: `leitor: livro`, `autor` e os campos dos trechos permitem consultas como "livros com grifos este mês" e "trechos ainda sem página no Journal".
 - **Templater**: a nota de livro é criada a partir de um modelo, se houver um em Configurações › Leitor, com os metadados do livro disponíveis no modelo.
 - **Scriptorium**: o EPUB que o Scriptorium exporta abre no Leitor, para revisar o próprio livro como leitor.
-- **Kindle e KOReader**: trechos que chegam do Kindle (JOURNAL.md, 7.2 e 7.4) ligam-se à mesma nota de livro, pelo título e pelo autor, e ao ponto do livro, pelo `xpointer`, quando o EPUB está no vault.
 
 ## 8. Ordem de implementação
 
@@ -192,7 +191,7 @@ Enquanto o Journal não existir, o Leitor funciona sozinho: os trechos e os reco
 - **Ordem do texto no PDF**: o agrupamento em linhas e blocos acerta páginas de uma e duas colunas; diagramações complexas (jornais, revistas) podem dar uma ordem errada na seleção. O recorte de região continua funcionando nelas.
 - **Fidelidade do EPUB**: sem motor de HTML, tabelas complexas, layout fixo com HTML e CSS elaborado não ficam iguais ao original. A escolha é deliberada: o Leitor recompõe o texto com a tipografia do Ateliet, em vez de imitar um navegador.
 - **Memória**: PDFs e HQs grandes pedem cache com limite e leitura sob demanda; o leitor de ZIP atual, que descompacta tudo, não serve e precisa de uma versão por entrada.
-- **DRM**: livros com DRM não abrem. A captura de trechos deles continua pelo Kindle.
+- **DRM**: livros com DRM não abrem.
 
 ## Fontes consultadas
 

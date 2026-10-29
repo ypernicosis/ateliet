@@ -82,4 +82,4 @@ Eram o plugin Moodboard do Pictogrep. Os quadros continuam no formato e no lugar
 
 ## Leitor e Journal (propostas)
 
-O estudo e a arquitetura do modo Journal, com digitalização de notas manuscritas, trechos de EPUB e do Kindle e as ferramentas de colagem, estão em [docs/JOURNAL.md](docs/JOURNAL.md); o do Leitor (EPUB, PDF e quadrinhos), que vem antes, em [docs/LEITOR.md](docs/LEITOR.md).
+O estudo e a arquitetura do modo Journal, com digitalização de notas manuscritas, trechos do Leitor e as ferramentas de colagem, estão em [docs/JOURNAL.md](docs/JOURNAL.md); o do Leitor (EPUB, PDF e quadrinhos), que vem antes, em [docs/LEITOR.md](docs/LEITOR.md).

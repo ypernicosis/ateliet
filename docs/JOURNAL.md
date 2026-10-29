@@ -1,6 +1,8 @@
 # Journal: estudo e arquitetura
 
-Este documento parte de uma página de referência: um caderno quadriculado aberto, com um trecho de artigo colado, comentários a lápis, uma pintura recortada e uma foto sobreposta. Ele faz três coisas: lista os elementos dessa página, diz o que o Ateliet já tem para reproduzi-los e propõe a arquitetura do modo Journal e das três entradas que o alimentam: a digitalização de notas manuscritas, os trechos de EPUB e os trechos enviados do Kindle. As ferramentas de imagem seguem o modo de colagem do Pinterest, estudado na seção 3.
+Este documento parte de uma página de referência: um caderno quadriculado aberto, com um trecho de artigo colado, comentários a lápis, uma pintura recortada e uma foto sobreposta. Ele lista os elementos dessa página, diz o que o Ateliet já tem para reproduzi-los e propõe a arquitetura do Journal e das duas entradas que o alimentam além do próprio vault: os trechos e recortes do [Leitor](LEITOR.md) e a digitalização de notas manuscritas. As ferramentas de imagem seguem o modo de colagem do Pinterest, estudado na seção 3.
+
+A decisão que organiza tudo: **o Journal é um caderno**. Ele tem capa, páginas de tamanho fixo, numeradas e em ordem, que se viram uma a uma. Não é um canvas infinito como o Quadro e o Moodboard. E ele tem a aparência do resto do Ateliet: papel liso, linhas finas, nenhuma imitação de couro, espiral ou folha envelhecida. A seção 4 descreve essa forma.
 
 ## 1. Os elementos da página de referência
 
@@ -19,11 +21,11 @@ A página é uma página dupla de caderno, e quase tudo nela se resume a três a
 11. **Legenda da imagem.** Na margem direita, à mão: artista, ano e título no original, logo acima da pintura.
 12. **Crédito com data.** No pé da página: "candle: @mrs.mckennabarry on instagram, 11/5/2023". De onde veio a imagem e quando foi colada.
 13. **Adesivo desenhado (anjo).** Uma figura de anjo a nanquim com uma estrela, recortada com uma borda branca irregular, como adesivo de corte especial (*die-cut*), presa na linha vertical da margem.
-14. **Adesivo que sai da página.** Um traço decorativo (uma nuvem ou coroa em contorno) com borda branca, que cobre parte do texto e passa da borda superior da página. Os elementos não ficam presos à área da página.
+14. **Adesivo que sai da página.** Um traço decorativo (uma nuvem ou coroa em contorno) com borda branca, que cobre parte do texto e passa um pouco da borda superior da página, como um adesivo de verdade colado na beira.
 15. **Pequenos ornamentos.** Uma estrela com uma fita junto à legenda, também com borda branca.
 16. **Textura de impressão e digitalização.** Granulado, cor de fotocópia, sombra da curvatura do caderno. A página foi fotografada ou digitalizada, e as imagens coladas foram impressas antes de serem recortadas.
 
-Daí saem os tipos de item que o Journal precisa ter: papel, guias e linhas, texto citado com fonte, grifo ancorado, texto livre (digitado ou manuscrito), imagem recortada, adesivo com borda, legenda e crédito, com sobreposição, rotação e saída da página permitidas.
+Daí saem os tipos de item que o Journal precisa ter: papel, guias e linhas, texto citado com fonte, grifo ancorado, texto livre (digitado ou manuscrito), imagem recortada, adesivo com borda, legenda e crédito, com sobreposição e rotação. E sai também a forma: tudo isso acontece dentro de páginas de um caderno, em sequência.
 
 ## 2. O que o Ateliet já tem
 
@@ -31,21 +33,21 @@ Boa parte das peças existe e pode ser reaproveitada, sem começar do zero:
 
 | Elemento | Base existente | O que falta |
 |---|---|---|
-| Papel e página dupla | `core/src/board/pages.rs` (tamanhos de página, DPI, páginas unidas com a lombada no meio), `board_ui/spread.rs` | Papéis quadriculado, pautado, pontilhado e Cornell; papel como textura, não só cor |
+| Página e página dupla | `core/src/board/pages.rs` (tamanhos de página, DPI, páginas unidas com a lombada no meio), `board_ui/spread.rs` | O caderno como sequência de páginas; papéis quadriculado, pautado, pontilhado e Cornell |
 | Linhas de margem | Formas e linhas do Quadro (`core/src/quadro/rough.rs`) | Guias de coluna com encaixe |
-| Imagem livre no canvas | Moodboards (`core/src/moodboard.rs`): itens com `x, y, w, h, r`, recorte retangular (`CropStage`), espelhar, cinza, guias de alinhamento, quadros, paleta extraída | Máscaras não retangulares, borda de adesivo, filtros de impressão |
-| Filtros | `typeset::compose::filter`: `pb`, `sepia`, `noite`, `contraste`, `desfoque` | Granulado, fotocópia, retícula, papel envelhecido |
+| Imagens sobre um fundo | Moodboards (`core/src/moodboard.rs`): itens com `x, y, w, h, r`, recorte retangular (`CropStage`), espelhar, cinza, guias de alinhamento, paleta extraída | Máscaras não retangulares, borda de adesivo, filtros de impressão |
+| Filtros | `typeset::compose::filter`: `pb`, `sepia`, `noite`, `contraste`, `desfoque` | Granulado, fotocópia, retícula, impressão |
 | Desenho à mão | Pincéis do storyboard (`core/src/board/brush.rs`): lápis, caneta, pincel, marcador | Traço vetorial leve guardado no Journal; pressão da caneta (o egui não a entrega hoje) |
-| Texto composto com qualidade | Compositor próprio (`core/src/typeset/`): Knuth–Plass, hifenização em português, PDF | Linhas de largura variável para contornar imagens |
-| Biblioteca de imagens | Modo imagens (`src/images_ui.rs`), CLIP, coleções, Pictogrep, pins do Pinterest | Arrastar da biblioteca para o Journal |
+| Texto composto com qualidade | Compositor próprio (`core/src/typeset/`): Knuth–Plass, hifenização em português, grade de linhas, PDF | Linhas de largura variável para contornar imagens; texto na pauta do papel |
+| Biblioteca de imagens | Modo imagens (`src/images_ui.rs`), CLIP, coleções, Pictogrep, pins do Pinterest | Arrastar da biblioteca para a página |
 | Nota editável num painel | Painel de notas do modo imagens | O mesmo painel dentro do Journal |
 | Formato que convive com plugin | Quadro: grava Kanban e Excalidraw no formato deles, com um bloco `%% ateliet:quadro %%` | O mesmo padrão para a página de Journal |
-| ZIP | `core/src/board/zip.rs` (lê e grava) | Leitor de EPUB por cima dele |
-| PDF e PNG | `typeset/pdf.rs`, `typeset/raster.rs`, exportação do Quadro | Exportar páginas do Journal |
+| PDF e PNG | `typeset/pdf.rs`, `typeset/raster.rs`, exportação do Quadro | Exportar páginas e cadernos |
+| Moldura que some | O modo imersivo do Leitor ([LEITOR.md](LEITOR.md), seção 5) | Reaproveitar no Journal |
 
-A conclusão é que o Journal é viável sem trocar de base técnica. Ele é, na prática, um terceiro canvas, irmão do Quadro e do Moodboard, com o papel e a tipografia do Diagramação. O trabalho novo de verdade está em quatro lugares: o texto que contorna formas, as máscaras de recorte (manuais e automáticas), o leitor de EPUB e a entrada de fora do app (Kindle e digitalização).
+O Journal é viável sem trocar de base técnica. Ele junta a página e a lombada do storyboard, a geometria de itens do Moodboard e a tipografia da Diagramação. O trabalho novo de verdade está em quatro lugares: o caderno como objeto (sequência, numeração, virar páginas), o texto que corre na pauta e contorna formas, as máscaras de recorte (manuais e automáticas) e a digitalização.
 
-Há três limites a dizer logo. Livros comprados na Amazon (AZW3, KFX) têm DRM e não podem ser abertos pelo Ateliet: o caminho para eles é o trecho enviado pelo próprio Kindle (seção 7), não a importação do livro. O reconhecimento de letra cursiva em português ainda erra bastante em qualquer motor local, então a imagem da página manuscrita continua sendo o original e a transcrição é uma camada auxiliar, corrigível. E o egui 0.31 não repassa a pressão da caneta de mesas digitalizadoras no macOS, então o traço à mão começa com espessura por velocidade, como o storyboard já faz.
+Há dois limites a dizer logo. O reconhecimento de letra cursiva em português ainda erra bastante em qualquer motor local, então a imagem da página manuscrita continua sendo o original e a transcrição é uma camada auxiliar, corrigível. E o egui 0.31 não repassa a pressão da caneta de mesas digitalizadoras no macOS, então o traço à mão começa com espessura por velocidade, como o storyboard já faz.
 
 ## 3. O modo de colagem do Pinterest
 
@@ -58,47 +60,108 @@ O Pinterest tem uma ferramenta de colagens (antes um app separado, o Shuffles) n
 - **Origem preservada.** Cada recorte guarda o pin de onde veio, e quem vê a colagem pode abrir o pin original.
 - **Remix.** Partir da colagem de outra pessoa como modelo. Desde 2024, há também exportação em vídeo e efeitos de animação nas camadas.
 
-Para o Journal valem o recorte com seleção automática e refinamento por pincel, as formas de molde, a lista de camadas, as transformações e a origem guardada em cada recorte. O remix vira "duplicar página como modelo" (com o Templater, seção 9). Animação e vídeo ficam de fora: não fazem sentido numa página de caderno.
+Para o Journal valem o recorte com seleção automática e refinamento por pincel, as formas de molde, a ordem de camadas, as transformações e a origem guardada em cada recorte. O remix vira "nova página a partir de um modelo" (com o Templater, seção 10). Animação e vídeo ficam de fora: não fazem sentido numa página de caderno. O fundo livre também: num caderno, o fundo é o papel.
 
-O Journal acrescenta o que o Pinterest não tem e a página de referência pede: borda de adesivo (contorno branco que segue a máscara, com sombra), bordas rasgadas, fita adesiva, filtros de impressão, texto que contorna a imagem e legendas e créditos que ficam presos à imagem quando ela se move.
+O Journal acrescenta o que o Pinterest não tem e a página de referência pede: borda de adesivo (contorno branco que segue a máscara), bordas rasgadas, fita adesiva, filtros de impressão, texto que contorna a imagem e legendas e créditos que ficam presos à imagem quando ela se move.
 
-## 4. Visão geral
+## 4. O caderno
+
+### 4.1 O que faz dele um caderno
+
+- **Um objeto com começo e fim.** Um caderno tem nome, capa, tamanho (A5, B5, A4, bolso), papel e um número de páginas que cresce conforme se escreve. Começa com uma folha de rosto (nome, data de início) e pode ter um sumário gerado dos títulos das páginas.
+- **Páginas fixas.** Cada página tem o tamanho do caderno. Não há rolagem infinita nem zoom livre para fora da página: a vista mostra a página dupla inteira, ou uma página, ou uma ampliação para trabalho fino, e volta à página dupla com um toque.
+- **Sequência.** As páginas são numeradas e lidas em ordem. Vira-se a página pelas setas, por gesto no trackpad ou clicando no canto. Uma página nova entra depois da atual (ou no fim); páginas podem ser reordenadas na vista de miniaturas, como se faz ao reorganizar um fichário, mas a numeração acompanha a ordem.
+- **Página dupla.** A vista padrão é a página dupla, com a lombada no meio, como na referência. Um item pode atravessar a lombada (uma imagem grande sobre as duas páginas), como as páginas unidas do storyboard.
+- **A pauta manda no texto.** Clicar num ponto vazio da página começa a escrever ali, como numa folha. O texto assenta nas linhas do papel (pautado, quadriculado ou pontilhado), com a entrelinha igual ao espaçamento da pauta, e corre entre as margens da coluna. Um texto que não cabe continua na página seguinte, como o trecho da referência.
+- **A página tem bordas.** Os itens ficam na página. Um adesivo pode passar um pouco da borda externa, como passaria no papel; o que passa é cortado na exportação, a menos que se peça o contrário. Nada vai para um espaço fora do caderno.
+- **Marcador.** O caderno abre na última página em que se trabalhou, como uma fita marcadora. Marcadores extras (poucos) ficam como linguetas finas na borda.
+- **Estante.** Os cadernos ficam numa estante: capas lado a lado, cada uma com sua cor e nome. Abrir um caderno é abri-lo na página marcada.
+
+### 4.2 A estética
+
+O Journal parece um caderno pela forma (página, lombada, pauta, sequência) e não pela textura. A aparência segue a do Ateliet:
+
+- **Papel**: uma cor lisa, derivada do fundo do tema (um branco levemente quente no tema claro, um cinza escuro no tema escuro), sem granulado por padrão. A textura de papel existe como opção, discreta.
+- **Pauta e grade**: linhas finas na cor do texto com opacidade muito baixa, que somem quando se exporta sem pauta. Margens e colunas Cornell no mesmo traço.
+- **Lombada**: uma linha fina e uma sombra muito leve de um lado e do outro, só o bastante para ler a página dupla como um caderno aberto. Sem argolas, costuras ou curvatura.
+- **Volume**: a espessura das páginas que faltam é sugerida por duas ou três linhas finas na borda externa, mais grossas quanto mais páginas houver daquele lado.
+- **Capa**: uma cor lisa, o nome em Inter ou numa das fontes da Diagramação, e opcionalmente uma imagem. Sem couro ou relevo.
+- **Moldura**: como no Leitor, ela some. Enquanto se escreve, só o caderno aparece sobre o fundo do app. As ferramentas ficam numa barra pequena no pé, centrada, que aparece ao mover o ponteiro ou ao selecionar algo e some depois. As propriedades de um item aparecem num balão junto dele, não num painel fixo. Os painéis de material (seção 11) deslizam da esquerda quando chamados e se recolhem ao arrastar algo para a página.
+- **Ícones e tipografia**: os do app (Lucide, Inter), a cor de destaque do vault na seleção e nos marcadores. Nenhum elemento decorativo na interface: a decoração é o que o usuário põe na página.
+
+## 5. Visão geral
 
 ```
 ┌──────────────────────────────────── src/ (interface, egui) ─────────────────────────────────────┐
-│ journal_ui/   modo Journal: canvas, ferramentas, camadas, painéis de Notas, Imagens e Trechos    │
-│   mod.rs  estado (página, vista, seleção, desfazer, salvamento)   draw.rs  desenho               │
-│   input.rs  ponteiro e teclado    edit.rs  mudanças    panel.rs  barras, inspetor, menus         │
-│   cutout_ui.rs  editor de máscara   scan_ui.rs  digitalização                                    │
+│ journal_ui/   o Journal: estante, caderno, página dupla, ferramentas, painéis de material       │
+│   mod.rs  estado (caderno, página, vista, seleção, desfazer, salvamento)   draw.rs  desenho      │
+│   input.rs  ponteiro e teclado    edit.rs  mudanças    chrome.rs  barra e balões que somem      │
+│   shelf.rs  estante e capas   pages.rs  miniaturas e ordem   cutout_ui.rs  editor de máscara    │
+│   scan_ui.rs  digitalização                                                                      │
 │ reader_ui/    o Leitor (EPUB, PDF, HQ): ver LEITOR.md                                            │
-│ capture.rs    caixa de entrada: servidor local, ateliet://, clippings do Kindle, notificações    │
+│ capture.rs    caixa de entrada: pasta e ateliet://                                               │
 └──────────────────────────────────────────────┬──────────────────────────────────────────────────┘
                                                │ chamadas diretas
 ┌──────────────────────────────────────────────▼──────────────────────────────────────────────────┐
-│ core/src/journal/   modelo, formato .md, papel, fluxo de texto, máscaras, adesivos, filtros, PNG │
+│ core/src/journal/   caderno, página, formato .md, papel e pauta, fluxo de texto, máscaras,       │
+│                     adesivos, filtros, PNG e PDF                                                 │
 │ core/src/reader/    o Leitor: EPUB, PDF, HQ, localizadores, grifos (LEITOR.md)                   │
-│ core/src/capture/   trechos (modelo comum), caixa de entrada, clippings, notebook HTML           │
+│ core/src/capture/   trechos (modelo comum) e caixa de entrada                                    │
 │ core/src/ocr/       transcrição: Apple Vision, ONNX, API opcional; tratamento da imagem escaneada│
-│ (reaproveitados)    moodboard · board/brush · typeset · quadro/rough · images · clip · pictogrep  │
+│ (reaproveitados)    moodboard · board/brush · board/pages · typeset · images · clip · pictogrep  │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Os três princípios do Ateliet continuam valendo: o vault é a fonte da verdade (nada vai para um banco próprio), as gravações em arquivos compartilhados são cirúrgicas, e o trabalho pesado (recorte automático, transcrição, leitura de EPUB, composição do texto) roda fora da thread da janela e volta por canais.
+Os três princípios do Ateliet continuam valendo: o vault é a fonte da verdade (nada vai para um banco próprio), as gravações em arquivos compartilhados são cirúrgicas, e o trabalho pesado (recorte automático, transcrição, composição do texto, miniaturas das páginas) roda fora da thread da janela e volta por canais.
 
-## 5. O modelo e o formato da página
+## 6. O formato
 
-### 5.1 O arquivo
+### 6.1 O caderno
 
-Uma página de Journal é uma nota Markdown comum, com `journal` no frontmatter, para que o Obsidian, a busca, os backlinks e o Dataview a leiam sem saber nada do Journal. O texto mora no corpo da nota; a geometria mora num bloco escondido no fim, como o Quadro faz com o Kanban e o Excalidraw.
+Um caderno é uma pasta com uma nota-índice e uma nota por página:
+
+```
+Cadernos/
+  Natureza/
+    Natureza.md            ← journal: caderno (capa, papel, tamanho, marcador)
+    001 Folha de rosto.md
+    002.md
+    003 Bétulas na Escócia.md
+    …
+```
+
+~~~markdown
+---
+journal: caderno
+tamanho: A5
+papel: grade-5mm
+colunas: cornell-esquerda
+capa: "#2f4a3a"
+inicio: 2023-11-01
+marcador: 3
+---
+
+```dataview
+TABLE WITHOUT ID pagina AS "p.", file.link AS "Página", data
+FROM "Cadernos/Natureza" WHERE journal = "página" SORT pagina
+```
+~~~
+
+A ordem das páginas vem do campo `pagina`, não do nome do arquivo; o número no nome é só para a pasta ficar em ordem no Obsidian, e o Ateliet o ajusta ao reordenar. O título da página é opcional: uma página sem título é só um número, como num caderno.
+
+### 6.2 A página
+
+Uma página é uma nota Markdown comum, com `journal: página` no frontmatter, para que o Obsidian, a busca, os backlinks e o Dataview a leiam sem saber nada do Journal. O texto mora no corpo da nota; a geometria mora num bloco escondido no fim, como o Quadro faz com o Kanban e o Excalidraw.
 
 ```markdown
 ---
 journal: página
+caderno: "[[Natureza]]"
+pagina: 3
 data: 2023-11-05
-caderno: "[[Cadernos/Natureza]]"
 fontes:
   - "[[Trechos/Mossy Earth – The Mountain Birch Project]]"
-tags: [journal, escócia, florestas]
+tags: [escócia, florestas]
 ---
 
 ## ^j-txt1
@@ -122,11 +185,11 @@ Hubert Salentin, 1882. *Betendes Mädchen mit einem Kranz aus Rosen*.
 > This painting feels so fairytale to me. The painter does not do it justice…
 
 %% ateliet:journal
-{"v":1,"paper":{"preset":"grade-5mm","size":"A5","spread":true}, "items":[ … ]}
+{"v":1,"lado":"direita","items":[ … ]}
 %%
 ```
 
-Cada item com conteúdo tem uma seção com um id de bloco (`^j-…`). O JSON só guarda o que não é texto: posição, tamanho, rotação, camada, máscara, filtros, borda, ligação entre legenda e imagem. Por isso:
+O papel, o tamanho e as colunas vêm do caderno; uma página só os guarda se forem diferentes (uma página pautada num caderno quadriculado, por exemplo). Cada item com conteúdo tem uma seção com um id de bloco (`^j-…`). O JSON só guarda o que não é texto: posição, tamanho, rotação, camada, máscara, filtros, borda, ligação entre legenda e imagem. Por isso:
 
 - no Obsidian, a página abre como uma nota legível, na ordem de leitura, com as imagens e as transcrições;
 - a busca do Ateliet e o Dataview encontram o texto dos trechos, dos comentários e das transcrições;
@@ -134,16 +197,23 @@ Cada item com conteúdo tem uma seção com um id de bloco (`^j-…`). O JSON s�
 - links e tags escritos no Journal são links e tags de verdade, com backlinks;
 - se alguém editar o texto no Obsidian, o Ateliet relê a seção pelo id e mantém a geometria. Uma seção apagada no Obsidian vira um item sem conteúdo, que o Ateliet mostra marcado em vez de apagar.
 
-O bloco JSON segue as regras do bloco do Quadro: `` ` `` e `%` escapados, chaves desconhecidas preservadas (`extra` com `serde(flatten)`), gravação atômica e releitura do disco antes de gravar. Uma cópia do bloco vai para `.obsidian/ateliet/journal/` para sobreviver a um plugin que reescreva a nota.
+O bloco JSON segue as regras do bloco do Quadro: `` ` `` e `%` escapados, chaves desconhecidas preservadas (`extra` com `serde(flatten)`), gravação atômica e releitura do disco antes de gravar. Uma cópia do bloco vai para `.obsidian/ateliet/journal/` para sobreviver a um plugin que reescreva a nota. Um item que atravessa a lombada fica na página da esquerda, marcado como `ambas`.
 
-Um **caderno** é uma pasta (ou uma nota-índice com `journal: caderno`) cujas páginas têm `caderno` e `pagina` no frontmatter. A página dupla é a vista padrão: duas notas, uma em cada lado da lombada, ou uma nota com `spread: true` quando a composição atravessa a lombada (como as páginas unidas do storyboard).
-
-### 5.2 Os itens (`core/src/journal/mod.rs`)
+### 6.3 Os itens (`core/src/journal/mod.rs`)
 
 ```rust
+pub struct Notebook {
+    pub name: String,
+    pub size: PageSize,          // A5, B5, A4, bolso ou medida própria
+    pub paper: Paper,            // liso, pautado, quadriculado, pontilhado; espaçamento; cor
+    pub columns: Columns,        // nenhuma, Cornell (margem interna ou externa), duas colunas
+    pub cover: Cover,            // cor, imagem, fonte do nome
+    pub pages: Vec<PageRef>,     // caminho e número, na ordem
+    pub marker: usize,
+}
+
 pub struct Page {
-    pub paper: Paper,            // preset, tamanho, cor, textura, página dupla
-    pub guides: Vec<Guide>,      // colunas e linhas de margem (Cornell, 2 colunas…)
+    pub paper: Option<Paper>,    // só quando difere do caderno
     pub items: Vec<Item>,        // ordem = camadas, de baixo para cima
     pub extra: Map<String, Value>,
 }
@@ -153,34 +223,34 @@ pub struct Item {
     pub kind: Kind,
     pub x: f64, pub y: f64, pub w: f64, pub h: f64, pub r: f64,   // em mm da página
     pub locked: bool,
-    pub page: Side,              // Esquerda, Direita ou Ambas (atravessa a lombada)
+    pub across: bool,            // atravessa a lombada
     pub mask: Option<Mask>,      // recorte não retangular
-    pub look: Look,              // filtros, borda de adesivo, sombra, fita, borda rasgada
+    pub look: Look,              // filtros, borda de adesivo, fita, borda rasgada
     pub anchor: Option<Anchor>,  // legenda presa a uma imagem, grifo preso a um trecho
     pub wrap: Wrap,              // Nenhum, Contorno (caixa) ou Forma (segue a máscara)
     pub extra: Map<String, Value>,
 }
 
 pub enum Kind {
-    Text { style: TextStyle },                 // texto livre: digitado ou com fonte manuscrita
-    Excerpt { source: SourceRef, style: TextStyle }, // trecho citado, com origem
-    Image { src: ImageRef },                    // arquivo do vault ou id do Pictogrep
-    Ink { strokes: Vec<Stroke> },               // traço à mão (vetorial)
-    Scan { src: ImageRef, ocr: Option<OcrRef> },// página manuscrita digitalizada
+    Text { style: TextStyle, flow: Option<Flow> },  // texto na pauta; flow liga à continuação na página seguinte
+    Excerpt { source: SourceRef, style: TextStyle },// trecho citado, com origem
+    Image { src: ImageRef },                        // arquivo do vault ou id do Pictogrep
+    Ink { strokes: Vec<Stroke> },                   // traço à mão (vetorial)
+    Scan { src: ImageRef, ocr: Option<OcrRef> },    // página manuscrita digitalizada
     Line { pts: Vec<(f64, f64)>, style: LineStyle },
     Note { path: String, section: Option<String> }, // nota do vault incorporada ao vivo
-    Sticker { src: ImageRef },                  // imagem já recortada, da gaveta de adesivos
-    Tape { color: String, pattern: String },
+    Sticker { src: ImageRef },                      // imagem já recortada, da gaveta de adesivos
+    Tape { color: String },
 }
 ```
 
-A geometria (caixas, rotação, guias de encaixe, alinhar, organizar) vem do `moodboard.rs`, que já resolve tudo isso no mesmo sistema de coordenadas. Vale extrair essas funções para um módulo comum (`core/src/canvas.rs`) usado pelos dois, em vez de copiá-las.
+A geometria (caixas, rotação, guias de encaixe, alinhar) vem do `moodboard.rs`, que já resolve tudo isso. Vale extrair essas funções para um módulo comum (`core/src/canvas.rs`) usado pelos dois, em vez de copiá-las. A diferença é que no Journal as guias de encaixe incluem as margens, as colunas e as linhas da pauta.
 
 `ImageRef` aceita os dois jeitos de apontar uma imagem que o Ateliet já usa: caminho no vault, ou o id do Pictogrep (SHA-256 do caminho absoluto) para imagens da biblioteca compartilhada. Como no modo imagens, uma imagem de fora do vault usada numa página é copiada para o vault na hora de gravar, para que a nota funcione no Obsidian.
 
-## 6. As ferramentas de imagem
+## 7. As ferramentas de imagem
 
-### 6.1 Recorte (`core/src/journal/mask.rs`, `src/journal_ui/cutout_ui.rs`)
+### 7.1 Recorte (`core/src/journal/mask.rs`, `src/journal_ui/cutout_ui.rs`)
 
 A máscara é guardada em duas partes: uma forma vetorial (polígono, laço livre ou uma das formas de molde) e, opcionalmente, um mapa alfa em PNG ao lado da imagem (`Anexos/journal/<id>.mask.png`), para o que o pincel e a seleção automática produzem. O original nunca é alterado.
 
@@ -193,36 +263,41 @@ A máscara é guardada em duas partes: uma forma vetorial (polígono, laço livr
   - Um clique sobre a imagem escolhe a instância mais próxima do ponto, como o *Select* do Pinterest.
 - **Gaveta de adesivos**: todo recorte pode ser guardado como adesivo reutilizável (um PNG com transparência numa coleção "Adesivos" da biblioteca), com a origem preservada.
 
-### 6.2 Aparência (`core/src/journal/look.rs`)
+### 7.2 Aparência (`core/src/journal/look.rs`)
 
-- **Borda de adesivo**: dilatação do alfa da máscara pelo raio escolhido, preenchida de branco (ou outra cor), com uma leve irregularidade opcional para parecer cortada à tesoura e uma sombra curta. É o que aparece no anjo e na nuvem da referência.
+- **Borda de adesivo**: dilatação do alfa da máscara pelo raio escolhido, preenchida de branco (ou outra cor), com uma leve irregularidade opcional para parecer cortada à tesoura. É o que aparece no anjo e na nuvem da referência. A sombra é opcional e curta, coerente com a sombra leve da lombada.
 - **Borda rasgada**: deslocamento da máscara por ruído ao longo do contorno, de um lado ou de todos.
-- **Fita adesiva**: um retângulo semitransparente com textura e pontas serrilhadas, que pode prender qualquer item.
-- **Filtros**: os do compositor (`pb`, `sepia`, `contraste`, `desfoque`) e quatro novos, no mesmo `compose::filter` para que a tela, o PNG e o PDF fiquem iguais: `granulado` (ruído com semente fixa por item), `fotocopia` (limiar suave com perda de meios-tons), `reticula` (pontos de meio-tom) e `impressao` (saturação menor e preto levantado, como impressora doméstica). Mais o modo de mistura "multiplicar", para que o papel apareça através de uma impressão.
+- **Fita adesiva**: um retângulo semitransparente de cor lisa, com pontas serrilhadas, que pode prender qualquer item.
+- **Filtros**: os do compositor (`pb`, `sepia`, `contraste`, `desfoque`) e quatro novos, no mesmo `compose::filter` para que a tela, o PNG e o PDF fiquem iguais: `granulado` (ruído com semente fixa por item), `fotocopia` (limiar suave com perda de meios-tons), `reticula` (pontos de meio-tom) e `impressao` (saturação menor e preto levantado, como impressora doméstica). Mais o modo de mistura "multiplicar", para que a pauta apareça através de uma impressão.
 
-As camadas aparecem numa lista no inspetor, com arrastar para reordenar, ocultar, travar e apagar, como no Pinterest. Cada item mostra sua origem (pin, arquivo, livro, Kindle), e um clique na origem a abre.
+A ordem das camadas muda pelo balão do item (trazer para frente, mandar para trás) e por atalhos; uma lista de camadas da página abre sob demanda, para páginas cheias. Cada item mostra sua origem (pin, arquivo, livro do Leitor), e um clique na origem a abre.
 
-### 6.3 Texto que contorna imagens (`core/src/journal/flow.rs`)
+### 7.3 Texto na pauta e em volta das imagens (`core/src/journal/flow.rs`)
 
-O compositor do Ateliet quebra parágrafos com Knuth–Plass sobre uma largura fixa. Para o Journal ele passa a aceitar uma função de largura por linha: para cada linha (pela altura da linha e o y em que ela cai), a largura útil é o intervalo da coluna menos as áreas dos itens marcados com `wrap`. Com `wrap: Contorno` a área é a caixa do item; com `wrap: Forma`, o contorno da máscara mais uma folga. O Knuth–Plass já trabalha com larguras por linha, então a mudança é entregar a largura certa a cada linha, não trocar o algoritmo.
+O compositor do Ateliet já compõe texto numa grade de linhas (é o que a Diagramação usa para alinhar o livro). No Journal, a grade é a pauta do papel: a entrelinha é o espaçamento da pauta (ou um múltiplo dela, para fontes maiores) e a primeira linha de base cai numa linha do papel. No papel liso, a grade existe sem aparecer.
 
-O texto parado é desenhado pelo compositor numa textura (como as páginas do Diagramação) e, quando se clica nele, vira um editor de Markdown do Ateliet no lugar (o mesmo editor das notas, com Live Preview), no tamanho da caixa. É a mesma troca entre leitura e edição que o Live Preview faz por bloco.
+Para contornar imagens, o compositor passa a aceitar uma largura por linha: para cada linha, a largura útil é a da coluna menos as áreas dos itens marcados com `wrap`. Com `wrap: Contorno` a área é a caixa do item; com `wrap: Forma`, o contorno da máscara mais uma folga. O Knuth–Plass já trabalha com larguras por linha, então a mudança é entregar a largura certa a cada linha, não trocar o algoritmo.
 
-O texto pode usar a fonte do tema, as fontes embutidas do Diagramação ou uma fonte manuscrita (uma fonte livre como Caveat ou Homemade Apple, embutida, ou uma fonte do sistema), para comentários que devem parecer escritos à mão sem ter sido.
+Quando o texto passa do fim da coluna, a sobra vai para uma caixa ligada (`flow`) na página seguinte, criada no mesmo lugar da coluna; mover ou redimensionar uma caixa recompõe a sequência.
 
-## 7. As entradas: trechos de EPUB, do Kindle e de fora
+O texto parado é desenhado pelo compositor numa textura e, quando se clica nele, vira o editor de Markdown do Ateliet no lugar (o mesmo das notas, com Live Preview), na largura da caixa. É a mesma troca entre leitura e edição que o Live Preview faz por bloco.
 
-Todas as entradas produzem o mesmo objeto, um **trecho**, e o Journal só conhece esse objeto. Assim, colar do EPUB, do Kindle, de uma página web ou do próprio manuscrito do Scriptorium é a mesma operação.
+O texto pode usar a fonte do tema, as fontes embutidas da Diagramação ou uma fonte manuscrita (uma fonte livre como Caveat, embutida, ou uma do sistema), para comentários que devem parecer escritos à mão sem ter sido.
+
+## 8. Os trechos
+
+Todo material de texto que chega de fora da página vira um **trecho**, e o Journal só conhece esse objeto. Assim, levar um parágrafo do Leitor, de uma página web ou do próprio manuscrito do Scriptorium é a mesma operação.
 
 ```rust
 // core/src/capture/mod.rs
 pub struct Snippet {
     pub id: String,
     pub text: String,            // o trecho, em Markdown
-    pub note: Option<String>,    // comentário que veio junto (a nota do Kindle, por exemplo)
+    pub image: Option<String>,   // o recorte de região, quando é uma imagem (LEITOR.md, 6.2)
+    pub note: Option<String>,    // comentário que veio junto
     pub source: SourceRef,
     pub captured: DateTime,
-    pub origin: Origin,          // Epub, Kindle, KindleClippings, Web, Servico, Manual
+    pub origin: Origin,          // Leitor, Web, Scriptorium, Manual
 }
 
 pub struct SourceRef {
@@ -230,75 +305,35 @@ pub struct SourceRef {
     pub author: Option<String>,
     pub book: Option<String>,    // nota do livro no vault ([[Livros/…]]), se houver
     pub url: Option<String>,
-    pub locator: Option<Locator>,// onde no livro: capítulo, CFI, posição do Kindle, página
+    pub locator: Option<Locator>,// onde no livro (LEITOR.md, seção 3)
 }
 ```
 
-Cada trecho vira uma nota curta em `Trechos/` (pasta configurável), com o texto num callout `[!trecho]` e a fonte no frontmatter. Notas, e não um JSON escondido, porque assim os trechos ficam pesquisáveis, ligáveis e consultáveis pelo Dataview mesmo sem o Journal ("todos os trechos de tal livro", "trechos ainda não usados"). Quando um trecho é posto numa página, a página ganha um link para a nota do trecho, e o trecho ganha o backlink: de cada trecho dá para ver onde se escreveu sobre ele.
+Cada trecho vira uma nota curta em `Trechos/` (pasta configurável), com o texto num callout `[!trecho]` e a fonte no frontmatter. Notas, e não um JSON escondido, porque assim os trechos ficam pesquisáveis, ligáveis e consultáveis pelo Dataview mesmo sem o Journal ("todos os trechos de tal livro", "trechos ainda não usados"). Quando um trecho é posto numa página, a página ganha um link para a nota do trecho, e o trecho ganha o backlink: de cada trecho dá para ver em que página do caderno se escreveu sobre ele.
 
-### 7.1 EPUB, PDF e quadrinhos
+**O Leitor** ([LEITOR.md](LEITOR.md)) é a fonte principal: a seleção de texto e o recorte de região de EPUBs, PDFs e quadrinhos produzem trechos com um `Locator` que reabre o livro no ponto exato.
 
-O leitor de livros, PDFs e quadrinhos virou um documento próprio, [LEITOR.md](LEITOR.md), e vem antes do Journal na ordem de trabalho. Ele produz os trechos de texto e os recortes de região que entram no Journal, com o mesmo `Snippet` e um `Locator` que aponta o lugar exato no livro.
+**A caixa de entrada** (`core/src/capture/inbox.rs`, `src/capture.rs`) recebe o que vem de fora do app:
 
-### 7.2 Kindle
+- **Pasta**: `.obsidian/ateliet/inbox/`. Qualquer arquivo `.json` ali com o formato de `Snippet`, um `.txt` ou `.md` simples, ou uma imagem, é importado e apagado. Com o vault sincronizado (iCloud Drive, Syncthing), é por aqui que chegam as fotos de páginas manuscritas tiradas no celular (seção 9).
+- **Esquema de URL**: `ateliet://capture?text=…&title=…&url=…`, registrado no `Info.plist` (`CFBundleURLTypes`) no macOS e num arquivo `.desktop` no Linux, para levar uma seleção do navegador por um favorito.
+- Cada trecho que chega mostra um aviso discreto com "Pôr na página aberta" e "Guardar". O painel **Trechos** do Journal lista os que ainda não foram usados.
 
-Não há um caminho único; o Kindle é fechado, e cada aparelho permite uma coisa diferente. O Ateliet oferece os quatro caminhos possíveis, todos terminando num trecho:
-
-1. **Kindle no iPhone ou iPad (o caminho principal).** No app do Kindle, selecionar um trecho mostra "Compartilhar", que entrega o texto citado com título e autor à folha de compartilhamento do sistema. Um atalho do app Atalhos, "Mandar ao Ateliet", fornecido pronto pelo Ateliet (um arquivo `.shortcut` e as instruções), recebe esse texto e o entrega de um destes jeitos:
-   - escreve um arquivo na caixa de entrada do vault (`.obsidian/ateliet/inbox/<data>-<id>.json`), quando o vault está no iCloud Drive: funciona mesmo com o Mac desligado, e o Ateliet importa na próxima vez que o watcher vir o arquivo;
-   - ou faz um POST ao servidor local do Ateliet no Mac, na mesma rede (7.3), para o trecho aparecer na hora.
-2. **Kindle no Mac.** O app do Kindle no Mac permite copiar a seleção (com um limite por livro definido pela editora). O Ateliet registra um item no menu Serviços do macOS ("Mandar ao Ateliet"), declarado no `Info.plist` do `.app`, e um atalho de teclado global opcional que lê a área de transferência. O Ateliet reconhece o formato da cópia do Kindle (texto, seguido de "Kindle Edition", autor e posição) e separa a fonte do texto.
-3. **Kindle de tinta eletrônica.** O aparelho não envia nada pela rede, mas grava cada grifo e nota em `documents/My Clippings.txt`. Quando o Kindle é ligado ao computador por USB (o volume `Kindle` aparece), o Ateliet oferece importar os grifos novos. O parser lê os blocos separados por `==========` (título e autor, tipo, posição e data, texto), em inglês e em português, e lembra o que já importou pelo hash de cada bloco.
-4. **Exportação do caderno do Kindle.** O app do Kindle exporta as notas e grifos de um livro em HTML (por e-mail no celular, por arquivo no computador). Soltar esse arquivo no Ateliet importa todos os trechos.
-
-5. **Kindle de tinta eletrônica com jailbreak.** Aqui o Kindle passa a rodar código do Ateliet e envia o trecho sozinho, pelo Wi‑Fi, no momento em que ele é grifado. Ver 7.4.
-
-O que não dá para fazer num Kindle sem jailbreak, e o documento deixa registrado para não virar promessa: ler a seleção dentro do app do Kindle sem que o usuário toque em "Compartilhar" ou "Copiar", e baixar os grifos de `read.amazon.com` sem um login da Amazon guardado pelo Ateliet (o que não vale o risco). Os limites de cópia da editora continuam valendo nos caminhos 1 e 2.
-
-### 7.3 Caixa de entrada e servidor local (`core/src/capture/inbox.rs`, `src/capture.rs`)
-
-- **Pasta da caixa de entrada**: `.obsidian/ateliet/inbox/`. Qualquer arquivo `.json` ali com o formato de `Snippet` (ou um `.txt`/`.md` simples) é importado e apagado. É a porta mais simples e funciona com qualquer automação: Atalhos, Tasker no Android, um script.
-- **Esquema de URL**: `ateliet://capture?text=…&title=…&author=…&url=…`, registrado no `Info.plist` (`CFBundleURLTypes`) no macOS e num arquivo `.desktop` no Linux. Serve para o Atalhos no próprio Mac e para favoritos do navegador.
-- **Servidor local**: um servidor HTTP mínimo (`tiny_http`, numa thread) em `127.0.0.1`, com `POST /capture`. Desligado por padrão para a rede; ligado, escuta na rede local com um token gerado pelo app e mostrado como código QR em Configurações, para que só o atalho configurado consiga enviar. O Pictogrep já usa uma porta local; o Ateliet usa outra.
-- Cada trecho que chega mostra um aviso discreto ("Trecho de *Livro* chegou") com "Pôr na página aberta" e "Guardar". O painel **Trechos** do Journal lista os que ainda não foram usados.
-
-### 7.4 Kindle com jailbreak (`kindle/` no repositório)
-
-Com o jailbreak (WinterBreak, AdBreak ou outro), o Kindle roda o KUAL, o lançador de extensões, e o KOReader, o leitor livre que abre EPUB, PDF e CBZ e aceita plugins em Lua. Isso abre dois caminhos, um para cada leitor, e os dois falam com o mesmo servidor local do Ateliet (7.3).
-
-**No KOReader: `ateliet.koplugin` (o caminho principal).** O KOReader já tem um plugin de exportação (`exporter.koplugin`) com destinos remotos como o Readwise, e plugins de terceiros já põem botões próprios no menu que aparece ao selecionar texto. O plugin do Ateliet faz as duas coisas:
-
-- **Botão "Ateliet" no menu da seleção**: manda o trecho na hora, com a nota escrita no KOReader, se houver. Um toque longo abre um campo de comentário antes de enviar.
-- **Destino "Ateliet" no Exportador**: manda de uma vez todos os grifos de um livro, ou de todos os livros, para quem grifa primeiro e organiza depois.
-- **O que vai junto**: título, autor, idioma, capítulo, página, o `xpointer` do KOReader (o caminho do trecho no XHTML do EPUB) e o `partial_md5` com que o KOReader identifica o arquivo. O `xpointer` é o mesmo tipo de caminho que o localizador do leitor de EPUB do Ateliet usa (7.1). Por isso, se o mesmo EPUB está no vault, clicar na fonte do trecho abre o livro no Ateliet exatamente naquele parágrafo. Um livro sem cópia no vault ainda gera a nota do trecho, só sem esse salto.
-- **Fila sem rede**: sem Wi‑Fi, ou com o Mac desligado, o trecho vai para `koreader/ateliet/fila.jsonl` no Kindle e é reenviado quando o KOReader se conectar. Ligado por USB, o Ateliet também lê essa fila diretamente, e cada trecho tem um id, então nada é importado duas vezes.
-- **Livros nos dois sentidos (opcional)**: o plugin lista os EPUBs do vault (`GET /books`) e baixa os escolhidos para o Kindle. Assim, o livro lido no Kindle é o mesmo arquivo do leitor do Ateliet, e os localizadores batem.
-- **Configuração**: o endereço do Mac e o token aparecem em Ateliet › Configurações › Kindle e são digitados uma vez no menu do plugin. O plugin testa a conexão com `GET /ping`.
-
-O plugin é Lua puro, usa as bibliotecas que o KOReader já traz (`socket.http`, `json`, `NetworkMgr` para ligar o Wi‑Fi) e não precisa de nada instalado fora da pasta `koreader/plugins/`. Também funciona no KOReader de Kobo, PocketBook e Android, que leem o mesmo plugin.
-
-**No leitor da Amazon: extensão do KUAL que vigia os grifos.** O leitor original não aceita botões novos, mas grava cada grifo e nota em `documents/My Clippings.txt` no momento em que eles são feitos. A extensão `ateliet` do KUAL instala um pequeno serviço em shell que confere esse arquivo a cada poucos segundos, separa as entradas novas com o mesmo parser de 7.2 (escrito de novo em shell e `awk`, ou num binário estático para ARM) e as manda ao Ateliet com o `curl` do próprio sistema do Kindle. O efeito, para quem lê, é o mesmo: grifou, chegou. A fila sem rede funciona como no plugin. O menu do KUAL tem "Ligar", "Desligar", "Enviar pendentes agora" e "Testar conexão".
-
-Este caminho tem dois limites. O leitor da Amazon só dá ao `My Clippings.txt` o texto e a posição Kindle (um número), sem o caminho no EPUB, então o salto para o parágrafo exato não existe aqui. E manter o serviço rodando depois de reiniciar o Kindle exige um job de inicialização no sistema, o que muda arquivos fora da área do usuário. A extensão oferece as duas formas: ligar à mão pelo KUAL a cada reinício, ou instalar o job (com o aviso).
-
-**No Ateliet.** Nada de novo além da seção 7.3: o servidor recebe os trechos em `POST /capture` com o token, ganha `GET /ping` e `GET /books`, e marca a origem como `KOReader` ou `KindleNativo`. Quando o Kindle aparece como volume USB, o Ateliet procura a fila do plugin e o `My Clippings.txt`, e oferece copiar o `ateliet.koplugin` e a extensão do KUAL para o aparelho, ou atualizá-los se forem mais antigos que os do app.
-
-**Riscos.** O jailbreak depende da versão do firmware. Uma atualização automática da Amazon pode fechá-lo, e o Kindle pode precisar ficar fora do Wi‑Fi da Amazon. O plugin do KOReader não depende de nada da Amazon, então sobrevive a isso enquanto o KOReader rodar. A extensão do leitor original depende do formato do `My Clippings.txt` e do `curl` do sistema, e é a parte mais frágil.
-
-## 8. Digitalizar as notas escritas à mão (`core/src/ocr/`, `src/journal_ui/scan_ui.rs`)
+## 9. Digitalizar as notas escritas à mão (`core/src/ocr/`, `src/journal_ui/scan_ui.rs`)
 
 A digitalização tem duas metades, e só a segunda depende de reconhecimento de texto.
 
-### 8.1 A imagem
+### 9.1 A imagem
 
-1. **Entrada**: uma foto do celular (pela caixa de entrada do iCloud, como os trechos, ou pela Câmera de Continuidade do macOS), um arquivo de scanner ou uma imagem arrastada.
+1. **Entrada**: uma foto do celular (pela caixa de entrada, seção 8, ou pela Câmera de Continuidade do macOS), um arquivo de scanner ou uma imagem arrastada.
 2. **Página**: detecção do quadrilátero da folha (bordas e o maior contorno com quatro cantos), correção de perspectiva e recorte, com os quatro cantos ajustáveis à mão.
 3. **Limpeza**: balanço de branco pelo papel, uniformização da iluminação (divisão por uma versão muito desfocada da própria imagem) e, opcionalmente, retirada do quadriculado ou das pautas.
-4. **Tinta separada**: um limiar adaptativo transforma o papel em transparência e deixa só os traços. A tinta vira um item `Scan` sem fundo, que pode ser posto sobre o papel do Journal, recolorido (lápis, nanquim, azul) e recortado como qualquer imagem. É assim que um desenho feito no caderno, como o anjo da referência, vira um adesivo.
+4. **Tinta separada**: um limiar adaptativo transforma o papel em transparência e deixa só os traços. A tinta vira um item `Scan` sem fundo, que se assenta sobre o papel do Journal como se tivesse sido escrita nele, pode ser recolorida (grafite, nanquim, azul) e recortada como qualquer imagem. É assim que um desenho feito num caderno de papel, como o anjo da referência, vira um adesivo.
+5. **Página inteira**: uma folha digitalizada pode também virar uma página do caderno, com a tinta sobre o papel do caderno, para quem escreve no papel e guarda no Ateliet.
 
 Tudo isso é processamento de imagem simples, no núcleo, com o crate `image` que o Ateliet já usa.
 
-### 8.2 A transcrição
+### 9.2 A transcrição
 
 Um único traço no núcleo e três motores, escolhidos em Configurações:
 
@@ -313,58 +348,60 @@ pub struct Line { pub text: String, pub bbox: [f32; 4], pub confidence: f32, pub
 - **Modelo ONNX local (Linux e Windows)**: detecção de linhas mais um reconhecedor de linha manuscrita (da família TrOCR), baixado na primeira vez. É o mais fraco em português e em letra cursiva; serve para busca, não para transcrição fiel.
 - **Claude pela API (opcional, desligado por padrão)**: a página é enviada a um modelo com visão, que transcreve mantendo a disposição das linhas. É o melhor para letra difícil e para páginas mistas com desenho. Exige chave de API e manda a imagem para fora do computador, então só roda quando o usuário pede, página por página.
 
-O resultado vai para o corpo da nota como um callout `[!transcricao]` dobrado sob a imagem (5.1). Assim a transcrição é pesquisável no Ateliet, no Obsidian e no Dataview, enquanto a página mostra a letra original. As caixas de cada palavra ficam no JSON, o que permite três coisas: a busca destaca a palavra na imagem; o usuário corrige a transcrição clicando na linha errada; e uma linha manuscrita pode ser convertida em texto digitado no mesmo lugar, se ele quiser.
+O resultado vai para o corpo da nota como um callout `[!transcricao]` dobrado sob a imagem (6.2). Assim a transcrição é pesquisável no Ateliet, no Obsidian e no Dataview, enquanto a página mostra a letra original. As caixas de cada palavra ficam no JSON, o que permite três coisas: a busca destaca a palavra na imagem; o usuário corrige a transcrição clicando na linha errada; e uma linha manuscrita pode ser convertida em texto digitado na pauta, no mesmo lugar, se ele quiser.
 
-## 9. Convivência com os plugins
+## 10. Convivência com os plugins
 
-O Ateliet não roda plugins da comunidade; os "plugins" com que o Journal precisa conviver são os que ele traz embutidos e os que o Obsidian continua rodando no mesmo vault. O formato da seção 5 foi escolhido para isso, e cada um ganha uma ligação concreta:
+O Ateliet não roda plugins da comunidade; os "plugins" com que o Journal precisa conviver são os que ele traz embutidos e os que o Obsidian continua rodando no mesmo vault. O formato da seção 6 foi escolhido para isso, e cada um ganha uma ligação concreta:
 
-- **Obsidian**: a página é uma nota Markdown legível; imagens são embeds `![[…]]`; o bloco `%% … %%` é um comentário que o Obsidian esconde. Nenhum plugin do Obsidian é necessário para ler um Journal.
-- **Dataview**: o frontmatter (`journal`, `data`, `caderno`, `fontes`, `tags`) e os campos inline nos grifos permitem consultas como "páginas deste caderno", "trechos de tal livro ainda sem página", "páginas com imagens de tal coleção". Uma consulta Dataview pode também virar um item de texto vivo na página.
-- **Templater**: um modelo de página é uma página de Journal comum numa pasta de modelos. Ao criar uma página a partir dele, o Templater roda no texto (datas, prompts) e a geometria é copiada. É o "remix" do Pinterest aplicado a si mesmo.
-- **Notas diárias e Calendário**: um caderno pode ser marcado como diário; "Página de hoje" cria ou abre a página com a data, e o calendário mostra os dias que têm página.
-- **Moodboards**: selecionar itens de um moodboard e "Mandar ao Journal" leva as imagens com recorte, giro e espelho (os campos são os mesmos). O contrário também: uma página pode virar moodboard.
+- **Obsidian**: o caderno é uma pasta de notas Markdown legíveis, em ordem; imagens são embeds `![[…]]`; o bloco `%% … %%` é um comentário que o Obsidian esconde. Nenhum plugin do Obsidian é necessário para ler um caderno.
+- **Dataview**: o frontmatter (`journal`, `caderno`, `pagina`, `data`, `fontes`, `tags`) e os campos inline nos grifos permitem consultas como "páginas deste caderno", "trechos de tal livro ainda sem página", "páginas com imagens de tal coleção". A nota-índice do caderno já traz o sumário como uma consulta. Uma consulta pode também virar um item de texto vivo numa página.
+- **Templater**: um modelo de página é uma página de Journal comum numa pasta de modelos. Ao criar uma página a partir dele, o Templater roda no texto (datas, prompts) e a geometria é copiada. Um caderno inteiro pode ter um modelo padrão para as páginas novas.
+- **Notas diárias e Calendário**: um caderno pode ser marcado como diário; "Página de hoje" acrescenta a página com a data no fim do caderno (ou abre a de hoje, se já existir), e o calendário mostra os dias que têm página.
+- **Moodboards**: selecionar itens de um moodboard e "Mandar ao Journal" leva as imagens com recorte, giro e espelho (os campos são os mesmos) para a página aberta.
 - **Quadro**: uma página de Journal pode ser um cartão num quadro Kanban ou num desenho do Excalidraw, com prévia.
-- **Scriptorium**: um trecho pode vir de um capítulo do próprio manuscrito (origem `Manual`, com link para o capítulo), e uma página do Journal pode entrar como página composta no livro.
+- **Scriptorium**: um trecho pode vir de um capítulo do próprio manuscrito (origem `Scriptorium`, com link para o capítulo), e uma página do Journal pode entrar como página composta no livro.
 - **Pictogrep e Pinterest**: imagens e recortes da biblioteca compartilhada são guardados pelo id do Pictogrep; um recorte feito no Journal pode ser salvo de volta na biblioteca como adesivo, com o pin de origem.
-- **Busca e backlinks**: tudo o que é texto está no corpo da nota.
+- **Busca e backlinks**: tudo o que é texto está no corpo das notas.
 
-## 10. A interface
+## 11. A interface
 
-O Journal é o terceiro modo na faixa lateral esquerda, ao lado de Escrita e Imagens (`Ctrl/Cmd+Shift+J`), com seu próprio layout guardado em `workspace-journal.json`. Uma página de Journal também abre como aba no modo escrita, como um Quadro.
+O Journal é o terceiro modo na faixa lateral esquerda, ao lado de Escrita e Imagens (`Ctrl/Cmd+Shift+J`), com seu próprio layout guardado em `workspace-journal.json`. Uma página de Journal também abre como aba no modo escrita, mostrando a página dupla daquele ponto do caderno.
 
-- **Centro**: a página dupla sobre a mesa, com zoom e rolagem; o papel, as guias e os itens. Os itens podem sair da página, como o adesivo da referência; na exportação, o que sai fica cortado ou vai junto, à escolha.
-- **Barra de ferramentas**: selecionar, texto, trecho, imagem, recorte, caneta, linha, fita, adesivo, e a escolha do papel.
-- **Esquerda**: três abas que trazem material para a página, cada uma usando o que já existe no app:
+- **Estante**: a primeira tela do modo, quando nenhum caderno está aberto. Capas em fila, "Novo caderno" (nome, tamanho, papel, colunas, cor), e o último caderno em destaque.
+- **O caderno aberto**: a página dupla no centro, sobre o fundo do app, sem outra moldura. Virar a página: setas, gesto no trackpad, clique no canto inferior. `Ctrl/Cmd+G` vai a uma página pelo número. A vista de miniaturas (todas as páginas em pares, como um caderno visto de cima) serve para navegar e reordenar.
+- **Barra de ferramentas**: pequena, no pé, centrada, e escondida enquanto não é necessária: selecionar, escrever, caneta, imagem, recorte, linha, fita, adesivo. Uma ferramenta por vez, sem submenus abertos.
+- **Balão do item**: ao selecionar um item, um balão junto dele mostra só o que serve para aquele tipo: girar, recortar, borda de adesivo, filtro, contornar texto, camada, origem.
+- **Material**: três painéis que deslizam da esquerda quando chamados (pela barra ou por atalho) e se recolhem quando algo é arrastado para a página. Cada um usa o que já existe no app:
   - **Imagens**: a biblioteca do modo imagens (coleções, busca por nome e por descrição com o CLIP, imagens parecidas, a gaveta de adesivos). Arrastar para a página cria um item; arrastar sobre outra imagem a coloca por cima.
-  - **Notas**: notas recentes, busca e as notas abertas no modo escrita. Arrastar uma nota a incorpora ao vivo (o texto acompanha a nota), e com Alt a copia. Uma nota aberta no painel pode ser editada ali mesmo, com a barra do painel de notas do modo imagens.
-  - **Trechos**: a caixa de entrada (Kindle, EPUB, web, digitalizações pendentes), os livros em EPUB e as notas de `Trechos/`.
-- **Direita**: o inspetor do item selecionado (posição, giro, máscara, borda de adesivo, filtros, contorno de texto, origem) e a lista de camadas.
+  - **Notas**: notas recentes, busca e as notas abertas no modo escrita. Arrastar uma nota a incorpora ao vivo (o texto acompanha a nota), e com Alt a copia para a pauta. Uma nota aberta no painel pode ser editada ali mesmo, com a barra do painel de notas do modo imagens.
+  - **Trechos**: os trechos ainda não usados (do Leitor, da caixa de entrada, digitalizações pendentes) e as notas de `Trechos/`.
+- **Ler ao lado**: o Leitor numa metade da janela e o caderno na outra, para arrastar trechos e recortes direto para a página (LEITOR.md, 6.4).
 - **Modo escrita**: um comando "Mandar ao Journal" na seleção do editor e no menu de imagens; o painel Pictures ganha "Pôr na página aberta".
 - **Modo imagens**: "Mandar ao Journal" na seleção da biblioteca e no visualizador.
 
-Exportação: PNG e PDF por página ou por caderno, pelo rasterizador e pelo PDF do compositor (que já embutem fontes e imagens), em página simples ou dupla.
+Exportação: PNG e PDF por página, por intervalo ou do caderno inteiro (com capa), pelo rasterizador e pelo PDF do compositor, que já embutem fontes e imagens; em páginas simples ou em pares, com ou sem a pauta.
 
-## 11. Ordem de implementação
+## 12. Ordem de implementação
 
-Cada fase entrega algo usável sozinho e prepara a próxima. O Leitor ([LEITOR.md](LEITOR.md), fases 1 a 5) vem antes de tudo: ele já guarda trechos e recortes no vault, e o Journal os recebe quando chegar.
+Cada fase entrega algo usável sozinho e prepara a próxima. O Leitor ([LEITOR.md](LEITOR.md), fases 1 a 5) vem antes: ele já guarda trechos e recortes no vault, e o Journal os recebe quando chegar.
 
-1. **Núcleo da página**: `journal/mod.rs`, o formato `.md` com o bloco JSON e testes de ida e volta byte a byte (como os do Quadro); `canvas.rs` extraído do moodboard; papéis e guias. Na interface, o modo Journal com imagens e texto simples, mover, girar, camadas, desfazer. Arrastar do modo imagens e do modo notas.
-2. **Aparência**: recorte por formas, laço e pincel; borda de adesivo, sombra, fita, borda rasgada; os quatro filtros novos no compositor; gaveta de adesivos.
-3. **Trechos**: o modelo `Snippet`, notas em `Trechos/`, caixa de entrada por pasta, esquema `ateliet://`, importação de `My Clippings.txt` e do HTML do caderno do Kindle, o atalho para iPhone. O painel Trechos.
-4. **Ler ao lado**: o Leitor e a página do Journal lado a lado, com arrastar trechos e recortes (LEITOR.md, fase 7).
+1. **O caderno**: `journal/mod.rs`, os formatos da nota-índice e da página com testes de ida e volta byte a byte (como os do Quadro), papéis e colunas, numeração e ordem. Na interface: estante, capa, página dupla, virar páginas, miniaturas, a moldura que some.
+2. **Escrever e colar**: texto na pauta com continuação na página seguinte; imagens; `canvas.rs` extraído do moodboard; mover, girar, camadas, desfazer; arrastar dos painéis de Imagens e Notas.
+3. **Trechos**: o modelo `Snippet`, notas em `Trechos/`, caixa de entrada por pasta, esquema `ateliet://`, o painel Trechos. Ligação com o Leitor e "Ler ao lado" (LEITOR.md, fase 7).
+4. **Aparência**: recorte por formas, laço e pincel; borda de adesivo, fita, borda rasgada; os quatro filtros novos no compositor; gaveta de adesivos.
 5. **Texto contornando imagens**: largura por linha no compositor, troca entre texto composto e editor no lugar, fontes manuscritas.
-6. **Digitalização**: perspectiva, limpeza, tinta separada; transcrição pelo Apple Vision; correção de linhas; motor ONNX e a opção pela API.
-7. **Recorte automático e servidor local**: segmentação de primeiro plano (Vision e ONNX); servidor HTTP com token e código QR; o serviço do macOS; o `ateliet.koplugin` e a extensão do KUAL. O plugin do KOReader pode adiantar-se para a fase 3, porque só depende do servidor e do modelo de trecho.
-8. **Integrações restantes**: modelos com Templater, página do dia, moodboard ↔ Journal, cartão no Quadro, exportação do caderno.
+6. **Digitalização**: perspectiva, limpeza, tinta separada, folha digitalizada como página; transcrição pelo Apple Vision; correção de linhas; motor ONNX e a opção pela API.
+7. **Recorte automático**: segmentação de primeiro plano (Vision e ONNX).
+8. **Integrações restantes**: modelos com Templater, página do dia, moodboard → Journal, cartão no Quadro, exportação do caderno.
 
-## 12. Dependências novas e riscos
+## 13. Dependências novas e riscos
 
-- **Crates**: `quick-xml` (EPUB), `tiny_http` (servidor local), `global-hotkey` (atalho global, opcional), `objc2-vision` ou um auxiliar em Swift no macOS. Os modelos ONNX de recorte e de escrita são baixados na primeira vez, como o CLIP, e entram pela feature `vision`, para que um build sem ela continue funcionando, só sem os recursos automáticos.
+- **Crates**: `objc2-vision` ou um auxiliar em Swift no macOS, para o recorte automático e a transcrição. Os modelos ONNX de recorte e de escrita são baixados na primeira vez, como o CLIP, e entram pela feature `vision`, para que um build sem ela continue funcionando, só sem os recursos automáticos. As dependências do Leitor estão no documento dele.
 - **Pressão da caneta**: o egui não a fornece no macOS hoje. O traço usa velocidade; ler a pressão exigiria tratar os eventos do `winit` diretamente.
-- **Edição dos dois lados**: a página pode ser editada no Obsidian enquanto o Ateliet a tem aberta. A releitura pelo watcher e a gravação que relê o disco antes (como no Quadro) resolvem o caso comum; um conflito na mesma seção fica com a versão do disco e avisa.
+- **Edição dos dois lados**: uma página pode ser editada no Obsidian enquanto o Ateliet a tem aberta. A releitura pelo watcher e a gravação que relê o disco antes (como no Quadro) resolvem o caso comum; um conflito na mesma seção fica com a versão do disco e avisa. Reordenar páginas renomeia arquivos, e o `relink.rs` já atualiza os links para eles.
+- **Texto que continua**: a ligação entre caixas de páginas diferentes é a parte mais delicada do modelo, porque cada página é um arquivo. A sequência fica guardada nas duas pontas (`flow` com o id da caixa seguinte e da anterior) e é refeita pela ordem das páginas quando uma delas some.
 - **Transcrição**: a qualidade em letra cursiva em português é o maior risco técnico do projeto, e ele é contido pelo desenho: a imagem é sempre o original, e a transcrição só serve para busca e para quem quiser corrigi-la.
-- **Kindle**: depende de comportamentos da Amazon que podem mudar (o "Compartilhar" do app, o formato da cópia, o `My Clippings.txt`). Cada parser fica isolado e testado com exemplos reais, e a caixa de entrada genérica continua funcionando se um deles quebrar.
 
 ## Fontes consultadas
 
@@ -372,8 +409,3 @@ Cada fase entrega algo usável sozinho e prepara a próxima. O Leitor ([LEITOR.m
 - Metricool, [Pinterest-Collagen: So nutzt du die neuen Features](https://metricool.com/de/pinterest-collage-neue-features/)
 - Outfy, [Pinterest new collage features](https://www.outfy.com/blog/pinterest-new-collage-features/)
 - Social Media Today, [Pinterest adds collage remix and sharing options](https://www.socialmediatoday.com/news/pinterest-adds-collage-remix-sharing-options/727961/)
-- Hongkiat, [How to export Kindle notes and highlights](https://www.hongkiat.com/blog/export-kindle-highlights/)
-- Web Highlights, [How to export Kindle highlights](https://web-highlights.com/tutorials/pdf-web-highlighter/how-to-export-kindle-highlights)
-- KOReader, [Module koplugin.exporter](https://koreader.rocks/doc/modules/koplugin.exporter.html)
-- TRMNL, [Turn your Amazon Kindle into a TRMNL](https://usetrmnl.com/guides/turn-your-amazon-kindle-into-a-trmnl) (WinterBreak e limites de firmware)
-- MobileRead, [discussão sobre WinterBreak e o firmware 5.18](https://www.mobileread.com/forums/showthread.php?p=4573295)
