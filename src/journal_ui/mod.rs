@@ -8,7 +8,9 @@
 //! - `chrome` — the toolbar that hides, the balloon by the selection, and
 //!   the material panels (pictures, notes, excerpts).
 //! - `shelf`  — the shelf, the new notebook, the page thumbnails.
+//! - `boards` — storyboards brought in: the panel, a frame, all of them.
 
+mod boards;
 mod chrome;
 mod draw;
 mod input;
@@ -30,6 +32,8 @@ pub enum Payload {
     Picture(String),
     Note(String),
     Snippet(String),
+    /// A frame of a storyboard: the file, the frame's id and place.
+    Frame(String, String, usize),
 }
 
 /// What the Journal asks the app to do.
@@ -71,6 +75,14 @@ pub enum Panel {
     Notes,
     Snippets,
     Stickers,
+    Storyboards,
+}
+
+/// A storyboard's frames, drawn small in the background for the panel.
+pub enum BoardThumbs {
+    Loading(std::sync::mpsc::Receiver<Result<Vec<(journal::storyboard::Frame, egui::ColorImage)>, String>>),
+    Ready(Vec<(journal::storyboard::Frame, egui::TextureHandle)>),
+    Failed(String),
 }
 
 /// A page note as it is here: the page, the page as last read from disk,
@@ -151,6 +163,12 @@ pub struct Book {
     last_ink: Option<(usize, String, Instant)>,
     /// Horizontal scrolling gathered toward a page turn.
     swipe: f32,
+    /// Where the cursor goes when typing starts (a char index).
+    edit_cursor: Option<usize>,
+    /// Typing ran past the page's last line: once the text is laid out
+    /// again, go on in the next box — (the box typed in, how long the
+    /// next box's text was before).
+    continue_edit: Option<(String, usize)>,
 }
 
 pub struct Journal {
@@ -180,6 +198,9 @@ pub struct Journal {
     pub close_requested: bool,
     /// Pictures sent from image mode, for the open page.
     pub pending_pictures: Vec<String>,
+    /// Storyboards opened in the panel: path → their frames.
+    pub boards: HashMap<String, (u64, BoardThumbs)>,
+    pub open_board: Option<String>,
 }
 
 impl Default for Journal {
@@ -203,6 +224,8 @@ impl Default for Journal {
             notes: HashMap::new(),
             close_requested: false,
             pending_pictures: Vec::new(),
+            boards: HashMap::new(),
+            open_board: None,
         }
     }
 }
@@ -250,6 +273,8 @@ impl Book {
             pending_reflow: None,
             last_ink: None,
             swipe: 0.0,
+            edit_cursor: None,
+            continue_edit: None,
         };
         if b.nb.pages.is_empty() {
             b.append_page("");
@@ -285,9 +310,31 @@ impl Book {
         let (l, r) = self.spread_pages();
         if forward && self.spread + 1 < self.spreads() {
             self.go_to(r.unwrap_or(l.unwrap_or(1)) + 1);
+        } else if forward && r.is_some() {
+            // past the last page: a new one, unless the last is still blank
+            let last = self.count();
+            if self.page(last).is_some_and(|p| !p.items.is_empty()) {
+                let n = self.append_page("");
+                self.go_to(n);
+            }
         } else if !forward && self.spread > 0 {
             self.go_to(l.unwrap_or(1).saturating_sub(1).max(1));
         }
+    }
+
+    /// A new page after the one shown on the right (or at the end), opened.
+    pub fn new_page_here(&mut self, out: &mut Vec<Out>) {
+        self.commit_edit();
+        let (l, r) = self.spread_pages();
+        let cur = r.or(l).unwrap_or(self.count());
+        if cur >= self.count() {
+            let n = self.append_page("");
+            self.go_to(n);
+        } else {
+            self.insert_after(cur, out);
+            self.go_to(cur + 1);
+        }
+        out.push(Out::Rescan);
     }
 
     pub fn page_ref(&self, n: usize) -> Option<&PageRef> {
@@ -406,7 +453,11 @@ impl Book {
     /// Save what waits (all of it with `now`), reading the disk first: what
     /// changed there meanwhile is merged.
     pub fn save(&mut self, now: bool, out: &mut Vec<Out>) {
-        let busy = self.drag.is_some() || self.editing.is_some();
+        let busy = self.drag.is_some();
+        // the text being typed goes into its box (it is still being typed)
+        if self.loaded.values().any(|l| l.dirty) {
+            self.sync_edit();
+        }
         let due: Vec<String> = self.loaded.iter().filter(|(_, l)| l.dirty && (now || (!busy && l.changed_at.is_some_and(|t| t.elapsed() > Duration::from_millis(1500))))).map(|(k, _)| k.clone()).collect();
         for path in due {
             let backup = self.backup_path(&path);
@@ -539,6 +590,14 @@ impl Book {
         self.redo.clear();
         self.sel.clear();
         out.push(Out::Reorder { renames, numbers });
+    }
+
+    /// Change a setting of the notebook in its index note.
+    pub fn set_setting(&mut self, key: &str, value: Option<&str>) {
+        let abs = self.root.join(&self.nb.path);
+        if let Ok(text) = std::fs::read_to_string(&abs) {
+            let _ = ateliet_core::quadro::write_atomic(&abs, &format::set_key(&text, key, value));
+        }
     }
 
     /// Read the pages again (after the app renamed them).
@@ -730,6 +789,21 @@ impl Book {
         touched
     }
 
+    /// What is being typed, into its box, without ending the typing.
+    fn sync_edit(&mut self) {
+        let Some((n, id, buf)) = self.editing.as_ref().map(|e| (e.page, e.id.clone(), e.buf.clone())) else { return };
+        if let Some(slot) = self.page(n).and_then(|p| p.item_mut(&id)) {
+            if flow_text(slot) == buf {
+                return;
+            }
+            let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
+            let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
+            let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
+            set_flow_text(slot, &buf, ex.as_ref(), first, last);
+        }
+        self.edited_body(n, &id);
+    }
+
     /// End typing: the text goes into its box (and the boxes after it).
     pub fn commit_edit(&mut self) {
         let Some(e) = self.editing.take() else { return };
@@ -748,7 +822,9 @@ impl Book {
             return;
         }
         if flow_text(&it) == e.buf && !e.new {
-            self.uncheckpoint();
+            // nothing typed since the box was last saved: lay it out again
+            // all the same (what was saved while typing has not flowed yet)
+            self.pending_reflow = Some((e.page, e.id));
             return;
         }
         if let Some(p) = self.page(e.page) {

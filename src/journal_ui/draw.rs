@@ -149,12 +149,32 @@ pub fn spine(painter: &egui::Painter, spread: Rect, left_pages: usize, right_pag
 
 /// The family and size factor of a text style (`tema`, `serifa`, `mao`).
 pub fn font_of(it: &Item) -> (egui::FontFamily, egui::FontFamily, egui::FontFamily, f32) {
-    let font = if it.style.font.is_empty() && it.kind == Kind::Excerpt { "serifa" } else { it.style.font.as_str() };
+    let font = effective_font(it);
     let n = |s: &str| egui::FontFamily::Name(s.into());
-    match font {
-        "mao" => (n("hand"), n("hand"), n("hand"), 0.95),
-        "serifa" => (n("garamond"), n("garamond-bold"), n("garamond-italic"), 0.66),
-        _ => (n("theme-text"), n("theme-text-bold"), n("theme-text-italic"), 0.58),
+    let factor = crate::fonts::JOURNAL_FONTS.iter().find(|f| f.0 == font).map(|f| f.2).unwrap_or(0.58) * it.style.size() as f32;
+    let (r, b, i) = match font {
+        "mao" => (n("hand"), n("hand"), n("hand")),
+        "kalam" => (n("kalam"), n("kalam"), n("kalam")),
+        "maquina" => (n("typewriter"), n("typewriter"), n("typewriter")),
+        "serifa" => (n("garamond"), n("garamond-bold"), n("garamond-italic")),
+        "cormorant" => (n("cormorant"), n("cormorant-bold"), n("cormorant-italic")),
+        "lora" => (n("lora"), n("lora-bold"), n("lora-italic")),
+        "crimson" => (n("crimson"), n("crimson-bold"), n("crimson-italic")),
+        "baskerville" => (n("baskerville"), n("baskerville-bold"), n("baskerville-italic")),
+        "playfair" => (n("playfair"), n("playfair"), n("playfair-italic")),
+        "cinzel" => (n("cinzel"), n("cinzel-bold"), n("cinzel")),
+        "inter" => (egui::FontFamily::Proportional, n("bold"), n("italic")),
+        _ => (n("theme-text"), n("theme-text-bold"), n("theme-text-italic")),
+    };
+    (r, b, i, factor)
+}
+
+/// The font a text shows in: its own, or the excerpts' serif.
+pub fn effective_font(it: &Item) -> &str {
+    match it.style.font.as_str() {
+        "" if it.kind == Kind::Excerpt => "serifa",
+        "" => "tema",
+        f => f,
     }
 }
 
@@ -175,7 +195,7 @@ fn align_of(it: &Item) -> egui::Align {
 pub fn plain_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32) -> egui::text::LayoutJob {
     let (reg, _, _, f) = font_of(it);
     let lh = line_px(it, lay, k);
-    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: egui::FontId::new(lh * f, reg), color, line_height: Some(lh), ..Default::default() });
+    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: egui::FontId::new(lh * f, reg), color, line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
     job.wrap.max_width = (it.w as f32 * k).max(4.0);
     job.halign = align_of(it);
     job
@@ -194,6 +214,7 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
         font_id: egui::FontId::new(size, fam.clone()),
         color: c,
         line_height: Some(lh),
+        valign: egui::Align::BOTTOM,
         underline: if under { Stroke::new((k * 0.25).max(1.0), PENCIL_RED.gamma_multiply(0.85)) } else { Stroke::NONE },
         ..Default::default()
     };
@@ -303,11 +324,10 @@ pub fn text_origin(galley: &egui::Galley, pv: &PageView, it: &Item) -> Pos2 {
     pos2(x, top.y + lh - base - lh * 0.06)
 }
 
-/// Where the rows of a text start (char indices), laid out at a fine
-/// scale: the flow measures with this.
-pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout) -> Vec<usize> {
-    const K: f32 = 6.0;
-    let job = plain_job(it, text, lay, K, Color32::BLACK);
+/// Where the rows of a text start (char indices), laid out at the scale
+/// the page is shown at (so what is typed and what flows agree).
+pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout, k: f32) -> Vec<usize> {
+    let job = plain_job(it, text, lay, k, Color32::BLACK);
     let galley = ctx.fonts(|f| f.layout_job(job));
     let mut out = Vec::with_capacity(galley.rows.len());
     let mut n = 0;
@@ -427,7 +447,7 @@ impl Journal {
                 let mut job = rich_job(&body, &parts.text, &pv.lay, pv.k, color, p.accent_strong);
                 if !parts.foot.is_empty() {
                     let lh = line_px(it, &pv.lay, pv.k);
-                    job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), ..Default::default() });
+                    job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
                 }
                 let g = ctx.fonts(|f| f.layout_job(job));
                 let at = text_origin(&g, pv, &body);

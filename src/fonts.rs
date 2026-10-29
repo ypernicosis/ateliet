@@ -26,7 +26,29 @@ pub const GARAMOND_BOLD: &[u8] = include_bytes!("../assets/fonts/EBGaramond-Bold
 /// A handwriting face (Caveat), for the Journal's comments meant to look written.
 pub const HAND: &[u8] = include_bytes!("../assets/fonts/Caveat-Regular.ttf");
 pub const GARAMOND_BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/EBGaramond-BoldItalic.ttf");
-/// The faces of the ready-made book styles (Diagramação), only for typesetting.
+/// More hands for the Journal: a print hand and a typewriter.
+pub const KALAM: &[u8] = include_bytes!("../assets/fonts/Kalam-Regular.ttf");
+pub const TYPEWRITER: &[u8] = include_bytes!("../assets/fonts/SpecialElite-Regular.ttf");
+
+/// The Journal's fonts: key (as written in the page), name shown, and the
+/// size of the type against the ruling (faces differ in how big they look).
+pub const JOURNAL_FONTS: &[(&str, &str, f32)] = &[
+    ("tema", "Fonte do tema", 0.58),
+    ("inter", "Inter", 0.58),
+    ("serifa", "EB Garamond", 0.66),
+    ("cormorant", "Cormorant", 0.7),
+    ("lora", "Lora", 0.6),
+    ("crimson", "Crimson Text", 0.66),
+    ("baskerville", "Libre Baskerville", 0.56),
+    ("playfair", "Playfair Display", 0.6),
+    ("cinzel", "Cinzel", 0.56),
+    ("maquina", "Máquina de escrever", 0.6),
+    ("mao", "Caveat (à mão)", 0.95),
+    ("kalam", "Kalam (letra de forma)", 0.7),
+];
+
+/// The faces of the ready-made book styles (Diagramação), for typesetting
+/// and for the Journal.
 const BOOK_SERIFS: [&[u8]; 14] = [
     include_bytes!("../assets/fonts/Lora-Regular.ttf"),
     include_bytes!("../assets/fonts/Lora-Italic.ttf"),
@@ -125,6 +147,11 @@ pub fn definitions_with(theme: &ThemeFonts) -> FontDefinitions {
     put("garamond-italic", FontData::from_static(GARAMOND_ITALIC));
     put("garamond-bold", FontData::from_static(GARAMOND_BOLD));
     put("hand", FontData::from_static(HAND));
+    put("kalam", FontData::from_static(KALAM));
+    put("typewriter", FontData::from_static(TYPEWRITER));
+    for (name, i) in [("lora", 0), ("lora-italic", 1), ("lora-bold", 2), ("crimson", 3), ("crimson-italic", 4), ("crimson-bold", 5), ("cinzel", 6), ("cinzel-bold", 7), ("playfair", 9), ("playfair-italic", 10), ("baskerville", 11), ("baskerville-italic", 12), ("baskerville-bold", 13)] {
+        put(name, FontData::from_static(BOOK_SERIFS[i]));
+    }
     let sys = first(SYSTEM_SANS).map(|d| put("sys-sans", FontData::from_owned(d))).is_some();
     let mono = first(MONO).map(|d| put("sys-mono", FontData::from_owned(d))).is_some();
 
@@ -142,7 +169,7 @@ pub fn definitions_with(theme: &ThemeFonts) -> FontDefinitions {
     fonts.families.insert(FontFamily::Name("medium".into()), chain("inter-medium"));
     fonts.families.insert(FontFamily::Name("bold".into()), chain("inter-semibold"));
     fonts.families.insert(FontFamily::Name("italic".into()), chain("inter-italic"));
-    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold", "hand"] {
+    for f in ["cormorant", "cormorant-italic", "cormorant-bold", "garamond", "garamond-italic", "garamond-bold", "hand", "kalam", "typewriter", "lora", "lora-italic", "lora-bold", "crimson", "crimson-italic", "crimson-bold", "cinzel", "cinzel-bold", "playfair", "playfair-italic", "baskerville", "baskerville-italic", "baskerville-bold"] {
         fonts.families.insert(FontFamily::Name(f.into()), chain(f));
     }
     fonts.families.insert(FontFamily::Name("icons".into()), vec!["lucide".into(), "inter".into()]);

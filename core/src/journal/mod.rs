@@ -13,12 +13,14 @@
 //! - `paper`  — sizes, papers and columns, and where the ruling falls on a page.
 //! - `format` — reading and writing the index note and the page notes.
 //! - `cut`    — a picture cut out with its mask, for the sticker drawer.
+//! - `storyboard` — the frames of a storyboard, drawn to paste on a page.
 //!
 //! Lengths are millimetres of the page, from its top left corner.
 
 pub mod cut;
 pub mod format;
 pub mod paper;
+pub mod storyboard;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -228,9 +230,20 @@ pub struct TextStyle {
     /// `centro` or `direita`; left otherwise.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub align: String,
+    /// The type smaller or larger within its line (1 by default).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub size: f64,
 }
 
 impl TextStyle {
+    pub fn size(&self) -> f64 {
+        if self.size > 0.0 {
+            self.size
+        } else {
+            1.0
+        }
+    }
+
     pub fn lines(&self) -> f64 {
         if self.lines > 0.0 {
             self.lines

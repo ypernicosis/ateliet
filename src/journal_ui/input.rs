@@ -39,6 +39,12 @@ impl Book {
         (out, spread)
     }
 
+    /// Is page `n` on the spread shown?
+    pub fn views_show(&self, n: usize) -> bool {
+        let (l, r) = self.spread_pages();
+        l == Some(n) || r == Some(n)
+    }
+
     /// The topmost item under a point of page `n`.
     fn hit(&mut self, n: usize, at: (f64, f64)) -> Option<String> {
         let page = self.page(n)?;
@@ -241,9 +247,29 @@ impl Journal {
     pub fn notebook_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let Some(mut b) = self.book.take() else { return };
         let ctx = ui.ctx().clone();
-        if let Some((n, id)) = b.pending_reflow.take() {
-            let mut m = |it: &Item, text: &str, lay: &journal::Layout| draw::row_starts(&ctx, it, text, lay);
+        // not while typing: the text in the box is not the one being typed
+        if let Some((n, id)) = b.pending_reflow.take_if(|_| b.editing.is_none()) {
+            let k = b.views(ui.available_rect_before_wrap()).0.first().map(|v| v.k).unwrap_or(4.0).max(2.0);
+            let mut m = |it: &Item, text: &str, lay: &journal::Layout| draw::row_starts(&ctx, it, text, lay, k);
             b.reflow(n, &id, &mut m);
+            // typing went past the last line: go on in the next box
+            if let Some((typed, before)) = b.continue_edit.take() {
+                let next = b.find(&typed).and_then(|(pn, _)| b.page(pn).and_then(|p| p.item(&typed)).and_then(|i| i.flow.as_ref()).and_then(|f| f.next.clone()));
+                if let Some((nn, _)) = next.as_ref().and_then(|nx| b.find(nx)) {
+                    let nid = next.unwrap();
+                    let len = b.page(nn).and_then(|p| p.item(&nid)).map(|i| super::flow_text(i).chars().count()).unwrap_or(0);
+                    if !b.views_show(nn) {
+                        b.go_to(nn);
+                    }
+                    self.edit(&mut b, nn, &nid, false);
+                    b.edit_cursor = Some(len.saturating_sub(before));
+                } else if let Some((pn, _)) = b.find(&typed) {
+                    // it fit after all: back to the same box, at its end
+                    let len = b.page(pn).and_then(|p| p.item(&typed)).map(|i| super::flow_text(i).chars().count()).unwrap_or(0);
+                    self.edit(&mut b, pn, &typed, false);
+                    b.edit_cursor = Some(len);
+                }
+            }
         }
         let canvas = ui.available_rect_before_wrap();
         let p = cx.palette;
@@ -278,6 +304,21 @@ impl Journal {
         }
         for pv in &views {
             self.draw_page_items(ui, &mut b, cx, pv);
+        }
+        // the empty side after the last page: a page waiting to be made
+        if let (Some(_), None) = b.spread_pages() {
+            let slot = Rect::from_min_max(pos2(spread.center().x, spread.top()), spread.max).shrink(14.0);
+            let r = ui.interact(slot, ui.id().with("journal-new-page"), egui::Sense::click());
+            let c = if r.hovered() { p.accent_strong } else { draw::ink_color(p).gamma_multiply(0.25) };
+            let pts = [slot.left_top(), slot.right_top(), slot.right_bottom(), slot.left_bottom(), slot.left_top()];
+            painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.2_f32, c), 6.0, 5.0));
+            painter.text(slot.center(), egui::Align2::CENTER_CENTER, format!("{}  Página nova", crate::icons::PLUS), egui::FontId::proportional(14.0), c);
+            if r.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if r.clicked() {
+                b.new_page_here(&mut self.out);
+            }
         }
         // pictures sent from image mode: on the page shown on the right
         let sent = std::mem::take(&mut self.pending_pictures);
@@ -386,7 +427,7 @@ impl Journal {
             self.release(b, views);
         }
         if resp.clicked() {
-            self.click(b, views, q, shift);
+            self.click(ui.ctx(), b, views, q, shift);
         }
         if resp.double_clicked() {
             if let Some((pv, at)) = Self::at(views, q) {
@@ -818,7 +859,7 @@ impl Journal {
         b.touch(to);
     }
 
-    fn click(&mut self, b: &mut Book, views: &[PageView], q: Pos2, shift: bool) {
+    fn click(&mut self, ctx: &egui::Context, b: &mut Book, views: &[PageView], q: Pos2, shift: bool) {
         let Some((pv, at)) = Self::at(views, q) else {
             b.commit_edit();
             b.sel.clear();
@@ -830,8 +871,13 @@ impl Journal {
         }
         if let Some(id) = b.hit(n, at) {
             let kind = b.page(n).and_then(|p| p.item(&id)).map(|i| i.kind.clone());
-            if self.tool == Tool::Write && kind.as_ref().is_some_and(|k| k.is_text()) {
+            // a text: typing starts where it was clicked (with the writing
+            // tool, or on a text already picked)
+            let picked = b.sel_page == n && b.sel == [id.clone()];
+            if kind.as_ref().is_some_and(|k| k.is_text()) && !shift && (self.tool == Tool::Write || picked) {
+                let at_char = self.char_at(ctx, b, pv, &id, at);
                 self.edit(b, n, &id, false);
+                b.edit_cursor = at_char;
                 return;
             }
             if !shift {
@@ -866,9 +912,9 @@ impl Journal {
         let y = lay.text_top(at.1 - lay.paper.line() * 0.5, 1.0);
         b.checkpoint();
         let mut it = Item::new(Kind::Text, x, y, (c1 - x).max(10.0), lay.paper.line());
-        if lay.margin.is_some_and(|m| lay.columns[m] == (c0, c1)) {
-            it.style.font = "mao".into();
-        }
+        // the notebook's font; in the margin, its hand
+        let margin = lay.margin.is_some_and(|m| lay.columns[m] == (c0, c1));
+        it.style.font = if margin { b.nb.margin_font.clone().unwrap_or_else(|| "mao".into()) } else { b.nb.font.clone().unwrap_or_default() };
         it.set_content("");
         let id = it.id.clone();
         if let Some(p) = b.page(pv.n) {
@@ -893,6 +939,20 @@ impl Journal {
         b.focus_edit = true;
     }
 
+    /// The char of a text under a point of its page.
+    fn char_at(&self, ctx: &egui::Context, b: &mut Book, pv: &PageView, id: &str, at: (f64, f64)) -> Option<usize> {
+        let mut it = b.page(pv.n)?.item(id)?.clone();
+        it.style.align = String::new();
+        if it.kind == Kind::Excerpt && !journal::excerpt_parts(it.content()).title.is_empty() {
+            it.y += pv.lay.paper.line() * it.style.lines();
+        }
+        let text = super::flow_text(&it);
+        let g = ctx.fonts(|f| f.layout_job(draw::plain_job(&it, &text, &pv.lay, pv.k, Color32::BLACK)));
+        let origin = draw::text_origin(&g, pv, &it);
+        let c = g.cursor_from_pos(pv.s(at) - origin);
+        Some(c.ccursor.index)
+    }
+
     /// The text being typed, over its box: the same font and lines as when
     /// it is shown.
     fn edit_overlay(&mut self, ui: &mut egui::Ui, b: &mut Book, views: &[PageView], p: crate::theme::Palette) {
@@ -913,26 +973,62 @@ impl Journal {
         let lay = pv.lay.clone();
         let k = pv.k;
         let ink = it.style.color.as_deref().and_then(draw::hex).unwrap_or(draw::ink_color(p));
-        let sample = ui.fonts(|f| f.layout_job(draw::plain_job(&it, "Ag", &lay, k, ink)));
-        let origin = draw::text_origin(&sample, &pv, &it);
-        let rows = lay.rows_from(it.y, it.style.lines()).max(1) as f32;
+        let buf = b.editing.as_ref().map(|e| e.buf.clone()).unwrap_or_default();
+        let now = ui.fonts(|f| f.layout_job(draw::plain_job(&it, if buf.is_empty() { " " } else { &buf }, &lay, k, ink)));
+        let origin = draw::text_origin(&now, &pv, &it);
+        let cap = lay.rows_from(it.y, it.style.lines()).max(1);
+        let rows = now.rows.len().max(1);
         let lh = draw::line_px(&it, &lay, k);
-        let rect = Rect::from_min_size(origin, vec2(it.w as f32 * k, (rows * lh).max(lh) + 2.0 * lh));
-        // the box on the page, lightly
-        let r = Rect::from_min_size(pv.s((it.x, it.y)), vec2(it.w as f32 * k, rows * lh));
-        ui.painter_at(pv.clip).rect_stroke(r.expand(2.0), 2.0, Stroke::new(1.0_f32, p.accent_soft), egui::StrokeKind::Outside);
+        let line_mm = lay.paper.line() * it.style.lines();
+        // the box grows with the text as it is typed
+        let head = if it.y != b.page(n).and_then(|pg| pg.item(&id)).map(|i| i.y).unwrap_or(it.y) { 1 } else { 0 };
+        if let Some(slot) = b.page(n).and_then(|pg| pg.item_mut(&id)) {
+            slot.h = (rows.min(cap) + head) as f64 * line_mm;
+        }
+        let rect = Rect::from_min_size(origin, vec2(it.w as f32 * k, (cap as f32 + 1.0) * lh));
+        let edit_id = egui::Id::new(("journal-edit", &id));
+        if let Some(c) = b.edit_cursor.take() {
+            let mut st = egui::text_edit::TextEditState::load(ui.ctx(), edit_id).unwrap_or_default();
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(c))));
+            st.store(ui.ctx(), edit_id);
+        }
         let it2 = it.clone();
         let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| f.layout_job(draw::plain_job(&it2, text, &lay, k, ink)));
         let Some(e) = b.editing.as_mut() else { return };
-        let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(egui::Id::new(("journal-edit", &id)));
-        let resp = ui.put(rect, te);
+        let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(edit_id);
+        // typed text never shows past the page
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+        child.set_clip_rect(pv.clip.intersect(ui.clip_rect()));
+        let out = te.show(&mut child);
+        let buf_len = e.buf.chars().count();
+        let resp = out.response;
+        if resp.changed() {
+            // saved a moment after the last key, typing or not
+            b.touch(n);
+        }
         if b.focus_edit {
             resp.request_focus();
             b.focus_edit = false;
         }
-        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-        if esc || (resp.lost_focus() && !b.focus_edit) {
+        // past the last line, with the cursor at the end: on to the next page
+        let at_end = out.cursor_range.is_some_and(|c| c.primary.ccursor.index >= buf_len);
+        if out.galley.rows.len() > cap && at_end && resp.changed() {
+            let before = b.page(n).and_then(|pg| pg.item(&id)).and_then(|i| i.flow.as_ref()).and_then(|f| f.next.clone()).and_then(|nx| b.find(&nx).and_then(|(pn, _)| b.page(pn).and_then(|pg| pg.item(&nx)).map(|i| super::flow_text(i).chars().count()))).unwrap_or(0);
+            b.continue_edit = Some((id.clone(), before));
             b.commit_edit();
+            return;
+        }
+        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        // a click on the balloon (font, size, colour) keeps the typing going
+        let on_balloon = ui.ctx().input(|i| i.pointer.interact_pos()).and_then(|q| ui.ctx().layer_id_at(q)).is_some_and(|l| l.order == egui::Order::Foreground);
+        if esc || (resp.lost_focus() && !on_balloon && !b.focus_edit) {
+            b.commit_edit();
+            return;
+        }
+        // focus comes back from a button of the balloon (else a space
+        // typed next would press it)
+        if !resp.has_focus() && !ui.ctx().wants_keyboard_input() && !ui.ctx().input(|i| i.pointer.any_down()) {
+            resp.request_focus();
         }
     }
 
@@ -991,6 +1087,10 @@ impl Journal {
         }
         if cmd && press(Key::Y) {
             b.redo();
+            return;
+        }
+        if cmd && press(Key::Enter) {
+            b.new_page_here(&mut self.out);
             return;
         }
         if cmd && press(Key::D) {
@@ -1302,6 +1402,26 @@ impl Journal {
             Payload::Snippet(path) => {
                 let Some(s) = self.snippet(cx.vault, &path) else { return };
                 self.place_snippet(b, n, &lay, Some(at), &path, &s);
+            }
+            Payload::Frame(board, id, index) => {
+                match super::boards::save_frame(cx, &board, &id, index) {
+                    Ok((rel, frame, (w, h))) => {
+                        self.out.push(super::Out::Rescan);
+                        let (c0, c1) = lay.main_column();
+                        let fw = (c1 - c0).min(lay.w * 0.8);
+                        let fh = fw * h as f64 / w.max(1) as f64;
+                        b.checkpoint();
+                        let it = super::boards::frame_item(&rel, &board, &frame, at.0 - fw / 2.0, at.1 - fh / 2.0, fw, fh);
+                        let id = it.id.clone();
+                        if let Some(p) = b.page(n) {
+                            p.items.push(it);
+                        }
+                        b.sel_page = n;
+                        b.sel = vec![id];
+                        b.touch(n);
+                    }
+                    Err(e) => self.out.push(super::Out::Toast(format!("Não foi possível trazer o quadro: {e}"))),
+                }
             }
         }
     }
