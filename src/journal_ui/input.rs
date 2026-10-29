@@ -1190,6 +1190,7 @@ impl Journal {
     /// The cursor of the text being typed: a thin stroke of the ink, from
     /// the line up to the height of the capitals, that glides to where it
     /// goes and fades in and out instead of blinking.
+    #[allow(clippy::too_many_arguments)]
     fn caret(&mut self, ui: &egui::Ui, pv: &PageView, base: Pos2, size: f32, lh: f32, ink: Color32, moved: bool) {
         let ctx = ui.ctx();
         let root = egui::Id::new("journal-caret");
