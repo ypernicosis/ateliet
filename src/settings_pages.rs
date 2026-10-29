@@ -209,8 +209,27 @@ pub fn copy_library_ui(app: &mut App, ui: &mut egui::Ui, root: &std::path::Path,
         Some(Ok(pl)) => {
             let dest = ateliet_core::pictogrep::own_library_dir();
             ui.label(RichText::new(format!("{} imagens, {} coleções, {} storyboards, {} arquivos ({:.1} MB) para {}", pl.pictures, pl.collections, pl.storyboards, pl.files, pl.bytes as f64 / 1e6, dest.display())).size(12.0).color(p.muted));
+            // a copy made earlier: use it, or put it aside and copy again
+            let earlier = std::fs::read_dir(&dest).map(|mut d| d.next().is_some()).unwrap_or(false);
+            if earlier {
+                ui.label(RichText::new("Já existe uma cópia nessa pasta. Copiar de novo guarda a anterior ao lado, com a data no nome.").size(12.0).color(p.faint));
+            }
             ui.horizontal(|ui| {
-                if kit::primary(ui, "Copiar", p).clicked() {
+                if earlier && kit::button(ui, None, "Usar a cópia que já existe", p).clicked() {
+                    crate::images_ui::ImagesState::save_settings(root, json!({ "shared": dest.to_string_lossy() }));
+                    rescan = true;
+                    ui.data_mut(|d| d.remove::<Result<ateliet_core::pictogrep::CopyPlan, String>>(plan_id));
+                    app.toast("O Ateliet passa a usar a cópia que já existia.");
+                }
+                if kit::primary(ui, if earlier { "Copiar de novo" } else { "Copiar" }, p).clicked() {
+                    if earlier {
+                        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                        let aside = dest.with_file_name(format!("{}-anterior-{secs}", dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()));
+                        if let Err(e) = std::fs::rename(&dest, &aside) {
+                            app.toast(format!("Não deu para guardar a cópia anterior: {e}"));
+                            return;
+                        }
+                    }
                     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                     let state = std::sync::Arc::new(std::sync::Mutex::new((ateliet_core::pictogrep::CopyProgress::default(), None)));
                     let (c2, s2, home2, dest2) = (cancel.clone(), state.clone(), home.clone(), dest.clone());

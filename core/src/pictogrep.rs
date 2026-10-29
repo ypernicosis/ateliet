@@ -54,26 +54,87 @@ pub fn image_id(path: &Path) -> String {
     hex(&Sha256::digest(clean(path).to_string_lossy().as_bytes()))
 }
 
-/// The ids a picture may have been saved under: its own, and, inside the
-/// library folder, the ones from the other spellings of that folder's name
-/// (`pictogrep`, `Pictogrep`). The Mac's disk takes either, so the same
-/// file can be reached by both, and each gives a different id.
-pub fn image_ids(home: Option<&Home>, path: &Path) -> Vec<String> {
+/// The folders a library's pictures may have been reached through when a
+/// board saved their ids, the library's own first: the other spellings of
+/// its name (the Mac's disk takes `pictogrep` and `Pictogrep` alike, and
+/// each gives a different id), and, for a copy made by Ateliet, the folder
+/// it was copied from.
+pub fn id_roots(home: &Home) -> Vec<PathBuf> {
+    let mut out = vec![home.root.clone()];
+    let mut add = |root: PathBuf| {
+        for r in spellings(&root) {
+            if !out.contains(&r) {
+                out.push(r);
+            }
+        }
+    };
+    add(home.root.clone());
+    if let Some(from) = copied_from(home) {
+        add(clean(Path::new(&from)));
+    }
+    out
+}
+
+fn spellings(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    if let (Some(parent), Some(name)) = (root.parent(), root.file_name().and_then(|n| n.to_str())) {
+        let mut cap = name.to_lowercase();
+        if let Some(f) = cap.get(..1).map(str::to_uppercase) {
+            cap.replace_range(..1, &f);
+        }
+        for alt in [name.to_lowercase(), cap] {
+            let p = parent.join(alt);
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// The ids a picture may have been saved under: its own, then the same file
+/// reached through the other `roots` (from [`id_roots`], the library first).
+pub fn image_ids(roots: &[PathBuf], path: &Path) -> Vec<String> {
     let path = clean(path);
     let mut out = vec![image_id(&path)];
-    let Some(home) = home else { return out };
-    let (Some(parent), Some(name)) = (home.root.parent(), home.root.file_name().and_then(|n| n.to_str())) else { return out };
-    let Ok(rest) = path.strip_prefix(&home.root) else { return out };
-    let mut cap = name.to_lowercase();
-    if let Some(f) = cap.get(..1).map(str::to_uppercase) {
-        cap.replace_range(..1, &f);
-    }
-    for alt in [name.to_lowercase(), cap] {
-        let id = image_id(&parent.join(alt).join(rest));
+    let Some(rest) = roots.first().and_then(|r| path.strip_prefix(r).ok()) else { return out };
+    for r in &roots[1..] {
+        let id = image_id(&r.join(rest));
         if !out.contains(&id) {
             out.push(id);
         }
     }
+    out
+}
+
+/// Swaps the ids in `map` wherever they appear in a JSON text (ids are
+/// 64 hex digits, so a match is never part of something else).
+fn rewrite_ids(text: &str, map: &HashMap<String, String>) -> String {
+    if map.is_empty() {
+        return text.to_string();
+    }
+    let b = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut last) = (0, 0);
+    while i < b.len() {
+        if b[i].is_ascii_hexdigit() && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) {
+            let mut j = i;
+            while j < b.len() && b[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j - i == 64 && (j == b.len() || !b[j].is_ascii_alphanumeric()) {
+                if let Some(new) = map.get(&text[i..j]) {
+                    out.push_str(&text[last..i]);
+                    out.push_str(new);
+                    last = j;
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.push_str(&text[last..]);
     out
 }
 
@@ -800,6 +861,18 @@ pub fn copy_home(from: &Home, to: &Path, cancel: &std::sync::atomic::AtomicBool,
     let _ = fs::remove_dir_all(&part);
     fs::create_dir_all(&part).map_err(|e| format!("Could not create {}: {e}", part.display()))?;
     let from_roots = root_spellings(&from.root);
+    // Pictures are known by the hash of their path (moodboards keep only
+    // that): the ids follow the files into the copy.
+    let mut id_from: Vec<PathBuf> = Vec::new();
+    for r in from_roots.iter().map(PathBuf::from).chain(id_roots(from)) {
+        if !id_from.contains(&r) {
+            id_from.push(r);
+        }
+    }
+    let ids: HashMap<String, String> = entries.iter().filter(|(_, e)| matches!(e, Entry::File(_))).flat_map(|(rel, _)| {
+        let new = image_id(&to.join(rel));
+        id_from.iter().map(move |r| (image_id(&r.join(rel)), new.clone())).collect::<Vec<_>>()
+    }).collect();
     let vectors_rel = Path::new("data").join("embeddings-v1.bin");
     let result = (|| -> Result<(), String> {
         let mut last = std::time::Instant::now();
@@ -820,7 +893,7 @@ pub fn copy_home(from: &Home, to: &Path, cancel: &std::sync::atomic::AtomicBool,
                     let name = rel.to_string_lossy();
                     if name.ends_with(".json") {
                         let text = fs::read_to_string(&src).map_err(|e| format!("{}: {e}", rel.display()))?;
-                        fs::write(&dst, rewrite_json(&text, &from_roots, &to)).map_err(|e| format!("{}: {e}", rel.display()))?;
+                        fs::write(&dst, rewrite_ids(&rewrite_json(&text, &from_roots, &to), &ids)).map_err(|e| format!("{}: {e}", rel.display()))?;
                     } else if *rel == vectors_rel {
                         let mut done = false;
                         for dims in [512, 768, 1024] {
@@ -962,10 +1035,11 @@ mod tests {
     fn ids_survive_the_folder_spelling() {
         let pic = Path::new("/Users/a/Library/Application Support/pictogrep/library/x.jpg");
         let home = Home::new(PathBuf::from("/Users/a/Library/Application Support/Pictogrep"));
-        let ids = image_ids(Some(&home), Path::new("/Users/a/Library/Application Support/Pictogrep/library/x.jpg"));
+        let roots = id_roots(&home);
+        let ids = image_ids(&roots, Path::new("/Users/a/Library/Application Support/Pictogrep/library/x.jpg"));
         assert_eq!(ids[0], image_id(Path::new("/Users/a/Library/Application Support/Pictogrep/library/x.jpg")));
         assert!(ids.contains(&image_id(pic)));
-        assert_eq!(image_ids(Some(&home), Path::new("/elsewhere/x.jpg")).len(), 1);
+        assert_eq!(image_ids(&roots, Path::new("/elsewhere/x.jpg")).len(), 1);
     }
 
     fn temp_home(tag: &str) -> Home {
@@ -1064,6 +1138,8 @@ mod tests {
         vecs.insert(clean(&pic), SharedVector { mtime: 1_600_000_000, digest: Some([7; 32]), vector: vec![0.5; 512] });
         write_vectors(&home.data().join("embeddings-v1.bin"), &vecs).unwrap();
         fs::write(home.data().join("half.json.tmp"), "x").unwrap();
+        fs::create_dir_all(home.data().join("plugins")).unwrap();
+        fs::write(home.data().join("plugins").join("board.json"), format!("{{\"imageId\":\"{}\"}}", image_id(&pic))).unwrap();
         let plan = copy_plan(&home).unwrap();
         assert_eq!((plan.pictures, plan.collections, plan.embeddings), (1, 1, true));
 
@@ -1077,6 +1153,11 @@ mod tests {
         let other = fs::read_to_string(copy.data().join("other.json")).unwrap();
         assert!(other.contains(&format!("{}-old/x", home.root.display())) && other.contains(&*new_pic.to_string_lossy()));
         assert_eq!(fs::metadata(&new_pic).unwrap().modified().unwrap(), old);
+        // a board's picture follows the file into the copy
+        let board = fs::read_to_string(copy.data().join("plugins").join("board.json")).unwrap();
+        assert!(board.contains(&image_id(&new_pic)) && !board.contains(&image_id(&pic)));
+        // and a copy made before that still finds it by the old id
+        assert!(image_ids(&id_roots(&copy), &new_pic).contains(&image_id(&pic)));
         let v = read_vectors(&copy, 512);
         assert_eq!(v[&clean(&new_pic)].digest, Some([7; 32]));
         assert!(!copy.data().join("half.json.tmp").exists());
@@ -1086,6 +1167,13 @@ mod tests {
         assert!(copy_home(&home, &dest, &AtomicBool::new(false), |_| {}).is_err());
         let _ = fs::remove_dir_all(&home.root);
         let _ = fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn ids_are_swapped_only_whole() {
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        let map = HashMap::from([(a.clone(), b.clone())]);
+        assert_eq!(rewrite_ids(&format!("[\"{a}\",\"{a}0\",\"x{a}\"]"), &map), format!("[\"{b}\",\"{a}0\",\"x{a}\"]"));
     }
 
     #[test]
