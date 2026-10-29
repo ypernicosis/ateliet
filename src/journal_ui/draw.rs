@@ -149,12 +149,32 @@ pub fn spine(painter: &egui::Painter, spread: Rect, left_pages: usize, right_pag
 
 /// The family and size factor of a text style (`tema`, `serifa`, `mao`).
 pub fn font_of(it: &Item) -> (egui::FontFamily, egui::FontFamily, egui::FontFamily, f32) {
-    let font = if it.style.font.is_empty() && it.kind == Kind::Excerpt { "serifa" } else { it.style.font.as_str() };
+    let font = effective_font(it);
     let n = |s: &str| egui::FontFamily::Name(s.into());
-    match font {
-        "mao" => (n("hand"), n("hand"), n("hand"), 0.95),
-        "serifa" => (n("garamond"), n("garamond-bold"), n("garamond-italic"), 0.66),
-        _ => (n("theme-text"), n("theme-text-bold"), n("theme-text-italic"), 0.58),
+    let factor = crate::fonts::JOURNAL_FONTS.iter().find(|f| f.0 == font).map(|f| f.2).unwrap_or(0.58) * it.style.size() as f32;
+    let (r, b, i) = match font {
+        "mao" => (n("hand"), n("hand"), n("hand")),
+        "kalam" => (n("kalam"), n("kalam"), n("kalam")),
+        "maquina" => (n("typewriter"), n("typewriter"), n("typewriter")),
+        "serifa" => (n("garamond"), n("garamond-bold"), n("garamond-italic")),
+        "cormorant" => (n("cormorant"), n("cormorant-bold"), n("cormorant-italic")),
+        "lora" => (n("lora"), n("lora-bold"), n("lora-italic")),
+        "crimson" => (n("crimson"), n("crimson-bold"), n("crimson-italic")),
+        "baskerville" => (n("baskerville"), n("baskerville-bold"), n("baskerville-italic")),
+        "playfair" => (n("playfair"), n("playfair"), n("playfair-italic")),
+        "cinzel" => (n("cinzel"), n("cinzel-bold"), n("cinzel")),
+        "inter" => (egui::FontFamily::Proportional, n("bold"), n("italic")),
+        _ => (n("theme-text"), n("theme-text-bold"), n("theme-text-italic")),
+    };
+    (r, b, i, factor)
+}
+
+/// The font a text shows in: its own, or the excerpts' serif.
+pub fn effective_font(it: &Item) -> &str {
+    match it.style.font.as_str() {
+        "" if it.kind == Kind::Excerpt => "serifa",
+        "" => "tema",
+        f => f,
     }
 }
 
@@ -175,7 +195,7 @@ fn align_of(it: &Item) -> egui::Align {
 pub fn plain_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32) -> egui::text::LayoutJob {
     let (reg, _, _, f) = font_of(it);
     let lh = line_px(it, lay, k);
-    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: egui::FontId::new(lh * f, reg), color, line_height: Some(lh), ..Default::default() });
+    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat { font_id: egui::FontId::new(lh * f, reg), color, line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
     job.wrap.max_width = (it.w as f32 * k).max(4.0);
     job.halign = align_of(it);
     job
@@ -194,6 +214,7 @@ pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, acc
         font_id: egui::FontId::new(size, fam.clone()),
         color: c,
         line_height: Some(lh),
+        valign: egui::Align::BOTTOM,
         underline: if under { Stroke::new((k * 0.25).max(1.0), PENCIL_RED.gamma_multiply(0.85)) } else { Stroke::NONE },
         ..Default::default()
     };
@@ -303,11 +324,10 @@ pub fn text_origin(galley: &egui::Galley, pv: &PageView, it: &Item) -> Pos2 {
     pos2(x, top.y + lh - base - lh * 0.06)
 }
 
-/// Where the rows of a text start (char indices), laid out at a fine
-/// scale: the flow measures with this.
-pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout) -> Vec<usize> {
-    const K: f32 = 6.0;
-    let job = plain_job(it, text, lay, K, Color32::BLACK);
+/// Where the rows of a text start (char indices), laid out at the scale
+/// the page is shown at (so what is typed and what flows agree).
+pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout, k: f32) -> Vec<usize> {
+    let job = plain_job(it, text, lay, k, Color32::BLACK);
     let galley = ctx.fonts(|f| f.layout_job(job));
     let mut out = Vec::with_capacity(galley.rows.len());
     let mut n = 0;
@@ -382,9 +402,14 @@ impl Journal {
         let path = b.page_ref(pv.n).map(|r| r.path.clone()).unwrap_or_default();
         let editing = b.editing.as_ref().filter(|e| e.page == pv.n).map(|e| e.id.clone());
         let cropping = b.crop.as_ref().filter(|c| c.0 == pv.n).map(|c| c.1.clone());
+        let writing = self.immersive && b.editing.is_some();
         for it in &page.items {
             let clip = if it.across { pv.clip_across } else { pv.clip };
-            let painter = ui.painter_at(clip);
+            let mut painter = ui.painter_at(clip);
+            // writing in the immersive mode: the rest steps back
+            if writing {
+                painter.set_opacity(0.28);
+            }
             if editing.as_deref() == Some(it.id.as_str()) || cropping.as_deref() == Some(it.id.as_str()) {
                 continue;
             }
@@ -393,9 +418,14 @@ impl Journal {
     }
 
     pub fn draw_item(&mut self, ui: &egui::Ui, painter: &egui::Painter, it: &Item, pv: &PageView, cx: &mut Cx, source: &str) {
+        let ctx = ui.ctx().clone();
+        self.draw_item_ctx(&ctx, painter, it, pv, cx, source);
+    }
+
+    pub fn draw_item_ctx(&mut self, ctx: &egui::Context, painter: &egui::Painter, it: &Item, pv: &PageView, cx: &mut Cx, source: &str) {
         let p = cx.palette;
         let ink = it.color.as_deref().and_then(hex).unwrap_or(ink_color(p));
-        let ctx = ui.ctx().clone();
+        let ctx = ctx.clone();
         match &it.kind {
             Kind::Text => {
                 let job = rich_job(it, it.content(), &pv.lay, pv.k, it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p)), p.accent_strong);
@@ -427,7 +457,7 @@ impl Journal {
                 let mut job = rich_job(&body, &parts.text, &pv.lay, pv.k, color, p.accent_strong);
                 if !parts.foot.is_empty() {
                     let lh = line_px(it, &pv.lay, pv.k);
-                    job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), ..Default::default() });
+                    job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
                 }
                 let g = ctx.fonts(|f| f.layout_job(job));
                 let at = text_origin(&g, pv, &body);
@@ -535,6 +565,55 @@ impl Journal {
         }
         let uv: Vec<Pos2> = pts.iter().map(|(_, (u, v))| uv_of(&c, it.flip, *u, *v)).collect();
         polygon(painter, &scr, Some((&uv, t)), tint);
+    }
+}
+
+impl Journal {
+    /// A cover: its colour, texture or picture (filling it), the notebook's
+    /// name when nothing written is on it, then its items.
+    pub fn draw_cover(&mut self, ctx: &egui::Context, painter: &egui::Painter, nb: &journal::Notebook, page: Option<&journal::Page>, rect: Rect, cx: &mut Cx) {
+        let base = hex(&nb.cover).unwrap_or(Color32::from_rgb(0x2f, 0x4a, 0x3a));
+        painter.rect_filled(rect, 3.0, base);
+        let mut image_drawn = false;
+        if let Some(img) = &nb.cover_image {
+            if let Some((t, s)) = crate::host::image(ctx, cx.vault, cx.caches, img, &nb.path) {
+                // the picture fills the cover, cut to its proportions
+                let (ra, ia) = (rect.width() / rect.height(), s.x / s.y.max(1.0));
+                let uv = if ia > ra { Rect::from_center_size(pos2(0.5, 0.5), vec2(ra / ia, 1.0)) } else { Rect::from_center_size(pos2(0.5, 0.5), vec2(1.0, ia / ra)) };
+                painter.add(egui::epaint::RectShape::filled(rect, 3.0, Color32::WHITE).with_texture(t, uv));
+                image_drawn = true;
+            }
+        }
+        if !image_drawn {
+            if let Some(kind) = nb.cover_texture.as_deref().filter(|k| !k.is_empty()) {
+                let key = format!("{kind}{}", nb.cover);
+                if !self.cover_tex.contains_key(&key) {
+                    let (w, h) = (480u32, (480.0 * nb.size.h / nb.size.w) as u32);
+                    let img = journal::texture::render(kind, [base.r(), base.g(), base.b()], w, h);
+                    let c = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+                    self.cover_tex.insert(key.clone(), ctx.load_texture(format!("journal-cover:{key}"), c, egui::TextureOptions::LINEAR));
+                }
+                let t = &self.cover_tex[&key];
+                painter.add(egui::epaint::RectShape::filled(rect, 3.0, Color32::WHITE).with_texture(t.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            }
+        }
+        // the spine's edge
+        painter.rect_filled(Rect::from_min_size(rect.min, vec2((rect.width() * 0.035).max(3.0), rect.height())), egui::CornerRadius { nw: 3, sw: 3, ne: 0, se: 0 }, Color32::from_black_alpha(40));
+        let k = rect.width() / nb.size.w as f32;
+        let written = page.is_some_and(|p| p.items.iter().any(|i| i.kind.is_text()));
+        if !written && !image_drawn {
+            let on = if crate::theme::contrast(base, Color32::WHITE) > 3.0 { Color32::from_rgb(0xf6, 0xf3, 0xec) } else { Color32::from_rgb(0x22, 0x22, 0x24) };
+            let title = painter.layout(nb.name.clone(), egui::FontId::new((k * 9.0).max(8.0), egui::FontFamily::Name("garamond".into())), on, rect.width() * 0.8);
+            painter.galley(rect.min + vec2(rect.width() * 0.12, rect.height() * 0.1), title, on);
+        }
+        if let Some(page) = page {
+            let lay = Layout::new(&nb.size, journal::Paper { ruling: Ruling::Plain, spacing: 7.0 }, journal::Columns::None, true);
+            let pv = PageView { n: 0, rect, k, lay, clip: painter.clip_rect(), clip_across: painter.clip_rect() };
+            let ui_ctx = ctx.clone();
+            for it in &page.items {
+                self.draw_item_ctx(&ui_ctx, painter, it, &pv, cx, &nb.path);
+            }
+        }
     }
 }
 

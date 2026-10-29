@@ -8,7 +8,9 @@
 //! - `chrome` — the toolbar that hides, the balloon by the selection, and
 //!   the material panels (pictures, notes, excerpts).
 //! - `shelf`  — the shelf, the new notebook, the page thumbnails.
+//! - `boards` — storyboards brought in: the panel, a frame, all of them.
 
+mod boards;
 mod chrome;
 mod draw;
 mod input;
@@ -30,6 +32,8 @@ pub enum Payload {
     Picture(String),
     Note(String),
     Snippet(String),
+    /// A frame of a storyboard: the file, the frame's id and place.
+    Frame(String, String, usize),
 }
 
 /// What the Journal asks the app to do.
@@ -71,6 +75,14 @@ pub enum Panel {
     Notes,
     Snippets,
     Stickers,
+    Storyboards,
+}
+
+/// A storyboard's frames, drawn small in the background for the panel.
+pub enum BoardThumbs {
+    Loading(std::sync::mpsc::Receiver<Result<Vec<(journal::storyboard::Frame, egui::ColorImage)>, String>>),
+    Ready(Vec<(journal::storyboard::Frame, egui::TextureHandle)>),
+    Failed(String),
 }
 
 /// A page note as it is here: the page, the page as last read from disk,
@@ -117,6 +129,8 @@ pub struct Editing {
 pub enum Look {
     Spread,
     Thumbs,
+    /// The cover, alone: edited like a page (page 0, kept in the index note).
+    Cover,
 }
 
 pub struct Book {
@@ -145,12 +159,26 @@ pub struct Book {
     turn_cooldown: Option<Instant>,
     goto: Option<String>,
     backup_dir: Option<PathBuf>,
+    /// The cover as a page: the index note.
+    cover_ref: PageRef,
     /// A text box to lay out again (after typing, resizing, a drop).
     pub pending_reflow: Option<(usize, String)>,
     /// The ink item strokes are being added to, and when the last ended.
     last_ink: Option<(usize, String, Instant)>,
     /// Horizontal scrolling gathered toward a page turn.
     swipe: f32,
+    /// Where the cursor goes when typing starts (a char index).
+    edit_cursor: Option<usize>,
+    /// Typing ran past the page's last line: once the text is laid out
+    /// again, go on in the next box — (the box typed in, how long the
+    /// next box's text was before).
+    continue_edit: Option<(String, usize)>,
+    /// A page turn being shown: when, and which way (1 forward).
+    turned: Option<(Instant, f32)>,
+    /// Where the cursor of the text being typed is on screen.
+    caret: Option<egui::Pos2>,
+    /// The view was brought close by the immersive mode (and goes back).
+    auto_zoom: bool,
 }
 
 pub struct Journal {
@@ -178,8 +206,18 @@ pub struct Journal {
     notes: HashMap<String, (u64, String)>,
     /// The toolbar asked for the shelf.
     pub close_requested: bool,
+    /// Only the notebook on the screen: the app's ribbon, the panels and
+    /// the bar go, the view comes close to what is being written.
+    pub immersive: bool,
     /// Pictures sent from image mode, for the open page.
     pub pending_pictures: Vec<String>,
+    /// Storyboards opened in the panel: path → their frames.
+    pub boards: HashMap<String, (u64, BoardThumbs)>,
+    pub open_board: Option<String>,
+    /// Cover textures made: (texture, colour) → picture.
+    cover_tex: HashMap<String, egui::TextureHandle>,
+    /// Covers of the shelf's notebooks: index note → (modified, cover page).
+    covers: HashMap<String, (u64, Page)>,
 }
 
 impl Default for Journal {
@@ -202,7 +240,12 @@ impl Default for Journal {
             snippets: HashMap::new(),
             notes: HashMap::new(),
             close_requested: false,
+            immersive: false,
             pending_pictures: Vec::new(),
+            boards: HashMap::new(),
+            open_board: None,
+            cover_tex: HashMap::new(),
+            covers: HashMap::new(),
         }
     }
 }
@@ -247,10 +290,17 @@ impl Book {
             turn_cooldown: None,
             goto: None,
             backup_dir,
+            cover_ref: PageRef { path: String::new(), number: 0, title: String::new(), date: None },
             pending_reflow: None,
             last_ink: None,
             swipe: 0.0,
+            edit_cursor: None,
+            continue_edit: None,
+            turned: None,
+            caret: None,
+            auto_zoom: false,
         };
+        b.cover_ref.path = b.nb.path.clone();
         if b.nb.pages.is_empty() {
             b.append_page("");
         }
@@ -263,6 +313,9 @@ impl Book {
 
     /// The pages of the spread shown: left and right (numbers, 1-based).
     pub fn spread_pages(&self) -> (Option<usize>, Option<usize>) {
+        if self.look == Look::Cover {
+            return (None, Some(0));
+        }
         let l = 2 * self.spread;
         let r = l + 1;
         ((l >= 1 && l <= self.count()).then_some(l), (r <= self.count()).then_some(r))
@@ -274,24 +327,85 @@ impl Book {
 
     pub fn go_to(&mut self, page: usize) {
         self.commit_edit();
+        if self.look == Look::Cover {
+            self.look = Look::Spread;
+        }
+        let before = self.spread;
         self.spread = (page.clamp(1, self.count().max(1)) / 2).min(self.spreads() - 1);
+        if self.spread != before {
+            self.turned = Some((Instant::now(), if self.spread > before { 1.0 } else { -1.0 }));
+        }
         self.sel.clear();
         self.crop = None;
-        self.zoom = 1.0;
-        self.pan = egui::Vec2::ZERO;
+        // the immersive mode's close view follows the writing to the new page
+        if !self.auto_zoom {
+            self.zoom = 1.0;
+            self.pan = egui::Vec2::ZERO;
+        }
     }
 
     pub fn turn(&mut self, forward: bool) {
+        // the cover opens onto the first page, and is before it
+        if self.look == Look::Cover {
+            if forward {
+                self.commit_edit();
+                self.look = Look::Spread;
+                self.spread = 0;
+                self.sel.clear();
+                self.turned = Some((Instant::now(), 1.0));
+            }
+            return;
+        }
+        if !forward && self.spread == 0 {
+            self.open_cover();
+            return;
+        }
         let (l, r) = self.spread_pages();
         if forward && self.spread + 1 < self.spreads() {
             self.go_to(r.unwrap_or(l.unwrap_or(1)) + 1);
+        } else if forward && r.is_some() {
+            // past the last page: a new one, unless the last is still blank
+            let last = self.count();
+            if self.page(last).is_some_and(|p| !p.items.is_empty()) {
+                let n = self.append_page("");
+                self.go_to(n);
+            }
         } else if !forward && self.spread > 0 {
             self.go_to(l.unwrap_or(1).saturating_sub(1).max(1));
         }
     }
 
+    /// A new page after the one shown on the right (or at the end), opened.
+    pub fn new_page_here(&mut self, out: &mut Vec<Out>) {
+        self.commit_edit();
+        let (l, r) = self.spread_pages();
+        let cur = r.or(l).unwrap_or(self.count());
+        if cur >= self.count() {
+            let n = self.append_page("");
+            self.go_to(n);
+        } else {
+            self.insert_after(cur, out);
+            self.go_to(cur + 1);
+        }
+        out.push(Out::Rescan);
+    }
+
     pub fn page_ref(&self, n: usize) -> Option<&PageRef> {
-        self.nb.pages.get(n.checked_sub(1)?)
+        if n == 0 {
+            return Some(&self.cover_ref);
+        }
+        self.nb.pages.get(n - 1)
+    }
+
+    /// The cover, to look at and change.
+    pub fn open_cover(&mut self) {
+        self.commit_edit();
+        self.look = Look::Cover;
+        self.sel.clear();
+        self.crop = None;
+        self.zoom = 1.0;
+        self.pan = egui::Vec2::ZERO;
+        self.turned = Some((Instant::now(), -1.0));
     }
 
     /// A page by number, read from disk the first time.
@@ -316,6 +430,10 @@ impl Book {
 
     /// Where things fall on page `n`.
     pub fn layout(&self, n: usize) -> Layout {
+        if n == 0 {
+            // the cover: no ruling, no columns (text still has lines to sit on)
+            return Layout::new(&self.nb.size, journal::Paper { ruling: journal::Ruling::Plain, spacing: 7.0 }, journal::Columns::None, true);
+        }
         let paper = self.page_ro(n).and_then(|p| p.paper()).unwrap_or(self.nb.paper);
         Layout::new(&self.nb.size, paper, self.nb.columns, n % 2 == 1)
     }
@@ -406,7 +524,11 @@ impl Book {
     /// Save what waits (all of it with `now`), reading the disk first: what
     /// changed there meanwhile is merged.
     pub fn save(&mut self, now: bool, out: &mut Vec<Out>) {
-        let busy = self.drag.is_some() || self.editing.is_some();
+        let busy = self.drag.is_some();
+        // the text being typed goes into its box (it is still being typed)
+        if self.loaded.values().any(|l| l.dirty) {
+            self.sync_edit();
+        }
         let due: Vec<String> = self.loaded.iter().filter(|(_, l)| l.dirty && (now || (!busy && l.changed_at.is_some_and(|t| t.elapsed() > Duration::from_millis(1500))))).map(|(k, _)| k.clone()).collect();
         for path in due {
             let backup = self.backup_path(&path);
@@ -454,15 +576,27 @@ impl Book {
     fn write_marker(&mut self) {
         let (l, r) = self.spread_pages();
         let m = r.or(l).unwrap_or(1);
-        if m == self.marker_written {
+        if m == self.marker_written || m == 0 {
             return;
         }
-        let abs = self.root.join(&self.nb.path);
+        self.edit_index(|t| format::set_marker(t, m));
+        self.marker_written = m;
+        self.nb.marker = m;
+    }
+
+    /// Change the index note's text (its frontmatter): through the cover's
+    /// page when it is loaded (the cover lives in that note), else on disk.
+    fn edit_index(&mut self, f: impl FnOnce(&str) -> String) {
+        let path = self.nb.path.clone();
+        if let Some(l) = self.loaded.get_mut(&path) {
+            l.page.head = f(&l.page.head);
+            l.dirty = true;
+            l.changed_at = Some(Instant::now());
+            return;
+        }
+        let abs = self.root.join(&path);
         if let Ok(text) = std::fs::read_to_string(&abs) {
-            if ateliet_core::quadro::write_atomic(&abs, &format::set_marker(&text, m)).is_ok() {
-                self.marker_written = m;
-                self.nb.marker = m;
-            }
+            let _ = ateliet_core::quadro::write_atomic(&abs, &f(&text));
         }
     }
 
@@ -539,6 +673,11 @@ impl Book {
         self.redo.clear();
         self.sel.clear();
         out.push(Out::Reorder { renames, numbers });
+    }
+
+    /// Change a setting of the notebook in its index note.
+    pub fn set_setting(&mut self, key: &str, value: Option<&str>) {
+        self.edit_index(|t| format::set_key(t, key, value));
     }
 
     /// Read the pages again (after the app renamed them).
@@ -730,6 +869,21 @@ impl Book {
         touched
     }
 
+    /// What is being typed, into its box, without ending the typing.
+    fn sync_edit(&mut self) {
+        let Some((n, id, buf)) = self.editing.as_ref().map(|e| (e.page, e.id.clone(), e.buf.clone())) else { return };
+        if let Some(slot) = self.page(n).and_then(|p| p.item_mut(&id)) {
+            if flow_text(slot) == buf {
+                return;
+            }
+            let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
+            let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
+            let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
+            set_flow_text(slot, &buf, ex.as_ref(), first, last);
+        }
+        self.edited_body(n, &id);
+    }
+
     /// End typing: the text goes into its box (and the boxes after it).
     pub fn commit_edit(&mut self) {
         let Some(e) = self.editing.take() else { return };
@@ -748,7 +902,9 @@ impl Book {
             return;
         }
         if flow_text(&it) == e.buf && !e.new {
-            self.uncheckpoint();
+            // nothing typed since the box was last saved: lay it out again
+            // all the same (what was saved while typing has not flowed yet)
+            self.pending_reflow = Some((e.page, e.id));
             return;
         }
         if let Some(p) = self.page(e.page) {
@@ -893,7 +1049,7 @@ impl Journal {
         // the material slides in from the left
         let mut panel = self.panel;
         if self.book.is_some() {
-            egui::SidePanel::left("journal-material").resizable(true).show_separator_line(false).default_width(290.0).width_range(220.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 12, right: 10, top: 12, bottom: 10 })).show_animated(ctx, panel.is_some(), |ui| {
+            egui::SidePanel::left("journal-material").resizable(true).show_separator_line(false).default_width(300.0).width_range(220.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 12, right: 10, top: 12, bottom: 10 })).show_animated(ctx, panel.is_some() && !self.immersive, |ui| {
                 let clip = ui.clip_rect();
                 ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
                 self.material(ui, cx, &mut panel);

@@ -37,8 +37,11 @@ impl Journal {
         if t > 0.01 {
             self.toolbar(ui, b, cx, canvas, t);
         }
-        if !writing && b.drag.is_none() {
+        if b.drag.is_none() && !(self.immersive && writing) {
             self.balloon(ui, b, cx, views);
+        }
+        if b.look == Look::Cover {
+            self.cover_bar(ui, b, cx, canvas);
         }
         self.goto_box(ui, b, canvas, p);
         self.arrived_notice(ui, b, cx, canvas, views);
@@ -49,6 +52,7 @@ impl Journal {
                     Payload::Picture(k) => format!("{}  {}", icons::IMAGE, k.rsplit('/').next().unwrap_or(k)),
                     Payload::Note(n) => format!("{}  {}", icons::FILE_TEXT, n.rsplit('/').next().unwrap_or(n).trim_end_matches(".md")),
                     Payload::Snippet(n) => format!("{}  {}", icons::QUOTE, n.rsplit('/').next().unwrap_or(n).trim_end_matches(".md")),
+                    Payload::Frame(b, _, i) => format!("{}  {} · quadro {}", icons::CLAPPERBOARD, b.rsplit('/').next().unwrap_or(b).trim_end_matches(".storyboard"), i + 1),
                 };
                 egui::Area::new(egui::Id::new("journal-carry")).fixed_pos(h + vec2(14.0, 10.0)).order(egui::Order::Tooltip).interactable(false).show(&ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(RichText::new(label).size(12.0)));
@@ -69,10 +73,20 @@ impl Journal {
                     if kit::icon_button(ui, icons::LIBRARY_BIG, "Estante", false, p).clicked() {
                         self.out_close(b);
                     }
+                    if kit::icon_button(ui, icons::NOTEBOOK, "Capa: cor, textura, imagem e adesivos", b.look == Look::Cover, p).clicked() {
+                        if b.look == Look::Cover { b.turn(true) } else { b.open_cover() }
+                    }
                     sep(ui, p);
                     for (tool, glyph, tip) in [(Tool::Select, icons::MOUSE_POINTER_2, "Selecionar (V)"), (Tool::Write, icons::TYPE, "Escrever (T)"), (Tool::Pen, icons::PEN_LINE, "Caneta (P)"), (Tool::Line, icons::SLASH, "Linha (L)"), (Tool::Tape, icons::STICKY_NOTE, "Fita (F)")] {
                         if kit::icon_button(ui, glyph, tip, self.tool == tool, p).clicked() {
                             self.tool = tool;
+                        }
+                    }
+                    if self.tool == Tool::Write {
+                        let cur = b.nb.font.clone().unwrap_or_else(|| "tema".into());
+                        if let Some(f) = font_menu(ui, "journal-nb-font", &cur, true, p).filter(|f| *f != cur) {
+                            b.set_setting("fonte", (f != "tema").then_some(f.as_str()));
+                            b.nb.font = (f != "tema").then_some(f);
                         }
                     }
                     if matches!(self.tool, Tool::Pen | Tool::Line) {
@@ -89,7 +103,7 @@ impl Journal {
                         }
                     }
                     sep(ui, p);
-                    for (panel, glyph, tip) in [(Panel::Pictures, icons::IMAGES, "Imagens (I)"), (Panel::Notes, icons::FILE_TEXT, "Notas (N)"), (Panel::Snippets, icons::QUOTE, "Trechos (E)"), (Panel::Stickers, icons::STAR, "Adesivos")] {
+                    for (panel, glyph, tip) in [(Panel::Pictures, icons::IMAGES, "Imagens (I)"), (Panel::Notes, icons::FILE_TEXT, "Notas (N)"), (Panel::Snippets, icons::QUOTE, "Trechos (E)"), (Panel::Stickers, icons::STAR, "Adesivos"), (Panel::Storyboards, icons::CLAPPERBOARD, "Storyboards")] {
                         if kit::icon_button(ui, glyph, tip, self.panel == Some(panel), p).clicked() {
                             self.toggle_panel(panel);
                         }
@@ -100,6 +114,7 @@ impl Journal {
                     }
                     let (l, r) = b.spread_pages();
                     let label = match (l, r) {
+                        _ if b.look == Look::Cover => "Capa".to_string(),
                         (Some(a), Some(c)) => format!("{a}–{c} de {}", b.count()),
                         (Some(a), None) | (None, Some(a)) => format!("{a} de {}", b.count()),
                         _ => String::new(),
@@ -110,11 +125,17 @@ impl Journal {
                     if kit::icon_button(ui, icons::CHEVRON_RIGHT, "Próxima página (→)", false, p).clicked() {
                         b.turn(true);
                     }
+                    if kit::icon_button(ui, icons::FOCUS, "Modo imersivo: só a página; digitar já escreve (Ctrl/Cmd+Shift+Enter, Esc sai)", self.immersive, p).clicked() {
+                        self.immersive = !self.immersive;
+                    }
                     if kit::icon_button(ui, icons::LAYOUT_GRID, "Todas as páginas", b.look == Look::Thumbs, p).clicked() {
                         b.commit_edit();
                         b.look = if b.look == Look::Thumbs { Look::Spread } else { Look::Thumbs };
                     }
-                    let r = kit::icon_button(ui, icons::PLUS, "Página nova", false, p);
+                    if kit::icon_button(ui, icons::PLUS, "Página nova depois desta (Ctrl/Cmd+Enter)", false, p).clicked() {
+                        b.new_page_here(&mut self.out);
+                    }
+                    let r = kit::icon_button_sized(ui, icons::CHEVRON_UP, "Mais opções de página", false, p, 18.0, 12.0);
                     let id = ui.make_persistent_id("journal-page-menu");
                     if r.clicked() {
                         ui.memory_mut(|m| m.toggle_popup(id));
@@ -232,22 +253,23 @@ impl Journal {
         }
         match &it.kind {
             Kind::Text | Kind::Excerpt => {
-                if kit::icon_button(ui, icons::PENCIL, "Editar (Enter)", false, p).clicked() {
+                if b.editing.is_none() && kit::icon_button(ui, icons::PENCIL, "Editar (Enter)", false, p).clicked() {
                     self.edit(b, n, &id, false);
                 }
-                let current = match it.style.font.as_str() {
-                    "" if it.kind == Kind::Excerpt => "serifa",
-                    "tema" => "",
-                    f => f,
-                };
-                for (font, label) in [("", "Aa"), ("serifa", "Serif"), ("mao", "Mão")] {
-                    let on = current == font;
-                    if kit::chip(ui, None, label, on, p).clicked() {
-                        // an excerpt is serif unless told otherwise
-                        let f = if font.is_empty() && it.kind == Kind::Excerpt { "tema" } else { font };
-                        edit_item(b, n, &id, |i| i.style.font = f.to_string());
-                        b.pending_reflow = Some((n, id.clone()));
-                    }
+                let current = super::draw::effective_font(it).to_string();
+                if let Some(f) = font_menu(ui, ("journal-font", &id), &current, false, p) {
+                    edit_item(b, n, &id, |i| i.style.font = f);
+                    b.pending_reflow = Some((n, id.clone()));
+                }
+                let size = it.style.size();
+                if kit::icon_button(ui, icons::MINUS, "Letra menor", false, p).clicked() && size > 0.65 {
+                    edit_item(b, n, &id, |i| i.style.size = ((size - 0.15) * 100.0).round() / 100.0);
+                    b.pending_reflow = Some((n, id.clone()));
+                }
+                ui.label(RichText::new(format!("{:.0}%", size * 100.0)).size(11.5).color(p.muted));
+                if kit::icon_button(ui, icons::PLUS, "Letra maior", false, p).clicked() && size < 1.6 {
+                    edit_item(b, n, &id, |i| i.style.size = ((size + 0.15) * 100.0).round() / 100.0);
+                    b.pending_reflow = Some((n, id.clone()));
                 }
                 let big = it.style.lines() > 1.0;
                 if kit::icon_button(ui, icons::HEADING, if big { "Uma linha da pauta" } else { "Duas linhas da pauta (maior)" }, big, p).clicked() {
@@ -329,6 +351,9 @@ impl Journal {
                 }
                 if kit::icon_button(ui, icons::TEXT, "Legenda", false, p).clicked() {
                     self.caption(b, n, it);
+                }
+                if it.extra.contains_key("storyboard") && kit::icon_button(ui, icons::REFRESH_CW, "Desenhar de novo do storyboard", false, p).clicked() {
+                    self.refresh_frame(ui.ctx(), cx, it);
                 }
                 if kit::icon_button(ui, icons::BOOKMARK_PLUS, "Guardar como adesivo", false, p).clicked() {
                     self.save_sticker(cx, b, n, it);
@@ -497,18 +522,17 @@ impl Journal {
         let p = cx.palette;
         let Some(which) = *panel else { return };
         ui.horizontal(|ui| {
-            let items = [(icons::IMAGES, ""), (icons::FILE_TEXT, ""), (icons::QUOTE, ""), (icons::STAR, "")];
+            let items = [(icons::IMAGES, ""), (icons::FILE_TEXT, ""), (icons::QUOTE, ""), (icons::STAR, ""), (icons::CLAPPERBOARD, "")];
             let sel = match which {
                 Panel::Pictures => 0,
                 Panel::Notes => 1,
                 Panel::Snippets => 2,
                 Panel::Stickers => 3,
+                Panel::Storyboards => 4,
             };
             if let Some(k) = kit::segmented(ui, &items, sel, p) {
-                *panel = Some([Panel::Pictures, Panel::Notes, Panel::Snippets, Panel::Stickers][k]);
+                *panel = Some([Panel::Pictures, Panel::Notes, Panel::Snippets, Panel::Stickers, Panel::Storyboards][k]);
             }
-            let title = ["Imagens", "Notas", "Trechos", "Adesivos"][sel];
-            ui.label(RichText::new(title).font(kit::medium(13.5)).color(p.text));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if kit::icon_button(ui, icons::X, "Fechar", false, p).clicked() {
                     *panel = None;
@@ -516,6 +540,15 @@ impl Journal {
             });
         });
         ui.add_space(8.0);
+        let title = ["Imagens", "Notas", "Trechos", "Adesivos", "Storyboards"][match which {
+            Panel::Pictures => 0,
+            Panel::Notes => 1,
+            Panel::Snippets => 2,
+            Panel::Stickers => 3,
+            Panel::Storyboards => 4,
+        }];
+        ui.label(RichText::new(title).font(kit::medium(14.0)).color(p.text));
+        ui.add_space(4.0);
         match which {
             Panel::Pictures => {
                 ui.label(RichText::new("Arraste uma imagem para a página.").size(11.5).color(p.faint));
@@ -525,6 +558,7 @@ impl Journal {
             Panel::Notes => self.notes_panel(ui, cx),
             Panel::Snippets => self.snippets_panel(ui, cx),
             Panel::Stickers => self.stickers_panel(ui, cx),
+            Panel::Storyboards => self.boards_panel(ui, cx),
         }
     }
 
@@ -650,6 +684,110 @@ impl Journal {
 
 /// The page an action without a place goes to: the right one shown (or
 /// the left).
+/// A menu of the Journal's fonts, each name in its own face; the font
+/// picked, if one was.
+pub fn font_menu(ui: &mut egui::Ui, salt: impl std::hash::Hash, current: &str, above: bool, p: crate::theme::Palette) -> Option<String> {
+    let name = crate::fonts::JOURNAL_FONTS.iter().find(|f| f.0 == current).map(|f| f.1).unwrap_or("Fonte do tema");
+    let short: String = name.split(" (").next().unwrap_or(name).to_string();
+    let r = kit::chip(ui, Some(icons::TYPE), &short, false, p);
+    let id = ui.make_persistent_id(salt);
+    if r.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(id));
+    }
+    let mut out = None;
+    let side = if above { egui::AboveOrBelow::Above } else { egui::AboveOrBelow::Below };
+    egui::popup::popup_above_or_below_widget(ui, id, &r, side, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        ui.set_min_width(230.0);
+        for (key, label, k) in crate::fonts::JOURNAL_FONTS {
+            let probe = Item { style: ateliet_core::journal::TextStyle { font: key.to_string(), ..Default::default() }, ..Item::new(Kind::Text, 0.0, 0.0, 1.0, 1.0) };
+            let (fam, ..) = super::draw::font_of(&probe);
+            let on = *key == current;
+            let text = RichText::new(*label).font(egui::FontId::new(15.0 * k / 0.6, fam)).color(if on { p.accent_strong } else { p.text });
+            if ui.add(egui::Button::new(text).frame(false).min_size(vec2(220.0, 26.0))).clicked() {
+                out = Some(key.to_string());
+            }
+        }
+    });
+    out
+}
+
+impl Journal {
+    /// Over the cover: its colour, its texture, a picture to fill it (or
+    /// the picture picked on it), and the way into the notebook.
+    fn cover_bar(&mut self, ui: &mut egui::Ui, b: &mut Book, cx: &mut Cx, canvas: Rect) {
+        let p = cx.palette;
+        let ctx = ui.ctx().clone();
+        egui::Area::new(egui::Id::new("journal-cover-bar")).pivot(egui::Align2::CENTER_TOP).fixed_pos(canvas.center_top() + vec2(0.0, 12.0)).order(egui::Order::Foreground).show(&ctx, |ui| {
+            egui::Frame::new().fill(p.bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(RichText::new("Capa").font(kit::medium(13.0)).color(p.text));
+                    sep(ui, p);
+                    for c in ateliet_core::journal::format::COVERS {
+                        let col = draw::hex(c).unwrap_or(Color32::GRAY);
+                        let (r, resp) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::click());
+                        ui.painter().rect_filled(r.shrink2(vec2(2.0, 5.0)), 2.0, col);
+                        if b.nb.cover == *c {
+                            ui.painter().rect_stroke(r.shrink2(vec2(0.0, 3.0)), 3.0, Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
+                        }
+                        if resp.on_hover_text("Cor da capa").clicked() {
+                            b.nb.cover = c.to_string();
+                            b.set_setting("capa", Some(c));
+                        }
+                    }
+                    sep(ui, p);
+                    let cur = b.nb.cover_texture.clone().unwrap_or_default();
+                    let name = ateliet_core::journal::texture::TEXTURES.iter().find(|t| t.0 == cur).map(|t| t.1).unwrap_or("Lisa");
+                    let r = kit::chip(ui, Some(icons::LAYERS), name, false, p);
+                    let id = ui.make_persistent_id("journal-cover-texture");
+                    if r.clicked() {
+                        ui.memory_mut(|m| m.toggle_popup(id));
+                    }
+                    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                        ui.set_min_width(170.0);
+                        for (key, label) in ateliet_core::journal::texture::TEXTURES {
+                            if kit::menu_check(ui, cur == *key, label, p) {
+                                b.nb.cover_texture = (!key.is_empty()).then(|| key.to_string());
+                                b.set_setting("capa-textura", (!key.is_empty()).then_some(*key));
+                            }
+                        }
+                    });
+                    // a picture picked on the cover becomes its background
+                    let one = (b.sel.len() == 1).then(|| b.sel[0].clone());
+                    let picked = one.and_then(|sid| b.page(0).and_then(|pg| pg.item(&sid)).filter(|i| i.kind == Kind::Image).and_then(|i| i.picture().map(|t| (i.id.clone(), t))));
+                    if let Some((iid, target)) = picked {
+                        if kit::quiet(ui, Some(icons::IMAGE), "Usar como fundo", p).clicked() {
+                            b.checkpoint();
+                            if let Some(pg) = b.page(0) {
+                                pg.items.retain(|i| i.id != iid);
+                            }
+                            b.touch(0);
+                            b.sel.clear();
+                            b.nb.cover_image = Some(target.clone());
+                            b.set_setting("capa-imagem", Some(&format!("[[{target}]]")));
+                        }
+                    } else if kit::quiet(ui, Some(icons::IMAGE), "Imagem de fundo…", p).clicked() {
+                        if let Some(f) = rfd::FileDialog::new().set_directory(&cx.vault.root).add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
+                            let rel = super::input::copy_into_vault(cx.vault, &cx.attach, &f.to_string_lossy());
+                            b.nb.cover_image = Some(rel.clone());
+                            b.set_setting("capa-imagem", Some(&format!("[[{rel}]]")));
+                            self.out.push(Out::Rescan);
+                        }
+                    }
+                    if b.nb.cover_image.is_some() && kit::icon_button(ui, icons::X, "Tirar a imagem de fundo", false, p).clicked() {
+                        b.nb.cover_image = None;
+                        b.set_setting("capa-imagem", None);
+                    }
+                    sep(ui, p);
+                    if kit::quiet(ui, Some(icons::BOOK_OPEN), "Abrir o caderno", p).clicked() {
+                        b.turn(true);
+                    }
+                });
+            });
+        });
+    }
+}
+
 fn r_or_l(b: &Book) -> usize {
     let (l, r) = b.spread_pages();
     r.or(l).unwrap_or(1)

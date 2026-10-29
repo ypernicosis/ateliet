@@ -1146,7 +1146,9 @@ impl eframe::App for App {
             panels::toasts(self, ctx);
             return;
         }
-        panels::ribbon(self, ctx);
+        if !(self.journal_mode && self.journal.immersive) {
+            panels::ribbon(self, ctx);
+        }
         if self.journal_mode {
             self.journal_mode_ui(ctx);
         } else if self.images_mode {

@@ -85,7 +85,7 @@ O Journal parece um caderno pela forma (página, lombada, pauta, sequência) e n
 - **Pauta e grade**: linhas finas na cor do texto com opacidade muito baixa, que somem quando se exporta sem pauta. Margens e colunas Cornell no mesmo traço.
 - **Lombada**: uma linha fina e uma sombra muito leve de um lado e do outro, só o bastante para ler a página dupla como um caderno aberto. Sem argolas, costuras ou curvatura.
 - **Volume**: a espessura das páginas que faltam é sugerida por duas ou três linhas finas na borda externa, mais grossas quanto mais páginas houver daquele lado.
-- **Capa**: uma cor lisa, o nome em Inter ou numa das fontes da Diagramação, e opcionalmente uma imagem. Sem couro ou relevo.
+- **Capa**: uma cor, uma textura opcional feita a partir dela (linho, tecido, papel kraft, couro, marmorizada, cortiça, pontilhada) ou uma imagem de fundo, e por cima qualquer coisa que se põe numa página: adesivos, imagens, texto, fita. Sem nada escrito, a capa mostra o nome do caderno.
 - **Moldura**: como no Leitor, ela some. Enquanto se escreve, só o caderno aparece sobre o fundo do app. As ferramentas ficam numa barra pequena no pé, centrada, que aparece ao mover o ponteiro ou ao selecionar algo e some depois. As propriedades de um item aparecem num balão junto dele, não num painel fixo. Os painéis de material (seção 11) deslizam da esquerda quando chamados e se recolhem ao arrastar algo para a página.
 - **Ícones e tipografia**: os do app (Lucide, Inter), a cor de destaque do vault na seleção e nos marcadores. Nenhum elemento decorativo na interface: a decoração é o que o usuário põe na página.
 
@@ -414,7 +414,23 @@ O que já está no código, fase por fase, e o que falta. O núcleo está em `co
 5. **Texto contornando imagens: não feito**, a não ser as fontes manuscritas (Caveat, embutida). O campo `wrap` já existe no formato.
 6. **Digitalização: não feita.** As fotos que chegam pela caixa de entrada viram trechos com imagem, que podem ser postos na página, mas sem perspectiva, limpeza, separação da tinta nem transcrição.
 7. **Recorte automático: não feito.**
+Depois disso entraram: a capa editável (seção 4.2 revista: cor, oito texturas geradas a partir da cor — linho, tecido, papel kraft, couro, marmorizada, cortiça, pontilhada —, imagem de fundo e qualquer item por cima, guardados na nota-índice), doze fontes com tamanho ajustável e fonte padrão por caderno, o painel de storyboards (quadros arrastados para a página ou o storyboard inteiro em páginas novas, desenhados de novo quando o storyboard muda) e a escrita imersiva da seção 15.
+
 8. **Integrações: em parte.** Feitos a página do dia nos cadernos diários, "Mandar ao Journal" no menu das imagens do modo imagens e a consulta Dataview da nota-índice. Faltam os modelos com o Templater, moodboard → Journal, a página como cartão no Quadro, a página aberta como aba no modo escrita e a exportação em PNG e PDF.
+
+## 15. Escrita imersiva
+
+O que torna a escrita fluida num caderno de papel, e nos editores feitos para escrever (os modos de foco e de máquina de escrever), é que nada pede atenção além da linha que se está escrevendo: não há moldura, a letra tem um tamanho confortável, a linha fica sempre no mesmo lugar da vista, a página acaba e a escrita continua na outra sem decisão nenhuma, e nada se perde se a escrita for interrompida. O Journal segue esses pontos assim:
+
+- **Só a página.** O modo imersivo (`Ctrl/Cmd+Shift+Enter`, ou o botão de foco na barra; `Esc` sai) esconde a faixa lateral do app, os painéis de material e o balão, escurece a mesa em volta do caderno e deixa a barra aparecer só quando o ponteiro chega ao pé.
+- **A letra no tamanho da mão, a linha no mesmo lugar.** Enquanto se escreve no modo imersivo, a vista se aproxima até a linha da pauta ter cerca de 34 px e acompanha o cursor, mantendo a linha escrita a dois quintos da altura da tela e a caixa centrada, como numa máquina de escrever. Quando a escrita para, a vista volta à página dupla. As transições são suaves, não em saltos.
+- **O resto recua.** O que já está na página fica esmaecido enquanto se escreve.
+- **Começar sem preparar.** No modo imersivo, começar a digitar já escreve: o texto começa nas primeiras linhas livres depois do que já está na coluna. Fora dele, `Enter` sem nada selecionado faz o mesmo, e um clique num texto selecionado põe o cursor onde se clicou.
+- **A página acaba, a escrita não.** Quando o texto passa da última linha, ele segue numa caixa da página seguinte (criada se for preciso), a página vira com uma animação curta e o cursor continua lá. Avançar depois da última página cria outra, e o lado vazio da página dupla é uma página esperando um clique.
+- **Nada se perde.** O texto em edição é gravado 1,5 s depois da última tecla, sem esperar o fim da edição.
+- **Trocar de letra sem sair da linha.** O balão do texto (fonte, tamanho, cor, alinhamento) fica disponível durante a digitação, fora do modo imersivo, e usá-lo não encerra a edição.
+
+Ficaram de fora, para depois: som de escrita, papel com textura no modo imersivo, e o "modo de frase" que esmaece também as outras frases do próprio texto.
 
 ## Fontes consultadas
 

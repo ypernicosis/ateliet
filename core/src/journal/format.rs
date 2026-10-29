@@ -108,11 +108,16 @@ pub struct Notebook {
     /// The cover's colour (`#rrggbb`) and picture.
     pub cover: String,
     pub cover_image: Option<String>,
+    /// The cover's texture (`capa-textura`: `linho`, `couro`…), over its colour.
+    pub cover_texture: Option<String>,
     pub start: Option<String>,
     /// The page it opens at.
     pub marker: usize,
     /// A diary: "today's page" adds a dated page at the end.
     pub daily: bool,
+    /// The font new texts are written in (`fonte`), and the margin's.
+    pub font: Option<String>,
+    pub margin_font: Option<String>,
     pub pages: Vec<PageRef>,
 }
 
@@ -136,10 +141,13 @@ impl Notebook {
             paper: Paper::parse(&get("papel").unwrap_or_else(|| "grade-5mm".into())),
             columns: Columns::parse(&get("colunas").unwrap_or_default()),
             cover: get("capa").filter(|c| c.starts_with('#')).unwrap_or_else(|| COVERS[0].to_string()),
-            cover_image: get("capa-imagem").map(|s| s.trim_start_matches("[[").trim_end_matches("]]").to_string()),
+            cover_image: get("capa-imagem").map(|s| s.trim_start_matches("[[").trim_end_matches("]]").to_string()).filter(|s| !s.is_empty()),
+            cover_texture: get("capa-textura").filter(|s| !s.is_empty()),
             start: get("inicio"),
             marker: fm.get("marcador").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(1) as usize,
             daily: fm.get("diario").and_then(|v| v.as_bool()).unwrap_or(false),
+            font: get("fonte").filter(|f| !f.is_empty()),
+            margin_font: get("fonte-margem").filter(|f| !f.is_empty()),
             pages: Vec::new(),
         })
     }
@@ -235,6 +243,11 @@ pub fn page_title(file: &str) -> String {
 /// Set `pagina` (and keep everything else as it was).
 pub fn set_number(text: &str, n: usize) -> String {
     crate::scriptorium::set_frontmatter(text, "pagina", Some(&json!(n)))
+}
+
+/// Set (or remove) a key of the index note's frontmatter.
+pub fn set_key(text: &str, key: &str, value: Option<&str>) -> String {
+    crate::scriptorium::set_frontmatter(text, key, value.map(|v| json!(v)).as_ref())
 }
 
 /// Set the notebook's bookmark.
