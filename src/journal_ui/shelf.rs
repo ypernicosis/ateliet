@@ -79,22 +79,13 @@ impl Journal {
                         let cover = Rect::from_min_size(r.min, vec2(w, h));
                         let lift = if resp.hovered() { -3.0 } else { 0.0 };
                         let cover = cover.translate(vec2(0.0, lift));
-                        let col = draw::hex(&nb.cover).unwrap_or(Color32::from_rgb(0x2f, 0x4a, 0x3a));
                         ui.painter().add(egui::epaint::RectShape::filled(cover, 4.0, Color32::from_black_alpha(if p.dark { 110 } else { 40 })).with_blur_width(14.0));
-                        ui.painter().rect_filled(cover, 4.0, col);
-                        if let Some(img) = &nb.cover_image {
-                            if let Some((t, s)) = crate::host::image(ui.ctx(), cx.vault, cx.caches, img, &nb.path) {
-                                let box_ = cover.shrink(cover.width() * 0.16);
-                                let k = (box_.width() / s.x).min(box_.height() * 0.6 / s.y);
-                                ui.painter().image(t, Rect::from_center_size(box_.center() + vec2(0.0, box_.height() * 0.12), s * k), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                            }
-                        }
-                        // the spine's edge
-                        ui.painter().rect_filled(Rect::from_min_size(cover.min, vec2(5.0, h)), egui::CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, Color32::from_black_alpha(40));
-                        let on = if crate::theme::contrast(col, Color32::WHITE) > 3.0 { Color32::from_rgb(0xf6, 0xf3, 0xec) } else { Color32::from_rgb(0x22, 0x22, 0x24) };
-                        let title = ui.painter().layout(nb.name.clone(), egui::FontId::new(if i == 0 { 19.0 } else { 16.0 }, egui::FontFamily::Name("garamond".into())), on, w - 34.0);
-                        ui.painter().galley(cover.min + vec2(20.0, 22.0), title, on);
+                        let page = self.cover_page(cx, &nb.path, mtime(nb));
+                        let painter = ui.painter_at(cover);
+                        self.draw_cover(ui.ctx(), &painter, nb, page.as_ref(), cover, cx);
                         if nb.daily {
+                            let col = draw::hex(&nb.cover).unwrap_or(Color32::GRAY);
+                            let on = if crate::theme::contrast(col, Color32::WHITE) > 3.0 { Color32::from_rgb(0xf6, 0xf3, 0xec) } else { Color32::from_rgb(0x22, 0x22, 0x24) };
                             ui.painter().text(cover.right_top() + vec2(-12.0, 14.0), egui::Align2::RIGHT_TOP, icons::CALENDAR_DAYS, kit::icon_font(13.0), on.gamma_multiply(0.7));
                         }
                         let pages = nb.pages.len();
@@ -124,6 +115,15 @@ impl Journal {
             let backup = cx.config_dir.as_ref().map(|d| d.join("ateliet").join("journal"));
             self.open_notebook(cx.vault, &path, backup);
         }
+    }
+
+    /// A notebook's cover page (from its index note), read once per change.
+    fn cover_page(&mut self, cx: &Cx, path: &str, mtime: u64) -> Option<Page> {
+        if self.covers.get(path).is_none_or(|(m, _)| *m != mtime) {
+            let text = std::fs::read_to_string(cx.vault.abs(path)).ok()?;
+            self.covers.insert(path.to_string(), (mtime, Page::parse(&text)));
+        }
+        self.covers.get(path).map(|(_, p)| p.clone())
     }
 
     pub fn new_notebook_dialog(&mut self, ctx: &egui::Context, cx: &mut Cx) {

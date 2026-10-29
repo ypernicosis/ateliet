@@ -37,8 +37,11 @@ impl Journal {
         if t > 0.01 {
             self.toolbar(ui, b, cx, canvas, t);
         }
-        if b.drag.is_none() {
+        if b.drag.is_none() && !(self.immersive && writing) {
             self.balloon(ui, b, cx, views);
+        }
+        if b.look == Look::Cover {
+            self.cover_bar(ui, b, cx, canvas);
         }
         self.goto_box(ui, b, canvas, p);
         self.arrived_notice(ui, b, cx, canvas, views);
@@ -69,6 +72,9 @@ impl Journal {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     if kit::icon_button(ui, icons::LIBRARY_BIG, "Estante", false, p).clicked() {
                         self.out_close(b);
+                    }
+                    if kit::icon_button(ui, icons::NOTEBOOK, "Capa: cor, textura, imagem e adesivos", b.look == Look::Cover, p).clicked() {
+                        if b.look == Look::Cover { b.turn(true) } else { b.open_cover() }
                     }
                     sep(ui, p);
                     for (tool, glyph, tip) in [(Tool::Select, icons::MOUSE_POINTER_2, "Selecionar (V)"), (Tool::Write, icons::TYPE, "Escrever (T)"), (Tool::Pen, icons::PEN_LINE, "Caneta (P)"), (Tool::Line, icons::SLASH, "Linha (L)"), (Tool::Tape, icons::STICKY_NOTE, "Fita (F)")] {
@@ -108,6 +114,7 @@ impl Journal {
                     }
                     let (l, r) = b.spread_pages();
                     let label = match (l, r) {
+                        _ if b.look == Look::Cover => "Capa".to_string(),
                         (Some(a), Some(c)) => format!("{a}–{c} de {}", b.count()),
                         (Some(a), None) | (None, Some(a)) => format!("{a} de {}", b.count()),
                         _ => String::new(),
@@ -117,6 +124,9 @@ impl Journal {
                     }
                     if kit::icon_button(ui, icons::CHEVRON_RIGHT, "Próxima página (→)", false, p).clicked() {
                         b.turn(true);
+                    }
+                    if kit::icon_button(ui, icons::FOCUS, "Modo imersivo: só a página; digitar já escreve (Ctrl/Cmd+Shift+Enter, Esc sai)", self.immersive, p).clicked() {
+                        self.immersive = !self.immersive;
                     }
                     if kit::icon_button(ui, icons::LAYOUT_GRID, "Todas as páginas", b.look == Look::Thumbs, p).clicked() {
                         b.commit_edit();
@@ -699,6 +709,83 @@ pub fn font_menu(ui: &mut egui::Ui, salt: impl std::hash::Hash, current: &str, a
         }
     });
     out
+}
+
+impl Journal {
+    /// Over the cover: its colour, its texture, a picture to fill it (or
+    /// the picture picked on it), and the way into the notebook.
+    fn cover_bar(&mut self, ui: &mut egui::Ui, b: &mut Book, cx: &mut Cx, canvas: Rect) {
+        let p = cx.palette;
+        let ctx = ui.ctx().clone();
+        egui::Area::new(egui::Id::new("journal-cover-bar")).pivot(egui::Align2::CENTER_TOP).fixed_pos(canvas.center_top() + vec2(0.0, 12.0)).order(egui::Order::Foreground).show(&ctx, |ui| {
+            egui::Frame::new().fill(p.bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    ui.label(RichText::new("Capa").font(kit::medium(13.0)).color(p.text));
+                    sep(ui, p);
+                    for c in ateliet_core::journal::format::COVERS {
+                        let col = draw::hex(c).unwrap_or(Color32::GRAY);
+                        let (r, resp) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::click());
+                        ui.painter().rect_filled(r.shrink2(vec2(2.0, 5.0)), 2.0, col);
+                        if b.nb.cover == *c {
+                            ui.painter().rect_stroke(r.shrink2(vec2(0.0, 3.0)), 3.0, Stroke::new(1.5_f32, p.accent_strong), egui::StrokeKind::Inside);
+                        }
+                        if resp.on_hover_text("Cor da capa").clicked() {
+                            b.nb.cover = c.to_string();
+                            b.set_setting("capa", Some(c));
+                        }
+                    }
+                    sep(ui, p);
+                    let cur = b.nb.cover_texture.clone().unwrap_or_default();
+                    let name = ateliet_core::journal::texture::TEXTURES.iter().find(|t| t.0 == cur).map(|t| t.1).unwrap_or("Lisa");
+                    let r = kit::chip(ui, Some(icons::LAYERS), name, false, p);
+                    let id = ui.make_persistent_id("journal-cover-texture");
+                    if r.clicked() {
+                        ui.memory_mut(|m| m.toggle_popup(id));
+                    }
+                    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                        ui.set_min_width(170.0);
+                        for (key, label) in ateliet_core::journal::texture::TEXTURES {
+                            if kit::menu_check(ui, cur == *key, label, p) {
+                                b.nb.cover_texture = (!key.is_empty()).then(|| key.to_string());
+                                b.set_setting("capa-textura", (!key.is_empty()).then_some(*key));
+                            }
+                        }
+                    });
+                    // a picture picked on the cover becomes its background
+                    let one = (b.sel.len() == 1).then(|| b.sel[0].clone());
+                    let picked = one.and_then(|sid| b.page(0).and_then(|pg| pg.item(&sid)).filter(|i| i.kind == Kind::Image).and_then(|i| i.picture().map(|t| (i.id.clone(), t))));
+                    if let Some((iid, target)) = picked {
+                        if kit::quiet(ui, Some(icons::IMAGE), "Usar como fundo", p).clicked() {
+                            b.checkpoint();
+                            if let Some(pg) = b.page(0) {
+                                pg.items.retain(|i| i.id != iid);
+                            }
+                            b.touch(0);
+                            b.sel.clear();
+                            b.nb.cover_image = Some(target.clone());
+                            b.set_setting("capa-imagem", Some(&format!("[[{target}]]")));
+                        }
+                    } else if kit::quiet(ui, Some(icons::IMAGE), "Imagem de fundo…", p).clicked() {
+                        if let Some(f) = rfd::FileDialog::new().set_directory(&cx.vault.root).add_filter("Imagens", &["png", "jpg", "jpeg", "webp", "gif"]).pick_file() {
+                            let rel = super::input::copy_into_vault(cx.vault, &cx.attach, &f.to_string_lossy());
+                            b.nb.cover_image = Some(rel.clone());
+                            b.set_setting("capa-imagem", Some(&format!("[[{rel}]]")));
+                            self.out.push(Out::Rescan);
+                        }
+                    }
+                    if b.nb.cover_image.is_some() && kit::icon_button(ui, icons::X, "Tirar a imagem de fundo", false, p).clicked() {
+                        b.nb.cover_image = None;
+                        b.set_setting("capa-imagem", None);
+                    }
+                    sep(ui, p);
+                    if kit::quiet(ui, Some(icons::BOOK_OPEN), "Abrir o caderno", p).clicked() {
+                        b.turn(true);
+                    }
+                });
+            });
+        });
+    }
 }
 
 fn r_or_l(b: &Book) -> usize {

@@ -108,6 +108,8 @@ pub struct Notebook {
     /// The cover's colour (`#rrggbb`) and picture.
     pub cover: String,
     pub cover_image: Option<String>,
+    /// The cover's texture (`capa-textura`: `linho`, `couro`…), over its colour.
+    pub cover_texture: Option<String>,
     pub start: Option<String>,
     /// The page it opens at.
     pub marker: usize,
@@ -139,7 +141,8 @@ impl Notebook {
             paper: Paper::parse(&get("papel").unwrap_or_else(|| "grade-5mm".into())),
             columns: Columns::parse(&get("colunas").unwrap_or_default()),
             cover: get("capa").filter(|c| c.starts_with('#')).unwrap_or_else(|| COVERS[0].to_string()),
-            cover_image: get("capa-imagem").map(|s| s.trim_start_matches("[[").trim_end_matches("]]").to_string()),
+            cover_image: get("capa-imagem").map(|s| s.trim_start_matches("[[").trim_end_matches("]]").to_string()).filter(|s| !s.is_empty()),
+            cover_texture: get("capa-textura").filter(|s| !s.is_empty()),
             start: get("inicio"),
             marker: fm.get("marcador").and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()))).unwrap_or(1) as usize,
             daily: fm.get("diario").and_then(|v| v.as_bool()).unwrap_or(false),

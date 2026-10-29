@@ -14,6 +14,7 @@
 //! - `format` — reading and writing the index note and the page notes.
 //! - `cut`    — a picture cut out with its mask, for the sticker drawer.
 //! - `storyboard` — the frames of a storyboard, drawn to paste on a page.
+//! - `texture` — the cover's textures, made from its colour.
 //!
 //! Lengths are millimetres of the page, from its top left corner.
 
@@ -21,6 +22,7 @@ pub mod cut;
 pub mod format;
 pub mod paper;
 pub mod storyboard;
+pub mod texture;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

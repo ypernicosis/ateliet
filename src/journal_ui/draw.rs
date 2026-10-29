@@ -402,9 +402,14 @@ impl Journal {
         let path = b.page_ref(pv.n).map(|r| r.path.clone()).unwrap_or_default();
         let editing = b.editing.as_ref().filter(|e| e.page == pv.n).map(|e| e.id.clone());
         let cropping = b.crop.as_ref().filter(|c| c.0 == pv.n).map(|c| c.1.clone());
+        let writing = self.immersive && b.editing.is_some();
         for it in &page.items {
             let clip = if it.across { pv.clip_across } else { pv.clip };
-            let painter = ui.painter_at(clip);
+            let mut painter = ui.painter_at(clip);
+            // writing in the immersive mode: the rest steps back
+            if writing {
+                painter.set_opacity(0.28);
+            }
             if editing.as_deref() == Some(it.id.as_str()) || cropping.as_deref() == Some(it.id.as_str()) {
                 continue;
             }
@@ -413,9 +418,14 @@ impl Journal {
     }
 
     pub fn draw_item(&mut self, ui: &egui::Ui, painter: &egui::Painter, it: &Item, pv: &PageView, cx: &mut Cx, source: &str) {
+        let ctx = ui.ctx().clone();
+        self.draw_item_ctx(&ctx, painter, it, pv, cx, source);
+    }
+
+    pub fn draw_item_ctx(&mut self, ctx: &egui::Context, painter: &egui::Painter, it: &Item, pv: &PageView, cx: &mut Cx, source: &str) {
         let p = cx.palette;
         let ink = it.color.as_deref().and_then(hex).unwrap_or(ink_color(p));
-        let ctx = ui.ctx().clone();
+        let ctx = ctx.clone();
         match &it.kind {
             Kind::Text => {
                 let job = rich_job(it, it.content(), &pv.lay, pv.k, it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p)), p.accent_strong);
@@ -555,6 +565,55 @@ impl Journal {
         }
         let uv: Vec<Pos2> = pts.iter().map(|(_, (u, v))| uv_of(&c, it.flip, *u, *v)).collect();
         polygon(painter, &scr, Some((&uv, t)), tint);
+    }
+}
+
+impl Journal {
+    /// A cover: its colour, texture or picture (filling it), the notebook's
+    /// name when nothing written is on it, then its items.
+    pub fn draw_cover(&mut self, ctx: &egui::Context, painter: &egui::Painter, nb: &journal::Notebook, page: Option<&journal::Page>, rect: Rect, cx: &mut Cx) {
+        let base = hex(&nb.cover).unwrap_or(Color32::from_rgb(0x2f, 0x4a, 0x3a));
+        painter.rect_filled(rect, 3.0, base);
+        let mut image_drawn = false;
+        if let Some(img) = &nb.cover_image {
+            if let Some((t, s)) = crate::host::image(ctx, cx.vault, cx.caches, img, &nb.path) {
+                // the picture fills the cover, cut to its proportions
+                let (ra, ia) = (rect.width() / rect.height(), s.x / s.y.max(1.0));
+                let uv = if ia > ra { Rect::from_center_size(pos2(0.5, 0.5), vec2(ra / ia, 1.0)) } else { Rect::from_center_size(pos2(0.5, 0.5), vec2(1.0, ia / ra)) };
+                painter.add(egui::epaint::RectShape::filled(rect, 3.0, Color32::WHITE).with_texture(t, uv));
+                image_drawn = true;
+            }
+        }
+        if !image_drawn {
+            if let Some(kind) = nb.cover_texture.as_deref().filter(|k| !k.is_empty()) {
+                let key = format!("{kind}{}", nb.cover);
+                if !self.cover_tex.contains_key(&key) {
+                    let (w, h) = (480u32, (480.0 * nb.size.h / nb.size.w) as u32);
+                    let img = journal::texture::render(kind, [base.r(), base.g(), base.b()], w, h);
+                    let c = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], img.as_raw());
+                    self.cover_tex.insert(key.clone(), ctx.load_texture(format!("journal-cover:{key}"), c, egui::TextureOptions::LINEAR));
+                }
+                let t = &self.cover_tex[&key];
+                painter.add(egui::epaint::RectShape::filled(rect, 3.0, Color32::WHITE).with_texture(t.id(), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))));
+            }
+        }
+        // the spine's edge
+        painter.rect_filled(Rect::from_min_size(rect.min, vec2((rect.width() * 0.035).max(3.0), rect.height())), egui::CornerRadius { nw: 3, sw: 3, ne: 0, se: 0 }, Color32::from_black_alpha(40));
+        let k = rect.width() / nb.size.w as f32;
+        let written = page.is_some_and(|p| p.items.iter().any(|i| i.kind.is_text()));
+        if !written && !image_drawn {
+            let on = if crate::theme::contrast(base, Color32::WHITE) > 3.0 { Color32::from_rgb(0xf6, 0xf3, 0xec) } else { Color32::from_rgb(0x22, 0x22, 0x24) };
+            let title = painter.layout(nb.name.clone(), egui::FontId::new((k * 9.0).max(8.0), egui::FontFamily::Name("garamond".into())), on, rect.width() * 0.8);
+            painter.galley(rect.min + vec2(rect.width() * 0.12, rect.height() * 0.1), title, on);
+        }
+        if let Some(page) = page {
+            let lay = Layout::new(&nb.size, journal::Paper { ruling: Ruling::Plain, spacing: 7.0 }, journal::Columns::None, true);
+            let pv = PageView { n: 0, rect, k, lay, clip: painter.clip_rect(), clip_across: painter.clip_rect() };
+            let ui_ctx = ctx.clone();
+            for it in &page.items {
+                self.draw_item_ctx(&ui_ctx, painter, it, &pv, cx, &nb.path);
+            }
+        }
     }
 }
 
