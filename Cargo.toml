@@ -59,9 +59,13 @@ opt-level = 2
 [profile.dev.package.zune-jpeg]
 opt-level = 2
 
+# The self-updater rebuilds in this profile on the user's machine, so it is
+# tuned for rebuild time: with fat LTO and one codegen unit, any change took
+# ~7 minutes even with every dependency cached; incremental and parallel
+# codegen bring a typical update down to seconds. Dependencies are still built
+# at opt-level 3.
 [profile.release]
 opt-level = 3
-lto = true
-codegen-units = 1
+incremental = true
 strip = true
 panic = "abort"

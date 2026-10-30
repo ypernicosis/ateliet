@@ -80,7 +80,7 @@ Se você já tem um clone, troque os passos 3 e 4 por: feche o Ateliet, entre na
 No pé da barra lateral esquerda fica o botão de atualizar (também na paleta de comandos). O Ateliet roda `git fetch` no clone ao abrir e a cada 30 minutos; quando há commits novos no branch acompanhado, o botão ganha um ponto. Ao atualizar, ele:
 
 1. roda `git pull --ff-only` no clone;
-2. compila (`cargo build --release`), com as mesmas features com que foi compilado;
+2. compila (`cargo build --release`), com as mesmas features com que foi compilado; (as dependências e o que não mudou ficam do build anterior em `target/`, então a compilação refaz só o código alterado; a primeira, ou a que vem depois de atualizar o Rust, compila tudo);
 3. troca o executável do app instalado (dentro do `.app`) e oferece reiniciar.
 
 O progresso aparece na janela. Se um passo falhar, a mensagem mostra o erro e dá para tentar de novo; o app instalado só é trocado quando tudo compilou.
