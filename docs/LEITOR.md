@@ -2,7 +2,7 @@
 
 O Leitor abre livros em EPUB, documentos em PDF e quadrinhos (CBZ, CBR, CB7 e pastas de imagens) dentro do Ateliet. Ele tem dois compromissos. O primeiro é ser imersivo e minimalista: quando se lê, só a página aparece. O segundo é servir de fonte para o Journal ([JOURNAL.md](JOURNAL.md)): todo trecho pode ser selecionado e guardado, e toda região de página pode ser recortada e posta numa página do Journal.
 
-Este documento passa a vir antes do Journal na ordem de trabalho. O Leitor é útil sozinho (lê, grifa, guarda trechos e recortes no vault) e entrega ao Journal o material que ele vai organizar.
+O Leitor está implementado; a seção 10 diz o que foi feito e onde o código se afastou deste plano. Este documento passa a vir antes do Journal na ordem de trabalho. O Leitor é útil sozinho (lê, grifa, guarda trechos e recortes no vault) e entrega ao Journal o material que ele vai organizar.
 
 ## 1. O que já existe no Ateliet
 
@@ -148,12 +148,17 @@ autor: Yuval Noah Harari
 arquivo: "Livros/Arquivos/Sapiens.epub"
 ---
 
-> [!grifo|amarelo] cap. 3 · p. 58 ^g-7k2
+> [!grifo|amarelo] cap. 3 · p. 58
 > O trigo domesticou o homem, e não o contrário.
 
-> [!grifo|azul] cap. 4 ^g-9qa
+^g-7k2
+
+> [!grifo|azul] cap. 4
 > …
+>
 > Nota: comparar com o trecho do Mossy Earth sobre pastoreio.
+
+^g-9qa
 
 %% ateliet:leitor
 {"v":1,"marks":{"g-7k2":{"loc":{…},"cor":"amarelo","criado":"2026-10-29T14:02"}}}
@@ -192,6 +197,31 @@ Enquanto o Journal não existir, o Leitor funciona sozinho: os trechos e os reco
 - **Fidelidade do EPUB**: sem motor de HTML, tabelas complexas, layout fixo com HTML e CSS elaborado não ficam iguais ao original. A escolha é deliberada: o Leitor recompõe o texto com a tipografia do Ateliet, em vez de imitar um navegador.
 - **Memória**: PDFs e HQs grandes pedem cache com limite e leitura sob demanda; o leitor de ZIP atual, que descompacta tudo, não serve e precisa de uma versão por entrada.
 - **DRM**: livros com DRM não abrem.
+
+## 10. Estado da implementação
+
+O núcleo está em `core/src/reader/` (`archive`, `xml`, `epub`, `flow`, `pdf`, `comic`, `marks`, `state`), com testes; a interface em `src/reader_ui/` (`mod`, `worker`, `chrome`, `keep`, `shelf`) e `src/reader_mode.rs`. O que já funciona:
+
+- **Abrir**: qualquer `.epub`, `.pdf`, `.cbz`, `.cbr`, `.cb7` ou `.cbt` clicado no explorador, num link (`[[livro.epub]]`) ou no botão "abrir" de um PDF embutido abre numa aba do Leitor, e não mais no app do sistema. O formato é decidido pelos primeiros bytes (um `.cbr` que é zip abre como zip; um zip com `container.xml` é EPUB). A estante (botão de livro na faixa lateral, ou "Leitor: Abrir a estante") mostra os livros do vault com capa e "Continuar lendo". A posição de cada livro fica em `.obsidian/ateliet/leitor.json`, pela impressão digital do arquivo.
+- **EPUB**: pacote, espinha, sumário por `nav.xhtml` ou `toc.ncx`, CSS mínimo (itálico, negrito, versalete, maiúsculas, alinhamento, recuo, margens de bloco, quebra de página, `display: none`, seletores de descendente), notas de rodapé em `<aside epub:type="footnote">` fora do texto e abertas num balão pela referência (também referências curtas numéricas sem `epub:type`), imagens, listas, citações, `<pre>`, tabelas simples (células em linha), recusa de DRM, layout fixo de imagens lido como HQ. A paginação usa o compositor da Diagramação (Knuth–Plass e hifenização) na largura e altura da janela, com cache por capítulo; mudar fonte, tamanho ou janela recompõe e mantém o ponto pelo `Locator`.
+- **PDF**: desenho pelo hayro, camada de texto por um `Device` que anota cada glifo (inclusive texto invisível de PDFs com OCR), espaços inferidos pela distância, hifens de fim de linha juntados ao copiar, ligaduras desfeitas, sumário pelos marcadores (destinos diretos e nomeados), links internos e externos, cortar margens, ajuste à página ou à largura, zoom (Ctrl/Cmd+roda ou pinça) e rolagem dentro da página.
+- **Quadrinhos**: CBZ lido entrada por entrada; CBR, CB7 e CBT descompactados uma vez numa pasta de cache pelo `bsdtar` (já vem no macOS como `tar`), ou pelo `unrar`/`unar`/`7z` quando não houver; ordem natural; `ComicInfo.xml` (título, série, número, autores, mangá da direita para a esquerda); pastas do arquivo como sumário.
+- **Moldura**: barra que aparece com o ponteiro no alto (estante, sumário, busca, grifos, aparência, recorte, ler ao lado, imersivo), linha de progresso no pé com o capítulo e as páginas que faltam, modo imersivo (`F` ou `Ctrl/Cmd+Enter`) que esconde a faixa, as barras laterais, as abas e a barra de status. Página simples ou dupla (automática em janela larga), setas, espaço, PageUp/PageDown, clique nas margens, gesto no trackpad e roda.
+- **Aparência (Aa)**: papel claro, sépia, escuro ou do tema; fonte (as embutidas e as do sistema), tamanho, entrelinha, margens, justificado, hifenização; uma ou duas páginas; copiar com citação. As escolhas valem por formato.
+- **Busca** no livro inteiro, com as ocorrências marcadas na página.
+- **Seleção**: arrastar (encaixando em palavras), duplo clique (palavra), triplo (parágrafo), Shift para estender. O menu sobre ela grifa em quatro cores, abre uma nota, manda ao Journal, copia e, com um caderno aberto, tem uma alça para arrastar o trecho até a página do Journal.
+- **Grifos** na nota do livro em `Livros/`, como na seção 6.3, criada no primeiro grifo ou trecho, com um link "Abrir no Leitor". Clicar num grifo o seleciona para trocar a cor, escrever a nota ou removê-lo. A nota é relida quando muda no disco: apagar o callout no Obsidian apaga o grifo; mudar a cor no cabeçalho muda a cor.
+- **Trechos e recortes**: o trecho vai para `Trechos/` com a fonte, o link da nota do livro e o `Locator` no frontmatter (`local`). O recorte (`R` ou o botão) é desenhado de novo em cerca de 300 ppp (PDF pelos pontos da página, EPUB composto de novo em escala alta, HQ na imagem original), gravado em `Anexos/Recortes/<Livro>/` e guardado como trecho com a imagem e, quando há texto na região, a transcrição. Botão direito numa imagem do EPUB manda o arquivo original.
+- **Ler ao lado**: o livro numa metade da janela do Journal (botão de livro na barra do Journal, botão na barra do Leitor, ou "Leitor: Ler ao lado do Journal"). Um trecho ou recorte mandado de lá entra na página aberta; arrastado pela alça, entra no ponto onde é solto. No sentido contrário, o balão de um trecho ou de uma imagem posta pelo Leitor tem "Abrir no Leitor", que abre o livro ao lado no ponto de origem (o trecho é achado pelas `fontes` da página).
+
+Onde o código se afastou do plano:
+
+- O `Locator` é uma estrutura só, não um enum: `arquivo`, `capitulo` e `posicao` (EPUB), `pagina` (PDF e HQ, a partir de 1), `regiao` e `citacao`. No EPUB a posição conta letras do capítulo sem os espaços, e não um caminho no XHTML como o EPUB CFI; no PDF, `posicao` é o índice do glifo na página. A citação reencontra o ponto quando o arquivo muda.
+- O `^id` do grifo fica numa linha própria depois do callout, que é onde o Obsidian reconhece o id de um bloco complexo, e não no fim do cabeçalho.
+- As preferências ficam no painel Aa (e no `leitor.json`), não em Configurações › Leitor. As pastas são fixas (`Livros/`, `Trechos/`, `Anexos/Recortes/`) e a estante só mostra livros do vault.
+- O tempo estimado até o fim do capítulo virou o número de páginas que faltam.
+
+Ainda não feito: o laço livre no recorte, a opção "Estilo do livro" com as fontes do EPUB, o modo de rolagem contínua do EPUB, a leitura vertical de webtoons e a leitura por quadro, tela cheia de verdade, o modelo do Templater para a nota do livro, pastas fora do vault na estante e o `crate` `unrar` opcional.
 
 ## Fontes consultadas
 

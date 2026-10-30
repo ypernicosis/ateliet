@@ -162,8 +162,7 @@ impl PdfBook {
         let (pw, ph) = p.render_dimensions();
         let transform = hi::TransformExt::to_kurbo(&p.initial_transform(true));
         let cache = hi::InterpreterCache::new();
-        let mut settings = InterpreterSettings::default();
-        settings.render_annotations = false;
+        let settings = InterpreterSettings { render_annotations: false, ..Default::default() };
         let mut ctx = hi::Context::new(transform, Rect::new(0.0, 0.0, pw as f64, ph as f64), &cache, p.xref(), settings);
         let mut dev = TextDevice { raw: Vec::new() };
         hi::interpret_page(p, &mut ctx, &mut dev);

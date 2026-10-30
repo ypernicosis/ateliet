@@ -69,7 +69,7 @@ impl Shelf {
         self.poll(&ctx);
         let mut chosen = None;
         let mut books: Vec<(String, u64)> = cx.vault.files.iter().filter(|e| !e.folder && format_of(&e.path).is_some()).map(|e| (e.path.clone(), e.mtime)).collect();
-        books.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        books.sort_by_key(|a| a.0.to_lowercase());
         let full = ui.max_rect();
         ui.painter().rect_filled(full, 0.0, p.bg);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

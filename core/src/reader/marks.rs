@@ -170,7 +170,7 @@ pub fn read(text: &str) -> Vec<Mark> {
             });
         }
     }
-    out.sort_by(|a, b| (a.loc.chap, a.loc.page, a.loc.offset).cmp(&(b.loc.chap, b.loc.page, b.loc.offset)));
+    out.sort_by_key(|m| (m.loc.chap, m.loc.page, m.loc.offset));
     out
 }
 

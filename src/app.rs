@@ -310,7 +310,7 @@ impl App {
         // reopen the tabs of the last session
         if let Some(tabs) = session["tabs"].as_array() {
             for t in tabs.iter().filter_map(|t| t.as_str()) {
-                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() {
+                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() || t == crate::reader_ui::SHELF {
                     self.open(t, true);
                 }
             }

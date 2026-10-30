@@ -616,12 +616,9 @@ pub fn chapter(src: &str, path: &str, css: &[Arc<Css>]) -> Chapter {
                         if c.note.is_some() {
                             b.note_text.push('\n');
                         } else if let Some(cur) = b.cur.as_mut() {
-                            match cur.spans.last_mut() {
-                                Some(l) => {
-                                    let t = l.text.trim_end_matches(' ').to_string();
-                                    l.text = t + "\n";
-                                }
-                                None => {}
+                            if let Some(l) = cur.spans.last_mut() {
+                                let t = l.text.trim_end_matches(' ').to_string();
+                                l.text = t + "\n";
                             }
                         }
                     }

@@ -129,7 +129,7 @@ impl App {
         let p = self.palette;
         let width = ctx.screen_rect().width();
         let mut outs = Vec::new();
-        egui::SidePanel::right("leitor-ao-lado").resizable(true).show_separator_line(false).default_width((width * 0.46).max(360.0)).width_range(320.0..=(width * 0.7).max(400.0)).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
+        egui::SidePanel::right("leitor-ao-lado").resizable(true).show_separator_line(false).default_width((width * 0.46).max(360.0)).width_range((width * 0.36).max(320.0)..=(width * 0.7).max(400.0)).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             if let Some(cx) = self.reader_cx() {

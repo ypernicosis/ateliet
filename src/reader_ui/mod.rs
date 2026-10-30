@@ -119,20 +119,20 @@ struct PageView {
 }
 
 impl PageView {
-    fn to_frac(&self, p: Pos2) -> (f32, f32) {
+    fn frac_of(&self, p: Pos2) -> (f32, f32) {
         let u = (p.x - self.rect.left()) / self.rect.width().max(1.0);
         let v = (p.y - self.rect.top()) / self.rect.height().max(1.0);
         (self.uv[0] + u * (self.uv[2] - self.uv[0]), self.uv[1] + v * (self.uv[3] - self.uv[1]))
     }
 
-    fn to_screen(&self, f: (f32, f32)) -> Pos2 {
+    fn screen_of(&self, f: (f32, f32)) -> Pos2 {
         let u = (f.0 - self.uv[0]) / (self.uv[2] - self.uv[0]).max(1e-6);
         let v = (f.1 - self.uv[1]) / (self.uv[3] - self.uv[1]).max(1e-6);
         pos2(self.rect.left() + u * self.rect.width(), self.rect.top() + v * self.rect.height())
     }
 
     fn frac_rect(&self, r: [f32; 4]) -> Rect {
-        Rect::from_min_max(self.to_screen((r[0], r[1])), self.to_screen((r[2], r[3])))
+        Rect::from_min_max(self.screen_of((r[0], r[1])), self.screen_of((r[2], r[3])))
     }
 }
 
@@ -295,7 +295,10 @@ impl Reader {
     pub fn title(&self) -> String {
         match &self.book {
             Some(b) => b.opened.as_ref().map(|o| o.meta.title.clone()).unwrap_or_else(|| crate::vault::basename(&b.file).to_string()),
-            None => "Estante".into(),
+            None => match &self.asked {
+                Some((f, _)) => crate::vault::basename(f).to_string(),
+                None => "Estante".into(),
+            },
         }
     }
 
@@ -814,7 +817,7 @@ impl Book {
         let sizes: Vec<(f32, f32)> = pages.iter().map(|pg| self.info(self.chap, *pg).map(|i| i.size).or_else(|| self.infos.iter().find(|(k, _)| k.0 == self.chap).map(|(_, i)| i.size)).unwrap_or((210.0, 297.0))).collect();
         let uvs: Vec<[f32; 4]> = pages.iter().map(|pg| self.info(self.chap, *pg).and_then(|i| i.content).filter(|_| self.prefs.trim).unwrap_or([0.0, 0.0, 1.0, 1.0])).collect();
         let shown: Vec<(f32, f32)> = sizes.iter().zip(&uvs).map(|(s, uv)| (s.0 * (uv[2] - uv[0]), s.1 * (uv[3] - uv[1]))).collect();
-        let gap = if spread { 0.0 } else { 0.0 };
+        let gap = 0.0;
         let total_w: f32 = shown.iter().map(|s| s.0).sum::<f32>() + gap;
         let max_h = shown.iter().map(|s| s.1).fold(0.0, f32::max).max(1.0);
         let fit = if self.prefs.fit == "largura" && !spread { area.width() / total_w.max(1.0) } else { (area.width() / total_w.max(1.0)).min(area.height() / max_h) };
@@ -957,7 +960,7 @@ impl Book {
 
     /// The page under a point, and the point in it.
     fn hit(&self, q: Pos2) -> Option<(usize, (f32, f32))> {
-        self.views.iter().enumerate().find(|(_, v)| v.rect.contains(q)).map(|(i, v)| (i, v.to_frac(q)))
+        self.views.iter().enumerate().find(|(_, v)| v.rect.contains(q)).map(|(i, v)| (i, v.frac_of(q)))
     }
 
     fn input(&mut self, ui: &mut egui::Ui, cx: &Cx, resp: &egui::Response, area: Rect, out: &mut Vec<Out>, immersive: &mut bool) {
@@ -1083,11 +1086,13 @@ impl Book {
         }
         let shift = ctx.input(|i| i.modifiers.shift);
         let pointer = ctx.input(|i| i.pointer.interact_pos());
+        // a drag starts where the button went down, not where it was noticed
+        let origin = ctx.input(|i| i.pointer.press_origin()).or(pointer);
         // the cut
         if self.tool == Tool::Crop {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
             if resp.drag_started() {
-                if let Some((vi, f)) = pointer.and_then(|q| self.hit(q)) {
+                if let Some((vi, f)) = origin.and_then(|q| self.hit(q)) {
                     let v = self.views[vi];
                     self.cut = Some(Cut { chap: v.chap, page: v.page, a: f, b: f, done: false, png: None, asked: None });
                 }
@@ -1095,7 +1100,7 @@ impl Book {
             if resp.dragged() {
                 if let (Some(c), Some(q)) = (self.cut.as_mut().filter(|c| !c.done), pointer) {
                     if let Some(v) = self.views.iter().find(|v| v.chap == c.chap && v.page == c.page) {
-                        let f = v.to_frac(q);
+                        let f = v.frac_of(q);
                         c.b = (f.0.clamp(0.0, 1.0), f.1.clamp(0.0, 1.0));
                         if shift {
                             // a square (on the page)
@@ -1143,7 +1148,7 @@ impl Book {
             ctx.set_cursor_icon(egui::CursorIcon::Text);
         }
         if resp.drag_started() {
-            if let Some((vi, f)) = pointer.and_then(|q| self.hit(q)) {
+            if let Some((vi, f)) = origin.and_then(|q| self.hit(q)) {
                 let v = self.views[vi];
                 if let Some(t) = self.info(v.chap, v.page).and_then(|i| i.text.clone()) {
                     if let Some(g) = t.hit(f.0, f.1, true) {
@@ -1162,7 +1167,7 @@ impl Book {
         if resp.dragged() {
             if let (Some(s), Some(q)) = (self.sel.clone().filter(|s| !s.done), pointer) {
                 if let Some(v) = self.views.iter().find(|v| v.chap == s.chap && v.page == s.page) {
-                    let f = v.to_frac(q);
+                    let f = v.frac_of(q);
                     if let Some(t) = self.info(s.chap, s.page).and_then(|i| i.text.clone()) {
                         if let Some(g) = t.hit(f.0, f.1, true) {
                             if let Some(s) = self.sel.as_mut() {
@@ -1351,6 +1356,10 @@ pub fn mark_color(name: &str) -> Color32 {
 
 /// The swatch of a highlight colour (solid).
 pub fn mark_swatch(name: &str) -> Color32 {
-    let c = mark_color(name);
-    Color32::from_rgb(c.r(), c.g(), c.b())
+    match name {
+        "azul" => Color32::from_rgb(110, 170, 255),
+        "verde" => Color32::from_rgb(120, 200, 120),
+        "rosa" => Color32::from_rgb(245, 130, 170),
+        _ => Color32::from_rgb(250, 205, 50),
+    }
 }
