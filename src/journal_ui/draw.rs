@@ -71,7 +71,7 @@ pub fn hex_of(c: Color32) -> String {
 }
 
 /// Grey of a red pencil, for `==highlights==`.
-const PENCIL_RED: Color32 = Color32::from_rgb(0xc2, 0x3b, 0x2e);
+pub const PENCIL_RED: Color32 = Color32::from_rgb(0xc2, 0x3b, 0x2e);
 
 /// The paper of a page: its colour, the ruling, the Cornell lines, the
 /// number at the foot.
@@ -183,282 +183,6 @@ pub fn line_px(it: &Item, lay: &Layout, k: f32) -> f32 {
     (lay.paper.line() * it.style.lines()) as f32 * k
 }
 
-/// A text laid out: justified (`justificado`) by widening the spaces
-/// between words, never the letters. Each row that is not a paragraph's
-/// last gets the room left up to the margin shared among its spaces (after
-/// the first line's indent, which stays); a row whose spaces would open
-/// wider than three spaces each (a narrow box, a long word, few words)
-/// stays ragged, as typesetters leave it. The room is given as space before
-/// the words, so the text and its characters are untouched (the cursor and
-/// the editor see the same text), and the rows are checked to break where
-/// they broke before; if they do not, the text is left unjustified.
-pub fn lay_out(f: &egui::epaint::Fonts, it: &Item, job: egui::text::LayoutJob) -> std::sync::Arc<egui::Galley> {
-    if it.style.align != "justificado" || !job.wrap.max_width.is_finite() {
-        return f.layout_job(job);
-    }
-    let plain = f.layout_job(job.clone());
-    let width = job.wrap.max_width;
-    // (char index of a word, room before it)
-    let mut room: Vec<(usize, f32)> = Vec::new();
-    let mut ci = 0;
-    let n_rows = plain.rows.len();
-    for (ri, row) in plain.rows.iter().enumerate() {
-        let gl = &row.glyphs;
-        let last_of_paragraph = row.ends_with_newline || ri + 1 == n_rows;
-        if !last_of_paragraph {
-            if let (Some(start), Some(end)) = (gl.iter().position(|g| !g.chr.is_whitespace()), gl.iter().rposition(|g| !g.chr.is_whitespace())) {
-                let words: Vec<usize> = (start + 1..=end).filter(|&i| !gl[i].chr.is_whitespace() && gl[i - 1].chr.is_whitespace()).collect();
-                let space = gl.iter().find(|g| g.chr == ' ').map(|g| g.advance_width).unwrap_or(gl[end].advance_width * 0.3).max(0.5);
-                // a hair short of the margin, so the row cannot spill over
-                let free = width - gl[end].max_x() - 0.75;
-                if !words.is_empty() && free > 0.0 {
-                    let per = free / words.len() as f32;
-                    if per <= space * 3.0 {
-                        room.extend(words.iter().map(|&i| (ci + i, per)));
-                    }
-                }
-            }
-        }
-        ci += gl.len() + usize::from(row.ends_with_newline);
-    }
-    if room.is_empty() {
-        return plain;
-    }
-    let bytes: Vec<usize> = job.text.char_indices().map(|(b, _)| b).collect();
-    let cuts: Vec<(usize, f32)> = room.iter().filter_map(|(c, r)| bytes.get(*c).map(|b| (*b, *r))).collect();
-    let mut wide = job.clone();
-    // the space after a row's last word counts in egui's wrapping: with the
-    // last word at the margin, that space would not fit and the word would
-    // go down; the wrap gets that space's room (no word is narrower than a
-    // space, so no word moves up), and the rows are checked all the same
-    let trailing = plain.rows.iter().filter_map(|r| r.glyphs.last().filter(|g| g.chr.is_whitespace()).map(|g| g.advance_width)).fold(0.0_f32, f32::max);
-    wide.wrap.max_width = width + trailing + 0.25;
-    wide.sections.clear();
-    for s in &job.sections {
-        let mut from = s.byte_range.start;
-        let mut lead = s.leading_space;
-        for &(b, r) in cuts.iter().filter(|(b, _)| *b >= s.byte_range.start && *b < s.byte_range.end) {
-            if b == from {
-                lead += r;
-                continue;
-            }
-            wide.sections.push(egui::text::LayoutSection { leading_space: lead, byte_range: from..b, format: s.format.clone() });
-            from = b;
-            lead = r;
-        }
-        wide.sections.push(egui::text::LayoutSection { leading_space: lead, byte_range: from..s.byte_range.end, format: s.format.clone() });
-    }
-    let justified = f.layout_job(wide);
-    let same = justified.rows.len() == plain.rows.len() && justified.rows.iter().zip(&plain.rows).all(|(a, b)| a.glyphs.len() == b.glyphs.len() && a.ends_with_newline == b.ends_with_newline);
-    if same { justified } else { plain }
-}
-
-fn align_of(it: &Item) -> egui::Align {
-    match it.style.align.as_str() {
-        "centro" => egui::Align::Center,
-        "direita" => egui::Align::RIGHT,
-        _ => egui::Align::LEFT,
-    }
-}
-
-/// The text as it shows: `**bold**`, `*italic*`, `==highlight==` (a red
-/// pencil line under it), `[[links]]` and `#tags` in the accent.
-pub fn rich_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32) -> egui::text::LayoutJob {
-    md_job(it, text, lay, k, color, accent, false)
-}
-
-/// The text as it is typed: formatted as it will show, with the marks
-/// (`**`, `==`, `#`, `[[ ]]`, `- `) kept, faint, so every typed character
-/// is where the cursor expects it.
-pub fn live_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32) -> egui::text::LayoutJob {
-    md_job(it, text, lay, k, color, accent, true)
-}
-
-fn md_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: Color32, live: bool) -> egui::text::LayoutJob {
-    let (reg, bold, ital, f) = font_of(it);
-    let lh = line_px(it, lay, k);
-    let size = lh * f;
-    let mark = color.gamma_multiply(0.32);
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = (it.w as f32 * k).max(4.0);
-    job.halign = align_of(it);
-    let fmt = |fam: &egui::FontFamily, c: Color32, under: bool| egui::TextFormat {
-        font_id: egui::FontId::new(size, fam.clone()),
-        color: c,
-        line_height: Some(lh),
-        valign: egui::Align::BOTTOM,
-        underline: if under { Stroke::new((k * 0.25).max(1.0), PENCIL_RED.gamma_multiply(0.85)) } else { Stroke::NONE },
-        ..Default::default()
-    };
-    for (li, raw) in text.split('\n').enumerate() {
-        if li > 0 {
-            job.append("\n", 0.0, fmt(&reg, color, false));
-        }
-        let mut line = raw.to_string();
-        let mut heading = false;
-        let t = raw.trim_start();
-        let lead = raw.len() - t.len();
-        // the line's own mark: a heading's hashes, a list's dash
-        let prefix: Option<(usize, &str)> = if t.starts_with('#') && t.trim_start_matches('#').starts_with(' ') {
-            heading = true;
-            let hashes = t.len() - t.trim_start_matches('#').len();
-            Some((lead + hashes + 1, ""))
-        } else if t.starts_with("- [ ] ") {
-            Some((lead + 6, "☐ "))
-        } else if t.starts_with("- [x] ") {
-            Some((lead + 6, "☑ "))
-        } else if t.starts_with("- ") || t.starts_with("* ") {
-            Some((lead + 2, "• "))
-        } else {
-            None
-        };
-        if let Some((n, shown)) = prefix {
-            if live {
-                job.append(&raw[..n], 0.0, fmt(&reg, mark, false));
-            } else if !shown.is_empty() {
-                job.append(shown, 0.0, fmt(&reg, color, false));
-            }
-            line = raw[n..].to_string();
-        }
-        let (mut b, mut i, mut m) = (heading, false, false);
-        let mut buf = String::new();
-        let chars: Vec<char> = line.chars().collect();
-        let mut j = 0;
-        let flush = |job: &mut egui::text::LayoutJob, buf: &mut String, b: bool, i: bool, m: bool, c: Color32| {
-            if !buf.is_empty() {
-                let fam = if b { &bold } else if i { &ital } else { &reg };
-                job.append(buf, 0.0, fmt(fam, c, m));
-                buf.clear();
-            }
-        };
-        // a mark: shown faint while typing, gone otherwise
-        let put_mark = |job: &mut egui::text::LayoutJob, s: &str, b: bool, i: bool| {
-            if live {
-                let fam = if b { &bold } else if i { &ital } else { &reg };
-                job.append(s, 0.0, fmt(fam, mark, false));
-            }
-        };
-        while j < chars.len() {
-            let c = chars[j];
-            let next = chars.get(j + 1).copied();
-            if c == '*' && next == Some('*') {
-                flush(&mut job, &mut buf, b, i, m, color);
-                b = !b;
-                put_mark(&mut job, "**", b, i);
-                j += 2;
-                continue;
-            }
-            if c == '=' && next == Some('=') {
-                flush(&mut job, &mut buf, b, i, m, color);
-                m = !m;
-                put_mark(&mut job, "==", b, i);
-                j += 2;
-                continue;
-            }
-            if c == '*' || c == '_' {
-                let prev_ws = j == 0 || chars[j - 1].is_whitespace() || chars[j - 1].is_ascii_punctuation();
-                let opens = !i && prev_ws && next.is_some_and(|n| !n.is_whitespace());
-                let closes = i && j > 0 && !chars[j - 1].is_whitespace();
-                if opens || closes {
-                    flush(&mut job, &mut buf, b, i, m, color);
-                    i = !i;
-                    put_mark(&mut job, &c.to_string(), b, i);
-                    j += 1;
-                    continue;
-                }
-            }
-            if c == '[' && next == Some('[') {
-                if let Some(end) = chars[j + 2..].windows(2).position(|w| w == [']', ']']) {
-                    flush(&mut job, &mut buf, b, i, m, color);
-                    let inner: String = chars[j + 2..j + 2 + end].iter().collect();
-                    if live {
-                        put_mark(&mut job, "[[", b, i);
-                        let mut s = inner;
-                        flush(&mut job, &mut s, b, i, m, accent);
-                        put_mark(&mut job, "]]", b, i);
-                    } else {
-                        let mut s = inner.split_once('|').map(|(_, s)| s.to_string()).unwrap_or_else(|| inner.split('#').next().unwrap_or("").to_string());
-                        flush(&mut job, &mut s, b, i, m, accent);
-                    }
-                    j += end + 4;
-                    continue;
-                }
-            }
-            if c == '#' && next.is_some_and(|n| n.is_alphanumeric()) && (j == 0 || chars[j - 1].is_whitespace()) {
-                flush(&mut job, &mut buf, b, i, m, color);
-                let mut tag = String::from("#");
-                j += 1;
-                while j < chars.len() && (chars[j].is_alphanumeric() || matches!(chars[j], '_' | '-' | '/')) {
-                    tag.push(chars[j]);
-                    j += 1;
-                }
-                job.append(&tag, 0.0, fmt(&reg, accent, m));
-                continue;
-            }
-            buf.push(c);
-            j += 1;
-        }
-        flush(&mut job, &mut buf, b, i, m, color);
-    }
-    // the first line indented (the rest at the box's edge)
-    let indent = it.style.indent as f32 * k;
-    if indent > 0.0 {
-        match job.sections.first_mut() {
-            Some(s) => s.leading_space = indent,
-            None => job.append("", indent, egui::TextFormat { font_id: egui::FontId::new(size, reg.clone()), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() }),
-        }
-    }
-    job
-}
-
-/// The rows of a laid-out text as rectangles of its page (mm): each from
-/// its first letter to its last, as tall as the row (an empty row, a blank
-/// line of the text, keeps a sliver at its start).
-pub fn ink_rows(g: &egui::Galley, at: Pos2, pv: &PageView) -> Vec<ateliet_core::canvas::Rect> {
-    g.rows.iter().map(|r| {
-        let (x0, x1) = match (r.glyphs.first(), r.glyphs.iter().rev().find(|g| !g.chr.is_whitespace())) {
-            (Some(a), Some(z)) => (a.pos.x, z.max_x()),
-            (Some(a), None) => (a.pos.x, a.pos.x + 1.0),
-            _ => (r.rect.min.x, r.rect.min.x + 1.0),
-        };
-        let a = pv.w(at + vec2(x0, r.rect.min.y));
-        let b = pv.w(at + vec2(x1, r.rect.max.y));
-        ateliet_core::canvas::Rect { x: a.0, y: a.1, w: (b.0 - a.0).max(0.5), h: b.1 - a.1 }
-    }).collect()
-}
-
-/// Where a text's galley goes for its rows to sit on the ruling.
-pub fn text_origin(galley: &egui::Galley, pv: &PageView, it: &Item) -> Pos2 {
-    let lh = line_px(it, &pv.lay, pv.k);
-    let base = galley.rows.iter().find_map(|r| r.glyphs.first().map(|g| g.pos.y - r.rect.min.y)).unwrap_or(lh * 0.78);
-    let top = pv.s((it.x, it.y));
-    // the first row's baseline on the line under the box's top
-    let mut x = top.x;
-    if it.style.align == "centro" {
-        x += it.w as f32 * pv.k / 2.0;
-    } else if it.style.align == "direita" {
-        x += it.w as f32 * pv.k;
-    }
-    pos2(x, top.y + lh - base - lh * 0.06)
-}
-
-/// Where the rows of a text start (char indices), laid out at the scale
-/// the page is shown at (so what is typed and what flows agree).
-pub fn row_starts(ctx: &egui::Context, it: &Item, text: &str, lay: &Layout, k: f32) -> Vec<usize> {
-    let job = live_job(it, text, lay, k, Color32::BLACK, Color32::BLACK);
-    let galley = ctx.fonts(|f| f.layout_job(job));
-    let mut out = Vec::with_capacity(galley.rows.len());
-    let mut n = 0;
-    for r in &galley.rows {
-        out.push(n);
-        n += r.glyphs.len() + usize::from(r.ends_with_newline);
-    }
-    if out.is_empty() {
-        out.push(0);
-    }
-    out
-}
-
 // ── items ─────────────────────────────────────────────────────────────────
 
 /// The polygon a picture's cut makes on screen (or its box), and where each
@@ -537,12 +261,26 @@ impl Journal {
         for it in &page.items {
             let clip = if it.across { pv.clip_across } else { pv.clip };
             let mut painter = ui.painter_at(clip);
+            let typed = editing.as_deref() == Some(it.id.as_str());
             // writing in the immersive mode: the rest steps back
-            if writing {
+            if writing && !typed {
                 painter.set_opacity(0.28);
             }
-            if editing.as_deref() == Some(it.id.as_str()) || cropping.as_deref() == Some(it.id.as_str()) {
+            if cropping.as_deref() == Some(it.id.as_str()) {
                 continue;
+            }
+            // the selection of the text being typed, under its letters; a
+            // picked text washed, as with a marker (no frame round the room
+            // it may take)
+            if typed {
+                self.draw_typed_selection(ui, &painter, b, it, pv, cx.palette.accent_soft.gamma_multiply(0.75));
+            } else if it.kind.is_text() && b.sel_page == pv.n && b.sel.contains(&it.id) {
+                if let Some(set) = self.shown.get(&pv.n).and_then(|s| s.set.get(&it.id)) {
+                    for r in set.ink() {
+                        let rr = Rect::from_min_max(pv.s((r.x - 0.6, r.y + r.h * 0.12)), pv.s((r.x + r.w + 0.6, r.y + r.h + 0.25)));
+                        painter.rect_filled(rr, 2.0, cx.palette.accent_soft.gamma_multiply(0.6));
+                    }
+                }
             }
             self.draw_item(ui, &painter, it, pv, cx, &path);
         }
@@ -559,13 +297,9 @@ impl Journal {
         let ctx = ctx.clone();
         match &it.kind {
             Kind::Text => {
-                let job = rich_job(it, it.content(), &pv.lay, pv.k, it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p)), p.accent_strong);
-                let g = ctx.fonts(|f| lay_out(f, it, job));
-                let at = text_origin(&g, pv, it);
-                if it.r == 0.0 {
-                    self.ink.insert(it.id.clone(), (pv.n, ink_rows(&g, at, pv)));
-                }
-                painter.galley(at, g, ink);
+                let color = it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p));
+                let rows = self.rows_of(&ctx, it, pv, source, p);
+                super::typeset::draw_rows(painter, rows, color);
             }
             Kind::Excerpt => {
                 let parts = journal::excerpt_parts(it.content());
@@ -580,23 +314,15 @@ impl Journal {
                     polygon(painter, &corners, None, slip);
                 }
                 let color = it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p));
-                let small = egui::FontId::new((line_px(it, &pv.lay, pv.k) * 0.5).clamp(5.0, 15.0), egui::FontFamily::Name("italic".into()));
                 // the source on the first row, the passage under it
-                let mut body = it.clone();
-                if !parts.title.is_empty() {
+                if !parts.title.is_empty() && it.flow.as_ref().is_none_or(|f| f.prev.is_none()) {
+                    let small = egui::FontId::new((line_px(it, &pv.lay, pv.k) * 0.5).clamp(5.0, 15.0), egui::FontFamily::Name("italic".into()));
                     let lh = pv.lay.paper.line() * it.style.lines();
-                    body.y += lh;
                     let base = pv.s((it.x, it.y + lh)).y - pv.len(lh * 0.22);
-                    painter.text(pos2(pv.s((it.x, 0.0)).x, base), egui::Align2::LEFT_BOTTOM, &parts.title, small.clone(), ink_color(p).gamma_multiply(0.55));
+                    painter.text(pos2(pv.s((it.x, 0.0)).x, base), egui::Align2::LEFT_BOTTOM, &parts.title, small, ink_color(p).gamma_multiply(0.55));
                 }
-                let mut job = rich_job(&body, &parts.text, &pv.lay, pv.k, color, p.accent_strong);
-                if !parts.foot.is_empty() {
-                    let lh = line_px(it, &pv.lay, pv.k);
-                    job.append(&format!("  — {}", plain_link(&parts.foot)), 0.0, egui::TextFormat { font_id: small, color: ink_color(p).gamma_multiply(0.55), line_height: Some(lh), valign: egui::Align::BOTTOM, ..Default::default() });
-                }
-                let g = ctx.fonts(|f| lay_out(f, &body, job));
-                let at = text_origin(&g, pv, &body);
-                painter.galley(at, g, color);
+                let rows = self.rows_of(&ctx, it, pv, source, p);
+                super::typeset::draw_rows(painter, rows, color);
             }
             Kind::Image | Kind::Sticker | Kind::Scan => self.draw_picture(painter, &ctx, it, pv, cx, source),
             Kind::Note => {
@@ -614,9 +340,11 @@ impl Journal {
                 inner.x += 1.5;
                 inner.w -= 3.0;
                 inner.y += 4.0;
-                let job = rich_job(&inner, &text, &pv.lay, pv.k, ink_color(p), p.accent_strong);
-                let g = ctx.fonts(|f| lay_out(f, &inner, job));
-                let at = text_origin(&g, pv, &inner);
+                let st = super::typeset::styled(&inner, &text, &pv.lay, pv.k, ink_color(p), p.accent_strong, None, None);
+                let mut job = st.job;
+                job.wrap.max_width = (inner.w as f32 * pv.k).max(4.0);
+                let g = ctx.fonts(|f| f.layout_job(job));
+                let at = pv.s((inner.x, inner.y));
                 let clip = painter.with_clip_rect(painter.clip_rect().intersect(Rect::from_min_max(r.min + vec2(0.0, head_h), r.max)));
                 clip.galley(at, g, ink_color(p));
             }
