@@ -1,7 +1,7 @@
 //! The reader in the app: a book (or the shelf) open in a tab, and the
-//! reader beside the Journal ("Ler ao lado"), whose passages and cuts go
-//! straight onto the open page. What the reader asks of the app comes
-//! back here.
+//! reader beside the Journal or the notes ("Ler ao lado"), whose passages
+//! and cuts go straight onto the open page, or into the note in use. What
+//! the reader asks of the app comes back here.
 
 use crate::app::{App, Mode, Tab};
 use crate::reader_ui::{Cx, Out, Reader, SHELF};
@@ -11,7 +11,7 @@ use eframe::egui;
 impl App {
     fn reader_cx(&self) -> Option<Cx<'_>> {
         let v = self.vault.as_ref()?;
-        Some(Cx { vault: v, palette: self.palette, config_dir: self.cfg.as_ref().map(|c| c.dir.clone()), journal_open: self.journal.book.is_some() })
+        Some(Cx { vault: v, palette: self.palette, config_dir: self.cfg.as_ref().map(|c| c.dir.clone()), journal_open: self.journal_mode && self.journal.book.is_some(), notes_beside: false })
     }
 
     /// A book of the vault (or the shelf) in the reader, at a place.
@@ -82,9 +82,14 @@ impl App {
                     self.open(&note, true);
                 }
                 Out::Snippet { note, snippet } => {
-                    if side && self.journal.book.is_some() {
+                    let embed = format!("![[{}]]\n", crate::vault::basename(&note).trim_end_matches(".md"));
+                    if side && self.journal_mode && self.journal.book.is_some() {
                         // beside the Journal: on the open page at once
                         self.journal.pending_snippets.push((note, snippet));
+                    } else if side && !self.journal_mode && self.embed_at_cursor(&embed).is_some() {
+                        // beside the notes: into the note in use, where its cursor is
+                        let into = self.active_tab().map(|t| crate::vault::basename(&t.path).trim_end_matches(".md").to_string()).unwrap_or_default();
+                        self.toast(format!("Trecho guardado em {note} e posto em {into}."));
                     } else if self.journal.book.is_some() {
                         self.journal.arrived = Some((note.clone(), snippet));
                         self.toast(format!("Trecho guardado em {note}. No Journal, ele espera para entrar na página aberta."));
@@ -92,14 +97,9 @@ impl App {
                         self.toast(format!("Trecho guardado em {note}."));
                     }
                 }
-                Out::Beside { file, at } => self.read_beside(Some((file, at))),
-                Out::CloseSide => {
-                    if let Some(mut r) = self.side_reader.take() {
-                        if let Some(cx) = self.reader_cx() {
-                            r.save_state(&cx);
-                        }
-                    }
-                }
+                Out::Beside { file, at, journal: true } => self.read_beside(Some((file, at))),
+                Out::Beside { file, at, journal: false } => self.read_beside_notes(Some((file, at))),
+                Out::CloseSide => self.close_side_reader(),
             }
         }
     }
@@ -123,16 +123,65 @@ impl App {
         }
     }
 
-    /// The reader beside the Journal, on the right of the window.
+    /// The notes with the reader beside them (a book at a place, or the
+    /// shelf). A tab showing that same book closes: the book moves beside.
+    pub fn read_beside_notes(&mut self, book: Option<(String, Option<Locator>)>) {
+        if let Some((file, _)) = &book {
+            if let Some(i) = self.tabs.iter().position(|t| t.reader.is_some() && &t.path == file) {
+                if let (Some(mut r), Some(cx)) = (self.tabs[i].reader.take(), self.reader_cx()) {
+                    r.save_state(&cx);
+                }
+                self.close_tab(i);
+            }
+        }
+        match (book, self.side_reader.as_mut()) {
+            (Some((file, at)), Some(r)) => r.request(&file, at),
+            (Some((file, at)), None) => {
+                let mut r = Reader::new(SHELF, true);
+                r.request(&file, at);
+                self.side_reader = Some(Box::new(r));
+            }
+            (None, Some(_)) => {}
+            (None, None) => self.side_reader = Some(Box::new(Reader::new(SHELF, true))),
+        }
+        self.images_mode = false;
+        self.journal_mode = false;
+        self.journal.save_all();
+        // the book takes the place of the right sidebar
+        self.right_open = false;
+        if self.focus.is_some() {
+            self.toggle_focus();
+        }
+    }
+
+    /// Close the reader beside, keeping where the book was left.
+    pub fn close_side_reader(&mut self) {
+        if let Some(mut r) = self.side_reader.take() {
+            if let Some(cx) = self.reader_cx() {
+                r.save_state(&cx);
+            }
+        }
+    }
+
+    /// The reader beside the Journal or the notes, on the right of the window.
     pub fn side_reader_ui(&mut self, ctx: &egui::Context) {
         let Some(mut r) = self.side_reader.take() else { return };
         let p = self.palette;
         let width = ctx.screen_rect().width();
+        // beside the notes, the space the sidebars leave; the notes keep a column
+        let (id, default, range) = if self.journal_mode {
+            ("leitor-ao-lado", (width * 0.46).max(360.0), (width * 0.36).max(320.0)..=(width * 0.7).max(400.0))
+        } else {
+            let avail = ctx.available_rect().width();
+            let max = (avail - 380.0).max(320.0);
+            ("leitor-ao-lado-notas", (avail * 0.5).clamp(320.0, max), 320.0_f32.min(max)..=max)
+        };
         let mut outs = Vec::new();
-        egui::SidePanel::right("leitor-ao-lado").resizable(true).show_separator_line(false).default_width((width * 0.46).max(360.0)).width_range((width * 0.36).max(320.0)..=(width * 0.7).max(400.0)).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
+        egui::SidePanel::right(id).resizable(true).show_separator_line(false).default_width(default).width_range(range).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
-            if let Some(cx) = self.reader_cx() {
+            if let Some(mut cx) = self.reader_cx() {
+                cx.notes_beside = !self.journal_mode;
                 outs = r.ui(ui, &cx);
             }
         });
@@ -143,7 +192,7 @@ impl App {
     /// Where each open book was left, saved.
     pub fn save_readers(&mut self) {
         let Some(v) = self.vault.as_ref() else { return };
-        let cx = Cx { vault: v, palette: self.palette, config_dir: self.cfg.as_ref().map(|c| c.dir.clone()), journal_open: false };
+        let cx = Cx { vault: v, palette: self.palette, config_dir: self.cfg.as_ref().map(|c| c.dir.clone()), journal_open: false, notes_beside: false };
         for t in &mut self.tabs {
             if let Some(r) = t.reader.as_mut() {
                 r.save_state(&cx);

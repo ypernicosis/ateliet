@@ -52,15 +52,17 @@ impl Reader {
                     if kit::icon_button(ui, g, tip, self.immersive, p).clicked() {
                         self.immersive = !self.immersive;
                     }
-                    if kit::icon_button(ui, icons::NOTEBOOK_PEN, "Ler ao lado do Journal", false, p).clicked() {
-                        let mut at = b.info(b.chap, b.page).map(|i| i.loc.clone());
-                        if let Some(l) = at.as_mut() {
-                            l.file = b.file.clone();
-                            if b.reflows() {
-                                l.chap = Some(b.chap);
+                    for (glyph, tip, journal) in [(icons::NOTEBOOK_PEN, "Ler ao lado do Journal", true), (icons::FILE_TEXT, "Ler ao lado das notas", false)] {
+                        if kit::icon_button(ui, glyph, tip, false, p).clicked() {
+                            let mut at = b.info(b.chap, b.page).map(|i| i.loc.clone());
+                            if let Some(l) = at.as_mut() {
+                                l.file = b.file.clone();
+                                if b.reflows() {
+                                    l.chap = Some(b.chap);
+                                }
                             }
+                            self.out.push(Out::Beside { file: b.file.clone(), at, journal });
                         }
-                        self.out.push(Out::Beside { file: b.file.clone(), at });
                     }
                 }
                 if kit::icon_button(ui, icons::CROP, "Recortar uma região (R)", b.tool == Tool::Crop, p).clicked() {
@@ -438,7 +440,8 @@ impl Book {
                             self.note_edit = Some((id, note));
                         }
                     }
-                    if kit::icon_button(ui, icons::NOTEBOOK_PEN, "Mandar ao Journal (guarda em Trechos/)", false, p).clicked() {
+                    let (glyph, tip) = if cx.notes_beside { (icons::FILE_TEXT, "Pôr na nota ao lado (guarda em Trechos/)") } else { (icons::NOTEBOOK_PEN, "Mandar ao Journal (guarda em Trechos/)") };
+                    if kit::icon_button(ui, glyph, tip, false, p).clicked() {
                         if let Some((note, snippet)) = self.keep_selection(cx, out) {
                             out.push(Out::Snippet { note, snippet });
                             self.sel = None;
@@ -489,7 +492,8 @@ impl Book {
         egui::Area::new(egui::Id::new(("leitor-cut", &self.file))).pivot(egui::Align2::CENTER_TOP).fixed_pos(pos2(r.center().x, r.bottom() + 8.0)).order(egui::Order::Foreground).constrain(true).show(&ctx, |ui| {
             egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.add_enabled_ui(ready, |ui| kit::button(ui, Some(icons::NOTEBOOK_PEN), if ready { "Mandar ao Journal" } else { "Preparando…" }, p)).inner.clicked() {
+                    let (glyph, label) = if cx.notes_beside { (icons::FILE_TEXT, "Pôr na nota") } else { (icons::NOTEBOOK_PEN, "Mandar ao Journal") };
+                    if ui.add_enabled_ui(ready, |ui| kit::button(ui, Some(glyph), if ready { label } else { "Preparando…" }, p)).inner.clicked() {
                         if let Some((note, snippet)) = self.keep_cut(cx, out) {
                             out.push(Out::Snippet { note, snippet });
                             self.cut = None;

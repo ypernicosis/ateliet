@@ -60,6 +60,7 @@ pub enum Cmd {
     SplitRight,
     ReaderShelf,
     ReaderBeside,
+    ReaderBesideNotes,
 }
 
 pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -86,6 +87,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::SendToJournal, "journal:send-selection", "Journal: Mandar a seleção ao Journal"),
     (Cmd::ReaderShelf, "leitor:estante", "Leitor: Abrir a estante (EPUB, PDF, quadrinhos)"),
     (Cmd::ReaderBeside, "leitor:ler-ao-lado", "Leitor: Ler ao lado do Journal"),
+    (Cmd::ReaderBesideNotes, "leitor:ler-ao-lado-das-notas", "Leitor: Ler ao lado das notas (ou fechar o leitor ao lado)"),
     (Cmd::NewStoryboard, "storyboard:new", "Storyboard: Novo storyboard"),
     (Cmd::NewQuadro, "quadro:new", "Novo quadro"),
     (Cmd::NewDrawing, "quadro:new-drawing", "Quadro: Novo desenho (Excalidraw)"),
@@ -211,18 +213,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
-        Cmd::SplitRight => {
-            if app.split.is_some() {
-                app.split = None;
-            } else if app.tabs.len() > 1 {
-                // the tab before (or after) the active one goes beside it
-                let j = if app.active > 0 { app.active - 1 } else { app.active + 1 };
-                app.split = Some(app.tabs[j].path.clone());
-                app.split_right = true;
-            } else {
-                app.toast("Abra outra nota para dividir a tela.");
-            }
-        }
+        Cmd::SplitRight => app.toggle_split(),
         Cmd::Pinterest => {
             if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
                 app.images.open(&root, ctx);
@@ -354,6 +345,14 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.journal_mode = false;
             app.images_mode = false;
             app.open_book(crate::reader_ui::SHELF, None, true);
+        }
+        Cmd::ReaderBesideNotes => {
+            if app.side_reader.is_some() && !app.journal_mode {
+                app.close_side_reader();
+            } else {
+                let book = app.tabs.get(app.active).and_then(|t| t.reader.as_ref()).and_then(|r| r.here());
+                app.read_beside_notes(book);
+            }
         }
         Cmd::ReaderBeside => {
             // the book of the active tab, where it is; else the shelf
