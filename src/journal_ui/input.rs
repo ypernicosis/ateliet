@@ -495,7 +495,7 @@ impl Journal {
             }
         }
         if resp.drag_stopped() {
-            self.release(b, views);
+            self.release(ui.ctx(), b, views, shift);
         }
         if resp.clicked() {
             let count = if resp.triple_clicked() { 3 } else if resp.double_clicked() { 2 } else { 1 };
@@ -552,11 +552,19 @@ impl Journal {
     }
 
     fn press(&mut self, ui: &egui::Ui, b: &mut Book, views: &[PageView], q: Pos2, shift: bool, alt: bool) {
-        // on the letters of the text being typed: the press starts a selection
-        if let Some((n, id)) = b.editing.as_ref().map(|e| (e.page, e.id.clone())).filter(|_| !alt && matches!(self.tool, Tool::Select | Tool::Write)) {
-            if let Some(pv) = views.iter().find(|v| v.n == n).cloned() {
-                let at = pv.w(q);
-                if self.shown.get(&n).and_then(|s| s.set.get(&id)).is_some_and(|set| typeset::on_letters(set, at)) {
+        // on the letters of a text: the press puts the cursor there and
+        // starts a selection, as in any editor. A text moves when it was
+        // picked first (`Esc`, or with others), or with `Alt`.
+        if !alt && matches!(self.tool, Tool::Select | Tool::Write) {
+            if let Some((pv, at)) = Self::at(views, q).map(|(pv, at)| (pv.clone(), at)) {
+                let n = pv.n;
+                let typing = b.editing.as_ref().map(|e| (e.page, e.id.clone()));
+                let id = typing.clone().filter(|(en, id)| *en == n && self.shown.get(&n).and_then(|s| s.set.get(id)).is_some_and(|set| typeset::on_letters(set, at))).map(|t| t.1).or_else(|| self.hit_at(b, n, at));
+                let text = id.filter(|id| b.page(n).and_then(|p| p.item(id)).is_some_and(|i| i.kind.is_text() && !i.locked));
+                let picked = |id: &str| b.editing.is_none() && b.sel_page == n && b.sel.iter().any(|s| s == id);
+                let same = |id: &str| typing.as_ref().is_some_and(|(en, eid)| *en == n && eid == id);
+                // (shift on another text adds it to the picked things)
+                if let Some(id) = text.filter(|id| !picked(id) && (!shift || same(id))) {
                     let c = self.char_near_point(ui.ctx(), b, &pv, &id, at);
                     self.click_text(b, n, &id, c, 1, shift);
                     b.drag = Some(Drag::Select);
@@ -831,10 +839,17 @@ impl Journal {
         }
     }
 
-    fn release(&mut self, b: &mut Book, views: &[PageView]) {
+    fn release(&mut self, ctx: &egui::Context, b: &mut Book, views: &[PageView], shift: bool) {
         b.guides.clear();
         let Some(d) = b.drag.take() else { return };
         match d {
+            // a press held still on the paper (egui makes it a drag after a
+            // while): a click
+            Drag::Marquee { page, start, now } if (now.0 - start.0).hypot(now.1 - start.1) < 1.0 => {
+                if let Some(q) = views.iter().find(|v| v.n == page).map(|pv| pv.s(start)) {
+                    self.click(ctx, b, views, q, shift, 1);
+                }
+            }
             Drag::Move { page, moved, .. } => {
                 if !moved {
                     b.uncheckpoint();
@@ -979,13 +994,20 @@ impl Journal {
             b.sel_page = n;
             return;
         }
-        if let Some((id, c)) = self.row_end_near(b, n, at) {
-            self.click_text(b, n, &id, Some(c), count.min(1), shift);
+        // past a row's end, writing goes on in that row; just before a
+        // row's start, where a text of its own has no room, it goes in there
+        let edge = self.row_edge_near(b, n, at);
+        if let Some((id, c, false)) = &edge {
+            self.click_text(b, n, id, Some(*c), count.min(1), shift);
             return;
         }
         b.commit_edit();
         b.sel.clear();
-        self.write_at(b, &pv, at);
+        if !self.write_at(b, &pv, at) {
+            if let Some((id, c, _)) = edge {
+                self.click_text(b, n, &id, Some(c), count.min(1), shift);
+            }
+        }
     }
 
     /// What is under a point of page `n`, topmost first: a text where its
