@@ -527,9 +527,10 @@ pub fn char_near(set: &Set, rows: &[Placed], pv: &PageView, at: (f64, f64)) -> O
     Some(d)
 }
 
-/// Is a point of the page (mm) on a text's letters (a little round them)?
+/// Is a point of the page (mm) on a text's letters (a millimetre round
+/// them: a click a square after them is on the paper)?
 pub fn on_letters(set: &Set, at: (f64, f64)) -> bool {
-    set.rows.iter().any(|r| at.1 >= r.base - set.row_h && at.1 <= r.base + 0.4 && at.0 >= r.x - 1.5 && at.0 <= r.x + r.width + 2.5)
+    set.rows.iter().any(|r| at.1 >= r.base - set.row_h && at.1 <= r.base + 0.4 && at.0 >= r.x - 1.0 && at.0 <= r.x + r.width + 1.0)
 }
 
 /// The text a set belongs to, drawn with its rows: the page's setting.
