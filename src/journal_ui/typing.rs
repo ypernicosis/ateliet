@@ -219,7 +219,8 @@ impl Journal {
         let mut right = c1;
         let mut left_ink = false;
         if let Some(sh) = self.shown.get(&pv.n) {
-            for t in &sh.set.texts {
+            // (as set this frame: a text just let go of is gone already)
+            for t in sh.set.texts.iter().filter(|t| b.page(pv.n).is_some_and(|p| p.item(&t.id).is_some())) {
                 for r in t.rows.iter().filter(|r| meets(r.base - t.row_h, r.base)) {
                     if r.x >= x {
                         right = right.min(r.x - wrap::GAP);
