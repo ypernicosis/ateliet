@@ -142,10 +142,10 @@ impl Journal {
         typeset::char_near(&set, &rows, pv, at).map(|d| st.buf_of(d))
     }
 
-    /// Paper beside a row's letters, on its line: just past their end (writing
-    /// goes on there, not in a new text), or just before their start, too
-    /// near them for a text of its own. The nearest such row: its text, the
-    /// char at that edge, and whether it is the row's start.
+    /// Paper beside a row's letters, on its line, where a new text has no
+    /// room: just past their end or just before their start. The nearest
+    /// such row: its text, the char at that edge, and whether it is the
+    /// row's start.
     pub fn row_edge_near(&self, b: &mut Book, n: usize, at: (f64, f64)) -> Option<(String, usize, bool)> {
         let sh = self.shown.get(&n)?;
         let mut best: Option<(f64, String, usize, bool)> = None;

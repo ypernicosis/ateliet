@@ -144,7 +144,8 @@ impl Columns {
     }
 }
 
-/// Space left free round the page's edges.
+/// Space left free round the page's edges (lined and plain paper; on grid
+/// and dot paper every square wholly on the page takes text).
 pub const MARGIN_TOP: f64 = 12.0;
 pub const MARGIN_BOTTOM: f64 = 10.0;
 pub const MARGIN_SIDE: f64 = 9.0;
@@ -189,7 +190,9 @@ impl Layout {
             Ruling::Grid | Ruling::Dot => {
                 let ys = even(h, s);
                 let xs = even(w, s);
-                let base: Vec<f64> = ys.iter().copied().filter(|&y| y >= MARGIN_TOP + s && y <= h - MARGIN_BOTTOM).collect();
+                // every square takes text, but those cut by the page's edge
+                // (and the bottom's, where the page number is)
+                let base: Vec<f64> = ys.iter().copied().filter(|&y| y >= s - 0.01 && y <= h - MARGIN_BOTTOM).collect();
                 (ys, xs, base)
             }
             Ruling::Lined | Ruling::Plain => {
@@ -207,7 +210,14 @@ impl Layout {
                 x
             }
         };
-        let (x0, x1) = (MARGIN_SIDE, w - MARGIN_SIDE);
+        let (x0, x1) = match paper.ruling {
+            Ruling::Grid | Ruling::Dot => {
+                let x0 = cols.iter().copied().find(|&x| x >= -0.01).unwrap_or(MARGIN_SIDE);
+                let x1 = cols.iter().copied().rev().find(|&x| x <= w + 0.01).unwrap_or(w - MARGIN_SIDE);
+                (x0, x1)
+            }
+            _ => (MARGIN_SIDE, w - MARGIN_SIDE),
+        };
         let mut header = None;
         let mut divider = None;
         let mut out_cols = vec![(x0, x1)];

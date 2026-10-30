@@ -961,9 +961,8 @@ impl Journal {
     }
 
     /// A click: on letters, the cursor goes there (no picking first; two
-    /// clicks pick a word, three a line); just past the end of a row, the
-    /// cursor goes to its end; on a picture or anything else, it is picked;
-    /// on the paper, writing starts right there.
+    /// clicks pick a word, three a line); on a picture or anything else, it
+    /// is picked; on the paper, writing starts right there.
     fn click(&mut self, ctx: &egui::Context, b: &mut Book, views: &[PageView], q: Pos2, shift: bool, count: u8) {
         let Some((pv, at)) = Self::at(views, q) else {
             b.commit_edit();
@@ -994,21 +993,14 @@ impl Journal {
             b.sel_page = n;
             return;
         }
-        // a text begun and left empty goes away now, and is in nobody's way
-        if b.editing.as_ref().is_some_and(|e| e.buf.trim().is_empty()) {
-            b.commit_edit();
-        }
-        // past a row's end, writing goes on in that row; just before a
-        // row's start, where a text of its own has no room, it goes in there
-        let edge = self.row_edge_near(b, n, at);
-        if let Some((id, c, false)) = &edge {
-            self.click_text(b, n, id, Some(*c), count.min(1), shift);
-            return;
-        }
+        // the typing is done (a text left empty goes away, out of the way)
         b.commit_edit();
         b.sel.clear();
+        // the paper takes a new text right where it is clicked; only where
+        // one has no room (too near the next letters), the click goes into
+        // the nearest row on that line
         if !self.write_at(b, &pv, at) {
-            if let Some((id, c, _)) = edge {
+            if let Some((id, c, _)) = self.row_edge_near(b, n, at) {
                 self.click_text(b, n, &id, Some(c), count.min(1), shift);
             }
         }
