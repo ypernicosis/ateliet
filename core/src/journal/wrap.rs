@@ -33,6 +33,11 @@ pub const GAP: f64 = 3.0;
 pub const GAP_Y: f64 = 1.2;
 /// The narrowest room a row is written in (mm).
 pub const MIN_ROW: f64 = 6.0;
+/// The narrowest a text begun by hand can be (mm): one in a gap between
+/// two others has that gap as its measure, however small.
+pub const NARROW: f64 = 2.0;
+/// Room kept between a text begun by hand and the letters after it (mm).
+pub const NEAR: f64 = 1.0;
 /// A text set first stops before a later one beside it only when this much
 /// room is left to it; nearer than that, the later one is in its way (under
 /// it) and goes down.
@@ -192,7 +197,7 @@ fn set_once(items: &[Item], lay: &Layout, prev: &PageSet, m: &mut dyn Measure, s
         let rh = s * it.style.lines();
         let rigid = it.kind == Kind::Excerpt;
         let head = if rigid && !super::excerpt_parts(it.content()).title.is_empty() { 1.0 } else { 0.0 };
-        let end = it.x + it.w.max(MIN_ROW);
+        let end = it.x + it.w.max(NARROW);
         let start0 = if rigid { it.x } else { it.x + it.style.indent.clamp(0.0, (it.w - MIN_ROW).max(0.0)) };
         let len = m.len(&it.id);
         let top0 = home(it);
