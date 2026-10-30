@@ -188,6 +188,12 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
                 app.journal_mode = !app.journal_mode;
                 app.images_mode = false;
             }
+            let reading = !app.images_mode && !app.journal_mode && app.active_tab().is_some_and(|t| t.reader.is_some());
+            if icon_button(ui, icons::BOOK_OPEN, "Leitor: estante de EPUB, PDF e quadrinhos", reading, p).clicked() {
+                app.images_mode = false;
+                app.journal_mode = false;
+                app.open_book(crate::reader_ui::SHELF, None, true);
+            }
             storyboards_button(app, ui, p);
             if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());

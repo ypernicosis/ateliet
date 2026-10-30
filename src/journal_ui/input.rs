@@ -358,6 +358,13 @@ impl Journal {
                 self.place(&ctx, &mut b, cx, &pv, at, Payload::Picture(key), false);
             }
         }
+        // excerpts and cuts from the reader beside: on the page on the right
+        let came = std::mem::take(&mut self.pending_snippets);
+        if let Some(pv) = views.last().cloned().filter(|_| !came.is_empty()) {
+            for (note, sn) in came {
+                self.place_snippet(&mut b, pv.n, &pv.lay, None, &note, &sn);
+            }
+        }
         self.pointer(ui, &mut b, cx, &views, &resp);
         self.drops(ui, &mut b, cx, &views);
         self.draw_selection(ui, &mut b, &views, p);

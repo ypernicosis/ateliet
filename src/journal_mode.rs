@@ -12,6 +12,10 @@ impl App {
         let Some(v) = self.vault.as_ref() else { return };
         let root = v.root.clone();
         self.images.open(&root, ctx);
+        // the reader beside takes the right of the window
+        self.journal.reading_beside = self.side_reader.is_some();
+        self.side_reader_ui(ctx);
+        let Some(v) = self.vault.as_ref() else { return };
         let outs = {
             let mut cx = Cx { vault: v, caches: &mut self.caches, palette: self.palette, images: &mut self.images, config_dir: self.cfg.as_ref().map(|c| c.dir.clone()), attach };
             self.journal.ui(ctx, &mut cx)
@@ -19,6 +23,13 @@ impl App {
         for o in outs {
             match o {
                 Out::Toast(t) => self.toast(t),
+                Out::Read(book) => {
+                    if book.is_none() && self.side_reader.is_some() {
+                        self.side_reader = None;
+                    } else {
+                        self.read_beside(book);
+                    }
+                }
                 Out::Rescan => {
                     if let Some(v) = self.vault.as_mut() {
                         v.rescan();

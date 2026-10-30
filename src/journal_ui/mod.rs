@@ -43,6 +43,9 @@ pub enum Out {
     Rescan,
     /// Open a note in the writing mode.
     Open(String),
+    /// Open a book in the reader beside the notebook (at a place); with
+    /// no book, the reader's shelf.
+    Read(Option<(String, Option<ateliet_core::reader::Locator>)>),
     /// Pages reordered: rename the files (their links follow), then set
     /// each page's number.
     Reorder { renames: Vec<(String, String)>, numbers: Vec<(String, usize)> },
@@ -214,11 +217,15 @@ pub struct Journal {
     notes: HashMap<String, (u64, String)>,
     /// The toolbar asked for the shelf.
     pub close_requested: bool,
+    /// The reader is open beside (set by the app each frame).
+    pub reading_beside: bool,
     /// Only the notebook on the screen: the app's ribbon, the panels and
     /// the bar go, the view comes close to what is being written.
     pub immersive: bool,
     /// Pictures sent from image mode, for the open page.
     pub pending_pictures: Vec<String>,
+    /// Excerpts from the reader beside, for the open page: (note, excerpt).
+    pub pending_snippets: Vec<(String, Snippet)>,
     /// Storyboards opened in the panel: path → their frames.
     pub boards: HashMap<String, (u64, BoardThumbs)>,
     /// The window cutting a storyboard, and the animations playing.
@@ -250,8 +257,10 @@ impl Default for Journal {
             snippets: HashMap::new(),
             notes: HashMap::new(),
             close_requested: false,
+            reading_beside: false,
             immersive: false,
             pending_pictures: Vec::new(),
+            pending_snippets: Vec::new(),
             boards: HashMap::new(),
             board_dlg: None,
             anims: HashMap::new(),
@@ -1168,6 +1177,29 @@ impl Journal {
     }
 
     /// An excerpt's note, read once per change.
+    /// The place in a book an item came from (an excerpt or a cut kept by
+    /// the reader), found through the page's sources.
+    pub fn reader_origin(&mut self, vault: &Vault, b: &mut Book, n: usize, it: &Item) -> Option<ateliet_core::reader::Locator> {
+        let page_path = b.page_ref(n).map(|r| r.path.clone()).unwrap_or_default();
+        let sources: Vec<String> = b.page(n)?.frontmatter().get("fontes").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(|s| s.trim_start_matches("[[").trim_end_matches("]]").to_string())).collect()).unwrap_or_default();
+        let picture = it.picture().map(|p| p.rsplit('/').next().unwrap_or(&p).to_string());
+        for link in sources {
+            let Some(path) = vault.resolve(&link, &page_path) else { continue };
+            let Some(s) = self.snippet(vault, &path) else { continue };
+            if s.origin != "leitor" {
+                continue;
+            }
+            let same = match it.kind {
+                Kind::Excerpt => s.section().trim() == it.content().trim() || (!s.text.is_empty() && it.content().contains(s.text.lines().next().unwrap_or(""))),
+                _ => picture.is_some() && s.image.as_ref().and_then(|i| i.rsplit('/').next()) == picture.as_deref(),
+            };
+            if same {
+                return s.source.locator.as_ref().and_then(ateliet_core::reader::Locator::from_json);
+            }
+        }
+        None
+    }
+
     pub fn snippet(&mut self, vault: &Vault, path: &str) -> Option<Snippet> {
         let mtime = vault.files.iter().find(|e| e.path == path).map(|e| e.mtime).unwrap_or(0);
         if self.snippets.get(path).is_none_or(|(m, _)| *m != mtime) {
