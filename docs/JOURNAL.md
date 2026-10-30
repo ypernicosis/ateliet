@@ -456,16 +456,51 @@ Cada textura: **linho** (fios irregulares nos dois sentidos, com nós e tons por
 
 ## 18. A digitação
 
-O que estava errado não era um detalhe, era o modelo: um texto era a sua caixa. A caixa de um texto começado no meio da linha vai de margem a margem, e a do editor ia até o fim da página; tudo o que caía dentro dela era "clicar no texto", inclusive o papel vazio ao lado de uma linha curta, abaixo do texto ou entre duas palavras distantes. Escrever onde o ponteiro está era impossível justamente onde mais se quer: ao lado do que já foi escrito. A arquitetura agora parte do papel:
+### O que estava errado
 
-- **Um texto é a sua tinta.** A cada desenho, cada texto registra onde estão as suas letras, linha por linha, em milímetros da página (o mapa de tinta). Acertar um texto é acertar as suas letras (com uma folga de pouco mais de um milímetro); o resto da caixa é papel. A caixa continua existindo, mas só como a largura em que o texto quebra.
-- **Clicar é escrever.** Num ponto com letras, o cursor vai para aquele caractere, sem passo de seleção. Num ponto de papel, começa um texto ali, na linha da pauta sob o ponteiro, mesmo dentro da caixa de outro texto. Arrastar letras move o texto; `Esc` termina a edição e deixa o texto selecionado (para apagar, mudar de camada, girar).
-- **O editor é do tamanho do texto.** Ele cobre as linhas do texto e mais uma (o espaço de digitar a próxima), não a página; um clique dentro dele mas fora das letras é papel: termina a edição e começa um texto no ponto. O clique que acabou de abrir um texto não conta como clique dentro dele.
-- **Dois textos na mesma linha não se cruzam.** Um texto novo para antes das letras que já estão à sua direita naquela linha; um texto de uma linha à sua esquerda passa a quebrar antes dele; e, com letras à esquerda, o texto novo não volta à margem nas linhas seguintes (ficaria debaixo delas), segue alinhado onde começou.
-- **Crescer nunca escreve por cima.** Quando um texto cresce (digitado no Journal, no modo notas, colado), o que ele passaria a tocar abaixo da sua primeira linha desce, até a linha da pauta logo abaixo; o que esse descer toca desce também, em cascata; o que passa do fim da página vai para a seguinte. O que não está no caminho não se mexe.
-- **O que se vê é o que se acerta.** A seleção de um texto contorna as suas letras, e o ponteiro é o cursor de texto sobre o papel e sobre as letras (o de mover sobre imagens e o resto).
+Duas versões seguidas trataram sintomas. A primeira fazia de um texto a sua caixa: clicar dentro da caixa era clicar no texto, e escrever ao lado de uma linha curta era impossível. A segunda passou a acertar o texto pelas suas letras (um "mapa de tinta" anotado a cada desenho), mas manteve todo o resto: um campo de edição do egui (`TextEdit`) por cima da página, com o seu próprio layout, o seu foco e as suas regras de clique; a altura e a largura de cada texto decididas no clique e guardadas na caixa; e uma função à parte ("abrir espaço") que empurrava para baixo o que a caixa de um texto que crescia tocava. Eram três geometrias diferentes do mesmo texto: a caixa, a tinta e o campo de edição. Cada defeito vinha de duas delas discordarem. O vídeo de 30/10 mostra os quatro:
 
-Esses princípios valem para a escrita imersiva (digitar sem clicar começa nas primeiras linhas livres depois do que está na coluna) e para o modo notas (o que se escreve lá entra na página e empurra o que estiver embaixo).
+1. Um texto curto ("e assim também"), começado no meio da linha, tinha a caixa até a margem. Quando a coluna estreita da direita cresceu para baixo, as caixas se cruzaram e o texto, que não estava no caminho, foi empurrado; ao passar do fim da página, foi parar no alto da página seguinte, por cima do que já estava lá.
+2. A largura de um texto era a distância até o vizinho no momento do clique, com 1 mm de folga: a última linha encostava nas letras do lado.
+3. O balão de formatação ficava sobre as linhas de cima e pulava de lugar enquanto se digitava; um clique no papel podia cair nele.
+4. A moldura pontilhada continuava aparecendo.
+
+### Como funciona agora
+
+Há uma geometria só para o texto: as linhas em que ele foi composto. Tudo o que se desenha, se acerta com o ponteiro, se empurra ou se seleciona sai dela.
+
+- **O tipógrafo da página** (`core/src/journal/wrap.rs`). Cada quadro, cada página na tela é composta de novo. Os textos são compostos em ordem de leitura: pela linha em que foram postos, depois da esquerda para a direita. Cada linha de um texto é escrita no espaço que a sua linha da pauta tem naquela altura: do começo da linha até o que vier a seguir (as letras de outro texto, uma imagem colada) ou até o fim da medida do texto. A caixa do texto (`y`, `h`) é escrita de volta a partir das linhas; ela é consequência, não causa.
+- **Quem vem primeiro tem a linha.** Um texto cujas primeiras letras cairiam sob uma linha de outro composto antes desce uma linha. O que esse empurrão empurra desce também, porque é composto depois. Um texto que não está no caminho não se mexe: a colisão é entre letras e o começo de uma linha, nunca entre caixas.
+- **Ao lado não é embaixo.** Um texto começado numa linha que outro já ocupava está ao lado dele, e o primeiro passa a quebrar antes das letras do segundo nessas linhas, quando sobra uma coluna de pelo menos 15 mm. Um texto começado abaixo está no caminho e desce quando o de cima cresce até ele. É isso que mantém de pé as colunas escritas lado a lado.
+- **Imagens ficam coladas.** Imagens, digitalizações e notas embutidas não são empurradas. O texto passa em volta delas: ao lado de uma imagem as linhas ficam mais curtas; onde ela ocupa a coluna inteira, o texto continua na primeira linha livre abaixo. Há 3 mm de folga dos lados e 1,2 mm em cima e embaixo. Adesivos, fita e traços ficam por cima da página, e o texto passa por baixo deles. Um texto escrito sobre uma imagem (começado dentro dela) não a contorna.
+- **Empurrado volta.** Um texto empurrado guarda onde foi posto (`home`, no bloco da página) e volta para lá quando há espaço de novo, por exemplo quando o texto de cima é apagado. Um texto movido à mão passa a morar onde foi solto.
+- **O que não cabe segue.** O que passa da última linha continua na caixa seguinte, na página seguinte (criada se preciso), e o cursor vai junto. Uma caixa que encurtou pega texto de volta da seguinte. Um texto sem nenhuma linha livre na página vai para o alto da página seguinte e empurra o que está lá, em vez de ficar por cima.
+- **Quebrar numa escala, desenhar em outra.** As linhas são quebradas uma vez, numa escala fixa (6 px por milímetro), nunca na escala da tela. Aproximar e afastar não muda nenhuma palavra de linha. Como o egui arredonda o tamanho da fonte para pixels inteiros, cada linha desenhada sai um pouco mais larga ou mais estreita do que foi medida; o espaço entre as letras é ajustado para ela ter exatamente a largura medida.
+
+### O editor
+
+Não há mais campo de edição por cima da página. O que se digita entra direto no texto, a página é composta de novo e as letras digitadas são as letras da página.
+
+- **O cursor é um caractere do texto.** Onde ele aparece, para onde vai um clique e para onde levam as setas vem das linhas compostas. Para cima e para baixo seguem a linha visual e guardam a coluna; `Home`/`End` (`Cmd+←`/`→` no Mac) vão ao começo e ao fim da linha visual; `Alt` (`Ctrl` fora do Mac) anda e apaga por palavra; `Cmd+↑`/`↓` vai ao começo e ao fim do texto.
+- **Seleção.** `Shift` com as setas, arrastar sobre as letras do texto em edição, dois cliques para uma palavra, três para a linha. A seleção é um lavado de marca-texto sob as letras. Copiar, recortar e colar funcionam, e `Ctrl/Cmd+B` e `Ctrl/Cmd+I` põem ou tiram `**` e `*` em volta da seleção.
+- **Listas.** `Enter` numa linha de lista começa outro item; num item vazio, encerra a lista.
+- **Acentos e métodos de entrada.** O que o método de entrada está compondo (o `´` antes do `á`) entra no lugar do cursor, sublinhado, e é trocado pelo resultado. O app informa ao sistema onde está o cursor, para a janela de sugestões aparecer ao lado dele.
+- **Desfazer.** Uma pausa de mais de 1,2 s começa um passo novo de desfazer; `Ctrl/Cmd+Z` dentro do texto desfaz e continua a digitação onde estava.
+- **Marcas só onde se digita.** `**`, `==`, `#`, `[[ ]]` e `- ` ficam escondidos, como na leitura, exceto na linha onde está o cursor, onde aparecem esmaecidos (como na pré-visualização ao vivo do Obsidian). Cada caractere desenhado sabe de que caractere do texto veio, então clicar num texto formatado põe o cursor no lugar certo.
+- **Clicar é escrever.** Clicar nas letras põe o cursor ali. Clicar logo depois do fim de uma linha continua aquela linha. Clicar no papel começa um texto naquele ponto, com a medida até o que vem a seguir na linha (com 3 mm de folga) ou até o fim da coluna. Fora das letras, o clique é papel.
+- **Nada flutua sobre a escrita.** Enquanto se digita, a barra e o balão somem. Quando o ponteiro se mexe, a barra volta e mostra a fonte, o tamanho, a margem, as linhas, o alinhamento e a cor do texto em edição. O balão fica para o que está selecionado (`Esc` termina a digitação e seleciona o texto), ancorado nas letras e não na caixa. Não há moldura em volta de texto nenhum: um texto selecionado aparece com as letras lavadas.
+
+### Os erros previstos e como a arquitetura os evita
+
+- *Duas geometrias discordando* (caixa × tinta × editor): há uma só, as linhas compostas.
+- *Mapa de tinta velho* (um quadro atrasado, apagado, de uma página fora da tela): as linhas são calculadas antes de desenhar, a partir do modelo, inclusive para páginas fora da tela.
+- *Quebra diferente no zoom* e *texto medido numa escala e desenhado em outra*: a quebra é feita numa escala fixa, e o desenho é ajustado à largura medida.
+- *Empurrar o que não está no caminho*: a colisão é entre letras e o começo de uma linha, não entre caixas.
+- *Empurrar para outra página por cima do que lá está*: o texto entra na página seguinte como o primeiro da ordem de leitura e empurra, sem cobrir.
+- *Oscilação* (dois textos cedendo um ao outro alternadamente): um texto só cede a outro que começou numa linha que ele já ocupava e que começa na posição natural da linha, nunca a uma linha que já foi deslocada por ele. A composição se repete até nada mudar, no máximo quatro vezes, partindo da composição anterior.
+- *Teclas escapando para os atalhos da página*: enquanto há digitação, o teclado é do texto (o foco do egui fica com ele), exceto quando um campo de texto aberto por cima, como "ir para a página", está com o foco.
+- *Clique processado duas vezes, foco perdido para um botão do balão, editor engolindo cliques no papel*: não há mais editor por cima da página nem balão durante a digitação.
+- *Quebras de linha no fim do texto*: o texto em edição guarda as quebras do fim, que a nota não guarda; elas valem enquanto se digita.
 
 ## Fontes consultadas
 

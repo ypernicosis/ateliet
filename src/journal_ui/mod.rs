@@ -4,7 +4,9 @@
 //! the next page, pictures cut and pasted over it.
 //!
 //! - `draw`   — paper, ruling, spine and the items.
-//! - `input`  — pointer and keyboard on the spread; the text being typed.
+//! - `input`  — pointer and keyboard on the spread.
+//! - `typeset` — text as it shows and as it is set in rows on the ruling.
+//! - `typing` — the text being typed: keys, cursor, selection.
 //! - `chrome` — the toolbar that hides, the balloon by the selection, and
 //!   the material panels (pictures, notes, excerpts).
 //! - `shelf`  — the shelf, the new notebook, the page thumbnails.
@@ -15,13 +17,16 @@ mod chrome;
 mod draw;
 mod input;
 mod shelf;
+mod typeset;
+mod typing;
 
 use crate::host::Caches;
 use crate::vault::Vault;
 use ateliet_core::capture::{self, Snippet};
+use ateliet_core::journal::wrap::{self, PageSet};
 use ateliet_core::journal::{self, format, Item, Kind, Layout, Notebook, Page, PageRef};
 use eframe::egui;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -121,16 +126,48 @@ enum Drag {
     Ink { page: usize, id: String, last: (f64, f64), at: Instant },
     Shape { page: usize, id: String, start: (f64, f64) },
     Marquee { page: usize, start: (f64, f64), now: (f64, f64) },
+    /// Letters of the text being typed, swept over: the selection.
+    Select,
     Crop { k: String, r0: ateliet_core::moodboard::Rect, start: (f64, f64) },
     Pan,
 }
 
-/// The text of a box being typed.
+/// The text being typed. It goes into its box as it is typed (the box
+/// keeps it without the line breaks at its end, which only the typing has).
 pub struct Editing {
     pub page: usize,
     pub id: String,
     pub buf: String,
+    /// Begun here: gone if nothing is typed in it.
     pub new: bool,
+    /// The cursor, and the other end of the selection (chars of `buf`).
+    pub cursor: usize,
+    pub anchor: usize,
+    /// What the input method is composing (chars of `buf`), not typed yet.
+    pub ime: Option<(usize, usize)>,
+    /// Where up and down keep to (screen x) while they are pressed.
+    pub goal: Option<f32>,
+    /// When the last change was typed (a pause starts a new undo step).
+    pub typed: Option<Instant>,
+}
+
+impl Editing {
+    pub fn new(page: usize, id: &str, buf: String, new: bool, cursor: Option<usize>) -> Editing {
+        let c = cursor.unwrap_or(usize::MAX).min(buf.chars().count());
+        Editing { page, id: id.to_string(), buf, new, cursor: c, anchor: c, ime: None, goal: None, typed: None }
+    }
+
+    /// The selection, first to last (empty: the cursor).
+    pub fn range(&self) -> (usize, usize) {
+        (self.cursor.min(self.anchor), self.cursor.max(self.anchor))
+    }
+}
+
+/// A page as it is on the screen this frame: its texts set, and as they show.
+pub struct Shown {
+    pub path: String,
+    pub set: PageSet,
+    pub styled: HashMap<String, typeset::Styled>,
 }
 
 /// What the spread shows.
@@ -157,7 +194,6 @@ pub struct Book {
     pub sel: Vec<String>,
     drag: Option<Drag>,
     pub editing: Option<Editing>,
-    focus_edit: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     guides: Vec<(usize, ateliet_core::canvas::Guide)>,
@@ -170,26 +206,23 @@ pub struct Book {
     backup_dir: Option<PathBuf>,
     /// The cover as a page: the index note.
     cover_ref: PageRef,
-    /// A text box to lay out again (after typing, resizing, a drop).
-    pub pending_reflow: Vec<(usize, String)>,
+    /// Pages to set again even when they are not on the screen (a text went
+    /// on to them, they were read from disk).
+    pub unsettled: BTreeSet<usize>,
+    /// Texts whose next box may have room to give back (they got shorter).
+    pub repull: HashSet<String>,
+    /// The typing went on to another page: it is shown.
+    pub follow: Option<usize>,
     /// The ink item strokes are being added to, and when the last ended.
     last_ink: Option<(usize, String, Instant)>,
     /// Horizontal scrolling gathered toward a page turn.
     swipe: f32,
-    /// Where the cursor goes when typing starts (a char index).
-    edit_cursor: Option<usize>,
-    /// Typing ran past the page's last line: once the text is laid out
-    /// again, go on in the next box — (the box typed in, how long the
-    /// next box's text was before).
-    continue_edit: Option<(String, usize)>,
     /// A page turn being shown: when, and which way (1 forward).
     turned: Option<(Instant, f32)>,
     /// Where the cursor of the text being typed is on screen.
     caret: Option<egui::Pos2>,
     /// The view was brought close by the immersive mode (and goes back).
     auto_zoom: bool,
-    /// Where the typing cursor was last frame (it stays lit after a move).
-    last_cursor: Option<egui::epaint::text::cursor::Cursor>,
 }
 
 pub struct Journal {
@@ -235,10 +268,13 @@ pub struct Journal {
     cover_tex: HashMap<String, CoverTex>,
     /// Covers of the shelf's notebooks: index note → (modified, cover page).
     covers: HashMap<String, (u64, Page)>,
-    /// Where each text's letters are, row by row (mm of its page), as last
-    /// drawn: a text is where its ink is, not its box, so the paper beside
-    /// a short line is still paper to write on.
-    pub ink: HashMap<String, (usize, Vec<ateliet_core::canvas::Rect>)>,
+    /// Each page's last setting (by its note): where its texts' rows are.
+    sets: HashMap<String, PageSet>,
+    /// The pages on the screen this frame, set: what is drawn, hit and typed
+    /// in is this, and only this (a text is where its letters are).
+    pub shown: HashMap<usize, Shown>,
+    /// Where the cursor was last frame (it stays lit after it moves).
+    caret_key: Option<(usize, String, usize, usize)>,
     /// A notebook to be deleted, waiting for a yes.
     pub delete_dlg: Option<Notebook>,
 }
@@ -271,7 +307,9 @@ impl Default for Journal {
             board_dlg: None,
             anims: HashMap::new(),
             cover_tex: HashMap::new(),
-            ink: HashMap::new(),
+            sets: HashMap::new(),
+            shown: HashMap::new(),
+            caret_key: None,
             delete_dlg: None,
             covers: HashMap::new(),
         }
@@ -351,7 +389,6 @@ impl Book {
             sel: Vec::new(),
             drag: None,
             editing: None,
-            focus_edit: false,
             undo: Vec::new(),
             redo: Vec::new(),
             guides: Vec::new(),
@@ -362,15 +399,14 @@ impl Book {
             goto: None,
             backup_dir,
             cover_ref: PageRef { path: String::new(), number: 0, title: String::new(), date: None },
-            pending_reflow: Vec::new(),
+            unsettled: BTreeSet::new(),
+            repull: HashSet::new(),
+            follow: None,
             last_ink: None,
             swipe: 0.0,
-            edit_cursor: None,
-            continue_edit: None,
             turned: None,
             caret: None,
             auto_zoom: false,
-            last_cursor: None,
         };
         b.cover_ref.path = b.nb.path.clone();
         if b.nb.pages.is_empty() {
@@ -398,16 +434,22 @@ impl Book {
     }
 
     pub fn go_to(&mut self, page: usize) {
-        self.commit_edit();
+        let to = (page.clamp(1, self.count().max(1)) / 2).min(self.spreads() - 1);
+        // the typing goes on when its page is still shown (it went on there)
+        if self.look == Look::Cover || self.editing.as_ref().is_some_and(|e| e.page / 2 != to) {
+            self.commit_edit();
+        }
         if self.look == Look::Cover {
             self.look = Look::Spread;
         }
         let before = self.spread;
-        self.spread = (page.clamp(1, self.count().max(1)) / 2).min(self.spreads() - 1);
+        self.spread = to;
         if self.spread != before {
             self.turned = Some((Instant::now(), if self.spread > before { 1.0 } else { -1.0 }));
         }
-        self.sel.clear();
+        if self.editing.is_none() {
+            self.sel.clear();
+        }
         self.crop = None;
         // the immersive mode's close view follows the writing to the new page
         if !self.auto_zoom {
@@ -489,11 +531,11 @@ impl Book {
             if n > 0 {
                 let lay = self.layout_for(n, &l.page);
                 adopt_notes_text(&mut l, &lay);
-                // a box whose height does not match its text (written in the
-                // notes mode while the Journal was closed) is laid out again
-                // (all of them: only those that do not fit change)
-                for it in l.page.items.iter().filter(|i| i.kind.is_text() && i.flow.as_ref().is_none_or(|f| f.prev.is_none())) {
-                    self.pending_reflow.push((n, it.id.clone()));
+                // its texts are set again (written in the notes mode while the
+                // Journal was closed, a box may not match its text)
+                self.unsettled.insert(n);
+                for it in l.page.items.iter().filter(|i| i.flow.as_ref().is_some_and(|f| f.next.is_some())) {
+                    self.repull.insert(it.id.clone());
                 }
             }
             self.loaded.insert(path.clone(), l);
@@ -611,10 +653,6 @@ impl Book {
     /// changed there meanwhile is merged.
     pub fn save(&mut self, now: bool, out: &mut Vec<Out>) {
         let busy = self.drag.is_some();
-        // the text being typed goes into its box (it is still being typed)
-        if self.loaded.values().any(|l| l.dirty) {
-            self.sync_edit();
-        }
         let due: Vec<String> = self.loaded.iter().filter(|(_, l)| l.dirty && (now || (!busy && l.changed_at.is_some_and(|t| t.elapsed() > Duration::from_millis(1500))))).map(|(k, _)| k.clone()).collect();
         for path in due {
             let backup = self.backup_path(&path);
@@ -708,13 +746,14 @@ impl Book {
             if n > 0 {
                 let lay = self.layout_for(n, &l.page);
                 adopt_notes_text(&mut l, &lay);
-                // texts changed in the note: their boxes grow (or shrink) to
-                // fit, and push down what is under them
+                // texts changed in the note are set again: their boxes grow
+                // (or shrink) to fit, and push down what is under them
+                self.unsettled.insert(n);
                 let old = self.loaded.get(&k).map(|o| o.page.clone());
-                for it in l.page.items.iter().filter(|i| i.kind.is_text()) {
+                for it in l.page.items.iter().filter(|i| i.flow.as_ref().is_some_and(|f| f.next.is_some())) {
                     let before = old.as_ref().and_then(|o| o.item(&it.id)).map(|o| o.content().to_string());
                     if before.as_deref() != Some(it.content()) {
-                        self.pending_reflow.push((n, it.id.clone()));
+                        self.repull.insert(it.id.clone());
                     }
                 }
             }
@@ -825,98 +864,175 @@ impl Book {
         None
     }
 
-    /// The boxes of the text that `id` belongs to, first to last.
-    fn chain(&mut self, page: usize, id: &str) -> Vec<(usize, String)> {
-        let mut first = (page, id.to_string());
-        let mut guard = 0;
-        loop {
-            let prev = self.page(first.0).and_then(|p| p.item(&first.1)).and_then(|i| i.flow.as_ref()).and_then(|f| f.prev.clone());
-            match prev.and_then(|p| self.find(&p).map(|(n, _)| (n, p))) {
-                Some(f) if guard < 400 => {
-                    first = f;
-                    guard += 1;
-                }
-                _ => break,
-            }
+    /// The text of a box as it is now (the one being typed: as typed).
+    pub fn text_now(&mut self, n: usize, id: &str) -> Option<String> {
+        if let Some(e) = self.editing.as_ref().filter(|e| e.page == n && e.id == id) {
+            return Some(e.buf.clone());
         }
-        let mut out = vec![first.clone()];
-        let mut cur = first;
-        while out.len() < 400 {
-            let next = self.page(cur.0).and_then(|p| p.item(&cur.1)).and_then(|i| i.flow.as_ref()).and_then(|f| f.next.clone());
-            match next.and_then(|nx| self.find(&nx).map(|(n, _)| (n, nx))) {
-                Some(nx) if !out.contains(&nx) => {
-                    out.push(nx.clone());
-                    cur = nx;
-                }
-                _ => break,
-            }
-        }
-        out
+        self.page(n).and_then(|p| p.item(id)).map(flow_text)
     }
 
-    /// Lay the text of a box's chain out again: each box holds what fits
-    /// down to its page's last line, the rest goes to the next box (one is
-    /// made on the next page when there is none), boxes left empty go.
-    /// Returns the pages touched.
-    pub fn reflow(&mut self, page: usize, id: &str, m: &mut dyn FnMut(&Item, &str, &Layout) -> Vec<usize>) -> Vec<usize> {
-        let chain = self.chain(page, id);
-        let mut text = String::new();
-        let mut excerpt: Option<journal::ExcerptParts> = None;
-        for (k, (n, id)) in chain.iter().enumerate() {
-            let Some(it) = self.page(*n).and_then(|p| p.item(id)).cloned() else { continue };
-            if k > 0 && it.flow.as_ref().is_some_and(|f| f.para) {
-                text.push('\n');
+    /// What is being typed, into its box (it goes in as it is typed).
+    pub fn store_typing(&mut self) {
+        let Some((n, id, buf)) = self.editing.as_ref().map(|e| (e.page, e.id.clone(), e.buf.clone())) else { return };
+        let mut more = false;
+        if let Some(slot) = self.page(n).and_then(|p| p.item_mut(&id)) {
+            let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
+            let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
+            let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
+            set_flow_text(slot, &buf, ex.as_ref(), first, last);
+            more = !last;
+        }
+        self.edited_body(n, &id);
+        self.touch(n);
+        // shorter, it may take text back from the next box
+        if more {
+            self.repull.insert(id);
+        }
+    }
+
+    /// Put text in a box (and in what is being typed, when it is that box).
+    pub fn set_text(&mut self, n: usize, id: &str, text: &str) {
+        if let Some(e) = self.editing.as_mut().filter(|e| e.page == n && e.id == id) {
+            let len = text.chars().count();
+            e.buf = text.to_string();
+            e.cursor = e.cursor.min(len);
+            e.anchor = e.anchor.min(len);
+            e.ime = None;
+        }
+        if let Some(slot) = self.page(n).and_then(|p| p.item_mut(id)) {
+            let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
+            let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
+            let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
+            set_flow_text(slot, text, ex.as_ref(), first, last);
+        }
+        self.edited_body(n, id);
+        self.touch(n);
+    }
+
+    /// Set page `n`: its texts in rows on the ruling (`journal::wrap`), each
+    /// box where its rows are. A text pushed past the last line goes to the
+    /// next page; what does not fit in a box goes on in the next one; a box
+    /// that got shorter takes its text back from the next. `prev` is the
+    /// page's last setting; the new one comes back.
+    pub fn settle(&mut self, ctx: &egui::Context, n: usize, prev: Option<&PageSet>) -> Option<PageSet> {
+        let lay = self.layout(n);
+        let typing = self.editing.as_ref().filter(|e| e.page == n).map(|e| (e.id.clone(), e.buf.clone(), e.cursor));
+        let skip: Vec<String> = match &self.drag {
+            Some(Drag::Move { page, orig, moved: true, .. }) if *page == n => orig.iter().map(|o| o.0.clone()).collect(),
+            _ => Vec::new(),
+        };
+        let items = self.page(n)?.items.clone();
+        let t = typing.as_ref().map(|(a, b, c)| (a.as_str(), b.as_str(), *c));
+        let texts = typeset::styled_page(&items, &lay, typeset::K_REF, t, egui::Color32::BLACK, egui::Color32::BLACK);
+        let set = typeset::set_page(ctx, &items, &lay, &texts, prev, &skip);
+        let mut changed = false;
+        let mut off = Vec::new();
+        let mut over = Vec::new();
+        let page = self.page(n)?;
+        for t in &set.texts {
+            let Some(it) = page.item_mut(&t.id) else { continue };
+            if t.off {
+                off.push(t.id.clone());
+                continue;
             }
-            text.push_str(&flow_text(&it));
-            if it.kind == Kind::Excerpt && excerpt.is_none() {
-                excerpt = Some(journal::excerpt_parts(it.content()));
+            if (it.y - t.top).abs() > 0.005 {
+                // pushed: where it was put is kept, to go back to
+                if it.home.is_none() {
+                    it.home = Some(it.y);
+                }
+                it.y = t.top;
+                changed = true;
+            }
+            if it.home.is_some_and(|h| (h - it.y).abs() < 0.01) {
+                it.home = None;
+                changed = true;
+            }
+            if (it.h - t.height).abs() > 0.005 {
+                it.h = t.height;
+                changed = true;
+            }
+            if t.overflows() {
+                over.push((t.id.clone(), texts[&t.id].buf_of(t.placed)));
             }
         }
-        let mut touched = Vec::new();
-        let mut rest = text;
-        let mut k = 0;
-        let mut boxes = chain.clone();
-        let mut para = false;
-        while k < boxes.len() {
-            let (n, id) = boxes[k].clone();
-            let lay = self.layout(n);
-            let Some(mut it) = self.page(n).and_then(|p| p.item(&id)).cloned() else { break };
-            // an excerpt's first box shows its source on the first row
-            let head = usize::from(k == 0 && excerpt.as_ref().is_some_and(|e| !e.title.is_empty()));
-            let cap = lay.rows_from(it.y, it.style.lines()).saturating_sub(head).max(1);
-            let starts = m(&it, &rest, &lay);
-            let (mine, more, breaks_para) = if starts.len() > cap {
-                let cut = char_byte(&rest, starts[cap]);
-                let (a, b) = rest.split_at(cut);
-                let nl = a.ends_with('\n');
-                (a.trim_end_matches('\n').to_string(), b.to_string(), nl)
-            } else {
-                (std::mem::take(&mut rest), String::new(), false)
-            };
-            let rows = starts.len().min(cap).max(1);
-            let last = more.is_empty();
-            set_flow_text(&mut it, &mine, excerpt.as_ref(), k == 0, last);
-            let old_bottom = it.y + it.h;
-            it.h = (rows + head) as f64 * lay.paper.line() * it.style.lines();
-            // grown: what is under it in its column goes down with it
-            let grew = (it.y + it.h > old_bottom + 0.01).then_some((it.x, it.x + it.w, old_bottom, it.y + it.h));
-            let mut flow = it.flow.clone().unwrap_or_default();
-            flow.para = k > 0 && para;
-            if last {
-                // what came after holds nothing now
-                for (dn, did) in boxes.drain(k + 1..) {
-                    if let Some(p) = self.page(dn) {
-                        p.items.retain(|i| i.id != did);
-                        touched.push(dn);
-                    }
+        if changed {
+            self.touch(n);
+        }
+        for id in off {
+            self.move_on(n, &id);
+        }
+        for (id, at) in over {
+            self.overflow(n, &id, at);
+        }
+        let pulls: Vec<String> = set.texts.iter().filter(|t| !t.off && !t.overflows() && self.repull.contains(&t.id)).map(|t| t.id.clone()).collect();
+        for id in pulls {
+            self.repull.remove(&id);
+            self.pull(n, &id);
+        }
+        Some(set)
+    }
+
+    /// A text with no room left on page `n` goes to the top of the next page
+    /// (and pushes down what is there, as it is set first).
+    fn move_on(&mut self, n: usize, id: &str) {
+        if n == 0 || self.editing.as_ref().is_some_and(|e| e.id == id) {
+            return;
+        }
+        let Some(mut it) = self.page(n).and_then(|p| p.item(id)).cloned() else { return };
+        // alone on its page, there is nowhere better
+        if it.locked || self.page_ro(n).is_some_and(|p| p.items.iter().filter(|i| wrap::is_set(i)).count() <= 1) {
+            return;
+        }
+        let next = if n >= self.count() { self.append_page("") } else { n + 1 };
+        let nl = self.layout(next);
+        it.y = nl.first_baseline() - nl.paper.line() * it.style.lines();
+        it.home = None;
+        if let Some(p) = self.page(n) {
+            p.items.retain(|i| i.id != id);
+        }
+        if let Some(p) = self.page(next) {
+            p.items.push(it);
+        }
+        self.sel.retain(|s| s != id);
+        self.touch(n);
+        self.touch(next);
+        self.unsettled.insert(next);
+    }
+
+    /// Text `id` of page `n` holds more than fits: what is from char `at`
+    /// on goes on in the next box (one is made on the next page, in the same
+    /// place of its column, when there is none). Typing past the end goes
+    /// on there too.
+    fn overflow(&mut self, n: usize, id: &str, at: usize) {
+        let Some(text) = self.text_now(n, id) else { return };
+        let cut = char_byte(&text, at);
+        if cut >= text.len() {
+            return;
+        }
+        let (head, tail) = text.split_at(cut);
+        let para = head.ends_with('\n');
+        let head = head.strip_suffix('\n').unwrap_or(head).to_string();
+        let tail = tail.to_string();
+        let Some(it) = self.page(n).and_then(|p| p.item(id)).cloned() else { return };
+        let ex = (it.kind == Kind::Excerpt).then(|| journal::excerpt_parts(it.content()));
+        let next = it.flow.as_ref().and_then(|f| f.next.clone()).and_then(|nx| self.find(&nx).map(|(nn, _)| (nn, nx)));
+        let (nn, nid, joined) = match next {
+            Some((nn, nid)) => {
+                let before = self.text_now(nn, &nid).unwrap_or_default();
+                let was_para = self.page(nn).and_then(|p| p.item(&nid)).and_then(|i| i.flow.as_ref()).is_some_and(|f| f.para);
+                let joined = if before.is_empty() { tail.clone() } else { format!("{tail}{}{before}", if was_para { "\n" } else { "" }) };
+                if let Some(f) = self.page(nn).and_then(|p| p.item_mut(&nid)).and_then(|i| i.flow.as_mut()) {
+                    f.para = para;
                 }
-                flow.next = None;
-            } else if k + 1 == boxes.len() {
-                // a box on the next page, in the same place on its column
-                let next_n = if n >= self.count() { self.append_page("") } else { n + 1 };
+                (nn, nid, joined)
+            }
+            None => {
+                let nn = if n >= self.count() { self.append_page("") } else { n + 1 };
                 // the same column on the next page (the margin goes to the
                 // margin even when the pages mirror it), at the same place in it
-                let nl = self.layout(next_n);
+                let lay = self.layout(n);
+                let nl = self.layout(nn);
                 let here = lay.column_at(it.x + it.w / 2.0);
                 let in_margin = lay.margin.is_some_and(|m| lay.columns[m] == here);
                 let idx = lay.columns.iter().position(|c| *c == here).unwrap_or(0);
@@ -930,149 +1046,93 @@ impl Book {
                 let off = (it.x - here.0).max(0.0);
                 let x = (c0 + off).min(c1 - 10.0);
                 let w = if (it.x + it.w - here.1).abs() < 1.0 { c1 - x } else { it.w.min(c1 - x) };
-                let mut nx = Item::new(it.kind.clone(), x, nl.text_top(nl.first_baseline() - 0.01, it.style.lines()), w, 10.0);
+                let mut nx = Item::new(it.kind.clone(), x, nl.first_baseline() - nl.paper.line() * it.style.lines(), w, nl.paper.line());
                 nx.style = it.style.clone();
-                nx.flow = Some(journal::Flow { prev: Some(id.clone()), next: None, para: breaks_para });
-                nx.set_content("");
+                nx.style.indent = 0.0;
+                nx.flow = Some(journal::Flow { prev: Some(id.to_string()), next: None, para });
+                set_flow_text(&mut nx, "", ex.as_ref(), false, true);
                 let nid = nx.id.clone();
-                if let Some(p) = self.page(next_n) {
+                if let Some(p) = self.page(nn) {
                     p.items.push(nx);
                 }
-                flow.next = Some(nid.clone());
-                boxes.push((next_n, nid));
-                touched.push(next_n);
-            } else {
-                flow.next = Some(boxes[k + 1].1.clone());
-            }
-            if k > 0 {
-                flow.prev = Some(boxes[k - 1].1.clone());
-            }
-            it.flow = (flow.prev.is_some() || flow.next.is_some()).then_some(flow);
-            if let Some(p) = self.page(n) {
-                if let Some(slot) = p.item_mut(&id) {
-                    if *slot != it {
-                        *slot = it;
-                        touched.push(n);
-                    }
+                if let Some(slot) = self.page(n).and_then(|p| p.item_mut(id)) {
+                    let mut f = slot.flow.clone().unwrap_or_default();
+                    f.next = Some(nid.clone());
+                    slot.flow = Some(f);
                 }
+                (nn, nid, tail.clone())
             }
-            if let Some((x0, x1, old_b, new_b)) = grew {
-                touched.extend(self.make_room(n, &id, (x0, x1), old_b, new_b));
-            }
-            para = breaks_para;
-            rest = more;
-            k += 1;
+        };
+        // the cursor in what went on: the typing goes on there
+        let follow = self.editing.as_ref().filter(|e| e.page == n && e.id == id && e.cursor > head.chars().count()).map(|e| (e.cursor.saturating_sub(at), e.typed));
+        self.set_text(n, id, &head);
+        self.set_text(nn, &nid, &joined);
+        if let Some((c, typed)) = follow {
+            let mut e = Editing::new(nn, &nid, joined, false, Some(c));
+            e.typed = typed;
+            self.editing = Some(e);
+            self.sel_page = nn;
+            self.sel = vec![nid.clone()];
+            self.follow = Some(nn);
         }
-        touched.sort();
-        touched.dedup();
-        for &n in &touched {
-            self.touch(n);
-            let id = boxes.iter().filter(|(bn, _)| *bn == n).map(|(_, i)| i.clone()).collect::<Vec<_>>();
-            for i in id {
-                self.edited_body(n, &i);
-            }
-        }
-        touched
+        self.unsettled.insert(nn);
     }
 
-    /// What is being typed, into its box, without ending the typing.
-    fn sync_edit(&mut self) {
-        let Some((n, id, buf)) = self.editing.as_ref().map(|e| (e.page, e.id.clone(), e.buf.clone())) else { return };
-        if let Some(slot) = self.page(n).and_then(|p| p.item_mut(&id)) {
-            if flow_text(slot) == buf {
-                return;
-            }
-            let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
-            let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
-            let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
-            set_flow_text(slot, &buf, ex.as_ref(), first, last);
+    /// Text `id` of page `n` has room again: the next box's text comes back
+    /// into it (what does not fit goes on again when it is set); a next box
+    /// left empty with none after it goes.
+    fn pull(&mut self, n: usize, id: &str) {
+        let Some(nid) = self.page(n).and_then(|p| p.item(id)).and_then(|i| i.flow.as_ref()).and_then(|f| f.next.clone()) else { return };
+        let Some((nn, _)) = self.find(&nid) else { return };
+        if self.editing.as_ref().is_some_and(|e| e.id == nid) {
+            return;
         }
-        self.edited_body(n, &id);
+        let Some(nx) = self.page(nn).and_then(|p| p.item(&nid)).cloned() else { return };
+        let more = flow_text(&nx);
+        let para = nx.flow.as_ref().is_some_and(|f| f.para);
+        let mine = self.text_now(n, id).unwrap_or_default();
+        let joined = if more.is_empty() { mine } else { format!("{mine}{}{more}", if para { "\n" } else { "" }) };
+        let after = nx.flow.as_ref().and_then(|f| f.next.clone());
+        if after.is_none() {
+            if let Some(p) = self.page(nn) {
+                p.items.retain(|i| i.id != nid);
+            }
+            if let Some(slot) = self.page(n).and_then(|p| p.item_mut(id)) {
+                if let Some(f) = slot.flow.as_mut() {
+                    f.next = None;
+                }
+                if slot.flow.as_ref().is_some_and(|f| f.prev.is_none()) {
+                    slot.flow = None;
+                }
+                // an excerpt's source link comes back to its last box
+                if slot.kind == Kind::Excerpt {
+                    let mut ex = journal::excerpt_parts(slot.content());
+                    ex.foot = journal::excerpt_parts(nx.content()).foot;
+                    let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
+                    set_flow_text(slot, &ex.text.clone(), Some(&ex), first, true);
+                }
+            }
+            self.touch(nn);
+        } else {
+            self.set_text(nn, &nid, "");
+            if let Some(f) = self.page(nn).and_then(|p| p.item_mut(&nid)).and_then(|i| i.flow.as_mut()) {
+                f.para = false;
+            }
+        }
+        self.set_text(n, id, &joined);
+        self.unsettled.insert(nn);
     }
 
-    /// A text on page `n` grew down to `new_bottom`: whatever it would now
-    /// run into, under its first line and across its width, goes down
-    /// below it, and so on down the page (what that moved runs into goes
-    /// down in turn): nothing is ever written over. Texts moved are laid out
-    /// again (what passes the last line goes on to the next page); anything
-    /// moved past the page goes to the top of the next one. Things not in
-    /// the way do not move. The pages touched come back.
-    fn make_room(&mut self, n: usize, id: &str, (x0, x1): (f64, f64), old_bottom: f64, new_bottom: f64) -> Vec<usize> {
-        if new_bottom <= old_bottom + 0.01 {
-            return Vec::new();
-        }
-        let lay = self.layout(n);
-        let s = lay.paper.line();
-        let Some(top) = self.page(n).and_then(|p| p.item(id)).map(|i| i.y) else { return Vec::new() };
-        let mut texts = Vec::new();
-        let mut off: Vec<Item> = Vec::new();
-        if let Some(p) = self.page(n) {
-            // what is taken: the grown text, then each thing as it settles
-            let mut taken = vec![ateliet_core::canvas::Rect { x: x0, y: top, w: x1 - x0, h: new_bottom - top }];
-            let mut order: Vec<usize> = (0..p.items.len()).filter(|&k| {
-                let it = &p.items[k];
-                it.id != id && !it.locked && it.bbox().y > top + 0.5
-            }).collect();
-            order.sort_by(|a, b| p.items[*a].bbox().y.total_cmp(&p.items[*b].bbox().y));
-            for k in order {
-                let bb = p.items[k].bbox();
-                let below = taken.iter().filter(|t| t.intersects(&ateliet_core::canvas::Rect { x: bb.x + 0.3, y: bb.y + 0.3, w: (bb.w - 0.6).max(0.1), h: (bb.h - 0.6).max(0.1) })).map(|t| t.y + t.h).fold(f64::NEG_INFINITY, f64::max);
-                if below.is_finite() && below > bb.y {
-                    let it = &mut p.items[k];
-                    // down to the next line of the ruling under what it hit
-                    let d = below - bb.y;
-                    it.y += (d / s).ceil() * s;
-                    let past = if it.kind.is_text() { it.y > lay.last_baseline() - s + 0.01 } else { it.y + it.h > lay.h - 4.0 };
-                    if past {
-                        off.push(it.clone());
-                        continue;
-                    }
-                    if it.kind.is_text() {
-                        texts.push(it.id.clone());
-                    }
-                    taken.push(it.bbox());
-                } else {
-                    taken.push(bb);
-                }
-            }
-            let gone: Vec<String> = off.iter().map(|i| i.id.clone()).collect();
-            p.items.retain(|i| !gone.contains(&i.id));
-        }
-        let mut touched = vec![n];
-        for t in texts {
-            self.pending_reflow.push((n, t));
-        }
-        if !off.is_empty() {
-            let next = if n >= self.count() { self.append_page("") } else { n + 1 };
-            let nl = self.layout(next);
-            let mut top = nl.first_baseline() - nl.paper.line();
-            for mut it in off {
-                it.y = top;
-                top += it.h.max(nl.paper.line());
-                let tid = it.id.clone();
-                let text = it.kind.is_text();
-                if let Some(p) = self.page(next) {
-                    p.items.push(it);
-                }
-                if text {
-                    self.pending_reflow.push((next, tid));
-                }
-            }
-            touched.push(next);
-        }
-        touched
-    }
-
-    /// End typing: the text goes into its box (and the boxes after it).
+    /// End typing. The text is in its box already (it went in as it was
+    /// typed); a new text left empty goes away.
     pub fn commit_edit(&mut self) {
         let Some(e) = self.editing.take() else { return };
         let Some(it) = self.page(e.page).and_then(|p| p.item(&e.id)).cloned() else { return };
-        let empty = e.buf.trim().is_empty();
-        if empty && it.flow.is_none() && it.kind == Kind::Text {
+        if e.buf.trim().is_empty() && it.flow.is_none() && it.kind == Kind::Text {
             if let Some(p) = self.page(e.page) {
                 p.items.retain(|i| i.id != e.id);
             }
-            if e.new {
+            if e.new && e.typed.is_none() {
                 self.uncheckpoint();
             } else {
                 self.touch(e.page);
@@ -1080,23 +1140,11 @@ impl Book {
             self.sel.retain(|s| s != &e.id);
             return;
         }
-        if flow_text(&it) == e.buf && !e.new {
-            // nothing typed since the box was last saved: lay it out again
-            // all the same (what was saved while typing has not flowed yet)
-            self.pending_reflow.push((e.page, e.id));
-            return;
+        // set again without the line breaks only the typing had
+        self.unsettled.insert(e.page);
+        if it.flow.as_ref().is_some_and(|f| f.next.is_some()) {
+            self.repull.insert(e.id);
         }
-        if let Some(p) = self.page(e.page) {
-            if let Some(slot) = p.item_mut(&e.id) {
-                let ex = (slot.kind == Kind::Excerpt).then(|| journal::excerpt_parts(slot.content()));
-                let last = slot.flow.as_ref().is_none_or(|f| f.next.is_none());
-                let first = slot.flow.as_ref().is_none_or(|f| f.prev.is_none());
-                set_flow_text(slot, &e.buf, ex.as_ref(), first, last);
-            }
-        }
-        self.edited_body(e.page, &e.id);
-        self.touch(e.page);
-        self.pending_reflow.push((e.page, e.id));
     }
 }
 

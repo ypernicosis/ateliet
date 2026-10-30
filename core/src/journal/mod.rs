@@ -15,6 +15,7 @@
 //! - `cut`    — a picture cut out with its mask, for the sticker drawer.
 //! - `storyboard` — the frames of a storyboard, drawn to paste on a page.
 //! - `texture` — the cover's textures, made from its colour.
+//! - `wrap`   — where a page's texts go, row by row, round what is in the way.
 //!
 //! Lengths are millimetres of the page, from its top left corner.
 
@@ -23,6 +24,7 @@ pub mod format;
 pub mod paper;
 pub mod storyboard;
 pub mod texture;
+pub mod wrap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -312,6 +314,10 @@ pub struct Item {
     pub wrap: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flow: Option<Flow>,
+    /// Where a text was put (the top of its box) when something above it
+    /// has pushed it down: it goes back up there when there is room again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home: Option<f64>,
     #[serde(default, skip_serializing_if = "is_default")]
     pub style: TextStyle,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -356,6 +362,7 @@ impl Item {
             anchor: None,
             wrap: None,
             flow: None,
+            home: None,
             style: TextStyle::default(),
             strokes: Vec::new(),
             pts: Vec::new(),
@@ -372,6 +379,9 @@ impl Item {
         let r = |v: &mut f64, k: f64| *v = (*v * k).round() / k;
         for v in [&mut self.x, &mut self.y, &mut self.w, &mut self.h, &mut self.r] {
             r(v, 100.0);
+        }
+        if let Some(h) = self.home.as_mut() {
+            r(h, 100.0);
         }
         if let Some(c) = self.crop.as_mut() {
             for v in [&mut c.x, &mut c.y, &mut c.w, &mut c.h] {

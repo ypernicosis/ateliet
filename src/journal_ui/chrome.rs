@@ -26,7 +26,8 @@ impl Journal {
         let recent = self.seen.elapsed() < Duration::from_millis(2200);
         let near_foot = ctx.input(|i| i.pointer.hover_pos()).is_some_and(|h| h.y > canvas.bottom() - 90.0 && canvas.contains(h));
         let show = recent || near_foot || self.tool != Tool::Select || b.drag.is_none() && !b.sel.is_empty() || self.panel.is_some() || b.goto.is_some();
-        let writing = b.editing.is_some();
+        // typing: the toolbar and the balloon stay away until the pointer moves
+        let writing = self.quiet(b);
         let t = ctx.animate_bool_with_time(egui::Id::new("journal-chrome"), show && !writing, 0.12);
         if t < 1.0 && show {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -37,7 +38,7 @@ impl Journal {
         if t > 0.01 {
             self.toolbar(ui, b, cx, canvas, t);
         }
-        if b.drag.is_none() && !(self.immersive && writing) {
+        if b.drag.is_none() && b.editing.is_none() {
             self.balloon(ui, b, cx, views);
         }
         if b.look == Look::Cover {
@@ -82,7 +83,12 @@ impl Journal {
                             self.tool = tool;
                         }
                     }
-                    if self.tool == Tool::Write {
+                    // the text being typed: its type, here (no balloon over the writing)
+                    let typed = b.editing.as_ref().map(|e| (e.page, e.id.clone())).and_then(|(n, id)| b.page(n).and_then(|pg| pg.item(&id)).cloned().map(|it| (n, it)));
+                    if let Some((n, it)) = typed {
+                        sep(ui, p);
+                        self.text_controls(ui, b, n, &it, true, p);
+                    } else if self.tool == Tool::Write {
                         let cur = b.nb.font.clone().unwrap_or_else(|| "tema".into());
                         if let Some(f) = font_menu(ui, "journal-nb-font", &cur, true, p).filter(|f| *f != cur) {
                             b.set_setting("fonte", (f != "tema").then_some(f.as_str()));
@@ -225,7 +231,16 @@ impl Journal {
         if items.is_empty() {
             return;
         }
-        let bb = items.iter().map(|i| i.bbox()).reduce(|a, c| {
+        // a text is where its letters are
+        let ink = |i: &Item| -> Option<ateliet_core::canvas::Rect> {
+            let set = self.shown.get(&n).and_then(|s| s.set.get(&i.id))?;
+            set.ink().into_iter().reduce(|a, c| {
+                let x0 = a.x.min(c.x);
+                let y0 = a.y.min(c.y);
+                ateliet_core::canvas::Rect { x: x0, y: y0, w: (a.x + a.w).max(c.x + c.w) - x0, h: (a.y + a.h).max(c.y + c.h) - y0 }
+            })
+        };
+        let bb = items.iter().map(|i| if i.kind.is_text() { ink(i).unwrap_or_else(|| i.bbox()) } else { i.bbox() }).reduce(|a, c| {
             let x0 = a.x.min(c.x);
             let y0 = a.y.min(c.y);
             ateliet_core::canvas::Rect { x: x0, y: y0, w: (a.x + a.w).max(c.x + c.w) - x0, h: (a.y + a.h).max(c.y + c.h) - y0 }
@@ -265,6 +280,52 @@ impl Journal {
         });
     }
 
+    /// A text's type: font, size, margin, lines, alignment, colour (in the
+    /// balloon by a picked text, in the toolbar while one is typed).
+    fn text_controls(&mut self, ui: &mut egui::Ui, b: &mut Book, n: usize, it: &Item, above: bool, p: crate::theme::Palette) {
+        let id = it.id.clone();
+            let current = super::draw::effective_font(it).to_string();
+            if let Some(f) = font_menu(ui, ("journal-font", &id), &current, above, p) {
+                edit_item(b, n, &id, |i| i.style.font = f);
+                b.unsettled.insert(n);
+            }
+            if let Some(sz) = size_menu(ui, ("journal-size", &id), it.style.size(), above, p) {
+                edit_item(b, n, &id, |i| i.style.size = if (sz - 1.0).abs() < 1e-6 { 0.0 } else { sz });
+                b.unsettled.insert(n);
+            }
+            // writing begun mid-line: back to the margin, or kept there
+            let lay = b.layout(n);
+            let (c0, c1) = lay.column_at(it.x + it.w / 2.0);
+            if it.style.indent > 0.0 || it.x > c0 + 0.5 {
+                let to_margin = it.style.indent > 0.0;
+                let tip = if to_margin { "As linhas seguintes voltam à margem da coluna (clique: manter onde o texto começa)" } else { "As linhas seguintes começam onde o texto começa (clique: voltar à margem da coluna)" };
+                if kit::icon_button(ui, if to_margin { icons::CORNER_DOWN_LEFT } else { icons::ALIGN_LEFT }, tip, to_margin, p).clicked() {
+                    edit_item(b, n, &id, |i| {
+                        if to_margin {
+                            i.x += i.style.indent;
+                            i.w -= i.style.indent;
+                            i.style.indent = 0.0;
+                        } else {
+                            i.style.indent = ((i.x - c0) * 100.0).round() / 100.0;
+                            i.w = c1 - c0;
+                            i.x = c0;
+                        }
+                    });
+                    b.unsettled.insert(n);
+                }
+            }
+            let big = it.style.lines() > 1.0;
+            if kit::icon_button(ui, icons::HEADING, if big { "Uma linha da pauta" } else { "Duas linhas da pauta (maior)" }, big, p).clicked() {
+                edit_item(b, n, &id, |i| i.style.lines = if big { 0.0 } else { 2.0 });
+                b.unsettled.insert(n);
+            }
+            let (g, name, next) = align_step(&it.style.align);
+            if kit::icon_button(ui, g, &format!("Alinhamento: {name} (clique: o próximo)"), false, p).clicked() {
+                edit_item(b, n, &id, |i| i.style.align = next.to_string());
+            }
+            self.swatches(ui, b, n, &id, INKS, |i, c| i.style.color = c, it.style.color.clone(), p);
+    }
+
     /// The part of the balloon that depends on what the item is.
     fn balloon_for(&mut self, ui: &mut egui::Ui, b: &mut Book, cx: &mut Cx, n: usize, it: &Item) {
         let p = cx.palette;
@@ -284,48 +345,9 @@ impl Journal {
         match &it.kind {
             Kind::Text | Kind::Excerpt => {
                 if b.editing.is_none() && kit::icon_button(ui, icons::PENCIL, "Editar (Enter)", false, p).clicked() {
-                    self.edit(b, n, &id, false);
+                    self.edit(b, n, &id, None);
                 }
-                let current = super::draw::effective_font(it).to_string();
-                if let Some(f) = font_menu(ui, ("journal-font", &id), &current, false, p) {
-                    edit_item(b, n, &id, |i| i.style.font = f);
-                    b.pending_reflow.push((n, id.clone()));
-                }
-                if let Some(sz) = size_menu(ui, ("journal-size", &id), it.style.size(), false, p) {
-                    edit_item(b, n, &id, |i| i.style.size = if (sz - 1.0).abs() < 1e-6 { 0.0 } else { sz });
-                    b.pending_reflow.push((n, id.clone()));
-                }
-                // writing begun mid-line: back to the margin, or kept there
-                let lay = b.layout(n);
-                let (c0, c1) = lay.column_at(it.x + it.w / 2.0);
-                if it.style.indent > 0.0 || it.x > c0 + 0.5 {
-                    let to_margin = it.style.indent > 0.0;
-                    let tip = if to_margin { "As linhas seguintes voltam à margem da coluna (clique: manter onde o texto começa)" } else { "As linhas seguintes começam onde o texto começa (clique: voltar à margem da coluna)" };
-                    if kit::icon_button(ui, if to_margin { icons::CORNER_DOWN_LEFT } else { icons::ALIGN_LEFT }, tip, to_margin, p).clicked() {
-                        edit_item(b, n, &id, |i| {
-                            if to_margin {
-                                i.x += i.style.indent;
-                                i.w -= i.style.indent;
-                                i.style.indent = 0.0;
-                            } else {
-                                i.style.indent = ((i.x - c0) * 100.0).round() / 100.0;
-                                i.w = c1 - c0;
-                                i.x = c0;
-                            }
-                        });
-                        b.pending_reflow.push((n, id.clone()));
-                    }
-                }
-                let big = it.style.lines() > 1.0;
-                if kit::icon_button(ui, icons::HEADING, if big { "Uma linha da pauta" } else { "Duas linhas da pauta (maior)" }, big, p).clicked() {
-                    edit_item(b, n, &id, |i| i.style.lines = if big { 0.0 } else { 2.0 });
-                    b.pending_reflow.push((n, id.clone()));
-                }
-                let (g, name, next) = align_step(&it.style.align);
-                if kit::icon_button(ui, g, &format!("Alinhamento: {name} (clique: o próximo)"), false, p).clicked() {
-                    edit_item(b, n, &id, |i| i.style.align = next.to_string());
-                }
-                self.swatches(ui, b, n, &id, INKS, |i, c| i.style.color = c, it.style.color.clone(), p);
+                self.text_controls(ui, b, n, it, false, p);
                 if it.kind == Kind::Excerpt {
                     if let Some(loc) = self.reader_origin(cx.vault, b, n, it) {
                         if kit::icon_button(ui, icons::BOOK_OPEN, "Abrir no Leitor, no ponto do trecho", false, p).clicked() {
@@ -509,7 +531,10 @@ impl Journal {
             p.items.push(c);
         }
         b.touch(n);
-        self.edit(b, n, &id, true);
+        self.edit(b, n, &id, None);
+        if let Some(e) = b.editing.as_mut() {
+            e.new = true;
+        }
     }
 
     /// The picture cut out as it shows, kept in the drawer (`Adesivos/`).
