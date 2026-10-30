@@ -86,7 +86,14 @@ impl Snippet {
 
     /// The note's file name: the source and the start of the text.
     pub fn file_name(&self) -> String {
-        let words: String = self.text.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
+        let mut words: String = self.text.split_whitespace().take(7).collect::<Vec<_>>().join(" ");
+        // a picture with no text: named after the picture
+        if words.is_empty() {
+            if let Some(img) = &self.image {
+                let name = img.rsplit('/').next().unwrap_or(img);
+                words = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name).to_string();
+            }
+        }
         let base = match self.source.title.trim() {
             "" => words,
             t => format!("{t} – {words}"),

@@ -23,6 +23,8 @@ mod media_ui;
 mod music;
 mod panels;
 mod quadro_ui;
+mod reader_mode;
+mod reader_ui;
 mod sc;
 mod settings_pages;
 mod templater;

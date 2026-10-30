@@ -42,6 +42,8 @@ pub struct Tab {
     pub quadro: Option<Box<crate::quadro_ui::QuadroEditor>>,
     /// A Scriptorium screen (the library…) instead of a note.
     pub view: Option<crate::sc::View>,
+    /// A book (EPUB, PDF, comic) open in the reader, or the shelf.
+    pub reader: Option<Box<crate::reader_ui::Reader>>,
     /// Paths this tab showed before (back) and after going back (forward).
     pub back: Vec<String>,
     pub fwd: Vec<String>,
@@ -63,6 +65,9 @@ impl Tab {
     pub fn title(&self) -> String {
         if let Some(q) = &self.quadro {
             return q.title();
+        }
+        if let Some(r) = &self.reader {
+            return r.title();
         }
         match &self.view {
             Some(v) => v.title(),
@@ -170,6 +175,8 @@ pub struct App {
     /// The Journal's notebooks fill the window (the third mode).
     pub journal_mode: bool,
     pub journal: crate::journal_ui::Journal,
+    /// The reader beside the Journal ("Ler ao lado").
+    pub side_reader: Option<Box<crate::reader_ui::Reader>>,
     pub images: crate::images_ui::ImagesState,
     pub sc: Option<crate::sc::Sc>,
     pub binder: crate::sc::binder::Binder,
@@ -238,6 +245,7 @@ impl App {
             images: Default::default(),
             journal_mode: false,
             journal: Default::default(),
+            side_reader: None,
             sc: None,
             binder: Default::default(),
             form: None,
@@ -302,7 +310,7 @@ impl App {
         // reopen the tabs of the last session
         if let Some(tabs) = session["tabs"].as_array() {
             for t in tabs.iter().filter_map(|t| t.as_str()) {
-                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() {
+                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() || t == crate::reader_ui::SHELF {
                     self.open(t, true);
                 }
             }
@@ -356,7 +364,7 @@ impl App {
                 self.active = i;
                 return;
             }
-            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
+            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
             if new_tab || self.tabs.is_empty() {
                 self.tabs.push(tab);
                 self.active = self.tabs.len() - 1;
@@ -364,6 +372,10 @@ impl App {
                 self.replace_active(tab);
             }
             self.save_session();
+            return;
+        }
+        if path == crate::reader_ui::SHELF || ateliet_core::reader::format_of(path).is_some() {
+            self.open_book(path, None, new_tab);
             return;
         }
         let lower = path.to_lowercase();
@@ -418,7 +430,7 @@ impl App {
                 _ => None,
             };
             if let Some(view) = view {
-                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), back: Vec::new(), fwd: Vec::new() };
+                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
@@ -432,7 +444,7 @@ impl App {
             }
         }
         let text = if is_board || is_quadro { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, back: Vec::new(), fwd: Vec::new() };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
         tab.board = board;
         tab.quadro = quadro;
         if new_tab || self.tabs.is_empty() {
@@ -448,7 +460,7 @@ impl App {
     }
 
     /// Show `tab` in place of the active one; the history moves along.
-    fn replace_active(&mut self, mut tab: Tab) {
+    pub(crate) fn replace_active(&mut self, mut tab: Tab) {
         self.save_tab(self.active);
         let old = &mut self.tabs[self.active];
         let (mut back, mut fwd) = (std::mem::take(&mut old.back), std::mem::take(&mut old.fwd));
@@ -873,6 +885,8 @@ impl App {
                 let source = self.active_path().unwrap_or_default();
                 if let Some(v) = &self.vault {
                     match v.resolve(&target, &source) {
+                        // books open in the reader, the rest in the system's app
+                        Some(p) if ateliet_core::reader::format_of(&p).is_some() => self.open_book(&p, None, true),
                         Some(p) => {
                             let _ = open::that(v.abs(&p));
                         }
@@ -1146,13 +1160,16 @@ impl eframe::App for App {
             panels::toasts(self, ctx);
             return;
         }
-        if !(self.journal_mode && self.journal.immersive) {
+        let reading = !self.journal_mode && !self.images_mode && self.tabs.get(self.active).and_then(|t| t.reader.as_ref()).is_some_and(|r| r.immersive);
+        if !(self.journal_mode && self.journal.immersive) && !reading {
             panels::ribbon(self, ctx);
         }
         if self.journal_mode {
             self.journal_mode_ui(ctx);
         } else if self.images_mode {
             self.image_mode(ctx);
+        } else if reading {
+            self.central(ctx);
         } else {
             if self.left_open {
                 panels::left(self, ctx);
@@ -1205,6 +1222,7 @@ impl eframe::App for App {
         }
         self.save_all();
         self.save_session();
+        self.save_readers();
     }
 }
 
@@ -1476,6 +1494,10 @@ impl App {
     /// storyboard or a note).
     fn pane_ui(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>, sc_actions: &mut Vec<crate::sc::Action>, open_board: &mut Option<String>, centered: bool) {
         let p = self.palette;
+        if self.tabs.get(self.active).is_some_and(|t| t.reader.is_some()) {
+            self.reader_pane(ui);
+            return;
+        }
         if self.tabs.get(self.active).is_some_and(|t| t.view.is_some()) {
             let acts = {
                 let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_mut()) else { return };

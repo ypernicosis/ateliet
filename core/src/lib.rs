@@ -46,3 +46,4 @@ pub mod typeset;
 pub mod board;
 pub mod journal;
 pub mod quadro;
+pub mod reader;

@@ -124,6 +124,9 @@ impl Journal {
                             self.toggle_panel(panel);
                         }
                     }
+                    if kit::icon_button(ui, icons::BOOK_OPEN, "Ler ao lado: um livro do Leitor ao lado do caderno", self.reading_beside, p).clicked() {
+                        self.out.push(Out::Read(None));
+                    }
                     sep(ui, p);
                     if kit::icon_button(ui, icons::CHEVRON_LEFT, "Página anterior (←)", false, p).clicked() {
                         b.turn(false);
@@ -319,6 +322,13 @@ impl Journal {
                     edit_item(b, n, &id, |i| i.style.align = next.to_string());
                 }
                 self.swatches(ui, b, n, &id, INKS, |i, c| i.style.color = c, it.style.color.clone(), p);
+                if it.kind == Kind::Excerpt {
+                    if let Some(loc) = self.reader_origin(cx.vault, b, n, it) {
+                        if kit::icon_button(ui, icons::BOOK_OPEN, "Abrir no Leitor, no ponto do trecho", false, p).clicked() {
+                            self.out.push(Out::Read(Some((loc.file.clone(), Some(loc)))));
+                        }
+                    }
+                }
             }
             Kind::Image | Kind::Sticker | Kind::Scan => {
                 if it.kind == Kind::Image && kit::icon_button(ui, icons::CROP, "Recortar (C)", false, p).clicked() {
@@ -416,6 +426,11 @@ impl Journal {
                 }
                 if kit::icon_button(ui, icons::BOOKMARK_PLUS, "Guardar como adesivo", false, p).clicked() {
                     self.save_sticker(cx, b, n, it);
+                }
+                if let Some(loc) = self.reader_origin(cx.vault, b, n, it) {
+                    if kit::icon_button(ui, icons::BOOK_OPEN, "Abrir no Leitor, no ponto do recorte", false, p).clicked() {
+                        self.out.push(Out::Read(Some((loc.file.clone(), Some(loc)))));
+                    }
                 }
                 if let Some(t) = it.picture() {
                     if kit::icon_button(ui, icons::EXTERNAL_LINK, &format!("Origem: {t}"), false, p).clicked() {

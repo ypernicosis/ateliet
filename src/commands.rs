@@ -58,6 +58,8 @@ pub enum Cmd {
     InsertPicture,
     Pinterest,
     SplitRight,
+    ReaderShelf,
+    ReaderBeside,
 }
 
 pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
@@ -82,6 +84,8 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::ImageMode, "images:toggle-mode", "Imagens: Alternar modo imagem"),
     (Cmd::JournalMode, "journal:toggle-mode", "Journal: Abrir os cadernos"),
     (Cmd::SendToJournal, "journal:send-selection", "Journal: Mandar a seleção ao Journal"),
+    (Cmd::ReaderShelf, "leitor:estante", "Leitor: Abrir a estante (EPUB, PDF, quadrinhos)"),
+    (Cmd::ReaderBeside, "leitor:ler-ao-lado", "Leitor: Ler ao lado do Journal"),
     (Cmd::NewStoryboard, "storyboard:new", "Storyboard: Novo storyboard"),
     (Cmd::NewQuadro, "quadro:new", "Novo quadro"),
     (Cmd::NewDrawing, "quadro:new-drawing", "Quadro: Novo desenho (Excalidraw)"),
@@ -346,6 +350,16 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.images_mode = false;
         }
         Cmd::SendToJournal => app.send_to_journal(ctx),
+        Cmd::ReaderShelf => {
+            app.journal_mode = false;
+            app.images_mode = false;
+            app.open_book(crate::reader_ui::SHELF, None, true);
+        }
+        Cmd::ReaderBeside => {
+            // the book of the active tab, where it is; else the shelf
+            let book = app.tabs.get(app.active).and_then(|t| t.reader.as_ref()).and_then(|r| r.here());
+            app.read_beside(book);
+        }
         Cmd::ChangeVault => {
             app.save_all();
             app.vault = None;
