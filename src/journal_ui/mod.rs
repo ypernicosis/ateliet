@@ -171,7 +171,7 @@ pub struct Book {
     /// The cover as a page: the index note.
     cover_ref: PageRef,
     /// A text box to lay out again (after typing, resizing, a drop).
-    pub pending_reflow: Option<(usize, String)>,
+    pub pending_reflow: Vec<(usize, String)>,
     /// The ink item strokes are being added to, and when the last ended.
     last_ink: Option<(usize, String, Instant)>,
     /// Horizontal scrolling gathered toward a page turn.
@@ -354,7 +354,7 @@ impl Book {
             goto: None,
             backup_dir,
             cover_ref: PageRef { path: String::new(), number: 0, title: String::new(), date: None },
-            pending_reflow: None,
+            pending_reflow: Vec::new(),
             last_ink: None,
             swipe: 0.0,
             edit_cursor: None,
@@ -481,6 +481,12 @@ impl Book {
             if n > 0 {
                 let lay = self.layout_for(n, &l.page);
                 adopt_notes_text(&mut l, &lay);
+                // a box whose height does not match its text (written in the
+                // notes mode while the Journal was closed) is laid out again
+                // (all of them: only those that do not fit change)
+                for it in l.page.items.iter().filter(|i| i.kind.is_text() && i.flow.as_ref().is_none_or(|f| f.prev.is_none())) {
+                    self.pending_reflow.push((n, it.id.clone()));
+                }
             }
             self.loaded.insert(path.clone(), l);
         }
@@ -690,6 +696,20 @@ impl Book {
         for k in reread {
             let mut l = Loaded::read(&self.root, &k);
             self.restore_backup(&mut l);
+            let n = if k == self.nb.path { 0 } else { self.nb.pages.iter().position(|p| p.path == k).map(|i| i + 1).unwrap_or(0) };
+            if n > 0 {
+                let lay = self.layout_for(n, &l.page);
+                adopt_notes_text(&mut l, &lay);
+                // texts changed in the note: their boxes grow (or shrink) to
+                // fit, and push down what is under them
+                let old = self.loaded.get(&k).map(|o| o.page.clone());
+                for it in l.page.items.iter().filter(|i| i.kind.is_text()) {
+                    let before = old.as_ref().and_then(|o| o.item(&it.id)).map(|o| o.content().to_string());
+                    if before.as_deref() != Some(it.content()) {
+                        self.pending_reflow.push((n, it.id.clone()));
+                    }
+                }
+            }
             out.push(Out::Toast(format!("{} mudou no disco e foi relida.", vault_name(&k))));
             self.loaded.insert(k, l);
         }
@@ -868,7 +888,10 @@ impl Book {
             let rows = starts.len().min(cap).max(1);
             let last = more.is_empty();
             set_flow_text(&mut it, &mine, excerpt.as_ref(), k == 0, last);
+            let old_bottom = it.y + it.h;
             it.h = (rows + head) as f64 * lay.paper.line() * it.style.lines();
+            // grown: what is under it in its column goes down with it
+            let grew = (it.y + it.h > old_bottom + 0.01).then_some((it.x, it.x + it.w, old_bottom, it.y + it.h));
             let mut flow = it.flow.clone().unwrap_or_default();
             flow.para = k > 0 && para;
             if last {
@@ -925,6 +948,9 @@ impl Book {
                     }
                 }
             }
+            if let Some((x0, x1, old_b, new_b)) = grew {
+                touched.extend(self.make_room(n, &id, (x0, x1), old_b, new_b));
+            }
             para = breaks_para;
             rest = more;
             k += 1;
@@ -956,6 +982,65 @@ impl Book {
         self.edited_body(n, &id);
     }
 
+    /// A text on page `n` grew from `old_bottom` to `new_bottom`: what lies
+    /// under it in the same columns moves down as much (as text does in a
+    /// note), so nothing is written over. Texts pushed down are laid out
+    /// again (what passes the last line goes on to the next page); anything
+    /// pushed past the page goes to the top of the next one. The pages
+    /// touched come back.
+    fn make_room(&mut self, n: usize, id: &str, (x0, x1): (f64, f64), old_bottom: f64, new_bottom: f64) -> Vec<usize> {
+        let d = new_bottom - old_bottom;
+        if d <= 0.01 {
+            return Vec::new();
+        }
+        let lay = self.layout(n);
+        let s = lay.paper.line();
+        let mut texts = Vec::new();
+        let mut off: Vec<Item> = Vec::new();
+        if let Some(p) = self.page(n) {
+            for it in p.items.iter_mut() {
+                if it.id == id || it.locked {
+                    continue;
+                }
+                let bb = it.bbox();
+                if bb.x < x1 - 0.5 && bb.x + bb.w > x0 + 0.5 && bb.y >= old_bottom - 0.5 {
+                    it.y += d;
+                    let past = if it.kind.is_text() { it.y > lay.last_baseline() - s + 0.01 } else { it.y + it.h > lay.h - 4.0 };
+                    if past {
+                        off.push(it.clone());
+                    } else if it.kind.is_text() {
+                        texts.push(it.id.clone());
+                    }
+                }
+            }
+            let gone: Vec<String> = off.iter().map(|i| i.id.clone()).collect();
+            p.items.retain(|i| !gone.contains(&i.id));
+        }
+        let mut touched = vec![n];
+        for t in texts {
+            self.pending_reflow.push((n, t));
+        }
+        if !off.is_empty() {
+            let next = if n >= self.count() { self.append_page("") } else { n + 1 };
+            let nl = self.layout(next);
+            let mut top = nl.first_baseline() - nl.paper.line();
+            for mut it in off {
+                it.y = top;
+                top += it.h.max(nl.paper.line());
+                let tid = it.id.clone();
+                let text = it.kind.is_text();
+                if let Some(p) = self.page(next) {
+                    p.items.push(it);
+                }
+                if text {
+                    self.pending_reflow.push((next, tid));
+                }
+            }
+            touched.push(next);
+        }
+        touched
+    }
+
     /// End typing: the text goes into its box (and the boxes after it).
     pub fn commit_edit(&mut self) {
         let Some(e) = self.editing.take() else { return };
@@ -976,7 +1061,7 @@ impl Book {
         if flow_text(&it) == e.buf && !e.new {
             // nothing typed since the box was last saved: lay it out again
             // all the same (what was saved while typing has not flowed yet)
-            self.pending_reflow = Some((e.page, e.id));
+            self.pending_reflow.push((e.page, e.id));
             return;
         }
         if let Some(p) = self.page(e.page) {
@@ -989,7 +1074,7 @@ impl Book {
         }
         self.edited_body(e.page, &e.id);
         self.touch(e.page);
-        self.pending_reflow = Some((e.page, e.id));
+        self.pending_reflow.push((e.page, e.id));
     }
 }
 
