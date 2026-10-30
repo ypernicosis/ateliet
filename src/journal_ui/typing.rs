@@ -200,7 +200,8 @@ impl Journal {
     }
 
     /// A new text on the line under the point, starting right there. Its
-    /// measure runs to what is next on that line (another text's letters, a
+    /// measure runs to what is next on that line (another text's letters,
+    /// 1 mm short of them, so it fits in a gap between two words; a
     /// picture) or the column's end; its rows go round whatever is in their
     /// way below. Begun mid-line with nothing to its left (and the notebook
     /// set so), its next rows go back to the column's margin. False when
@@ -223,7 +224,7 @@ impl Journal {
             for t in sh.set.texts.iter().filter(|t| b.page(pv.n).is_some_and(|p| p.item(&t.id).is_some())) {
                 for r in t.rows.iter().filter(|r| meets(r.base - t.row_h, r.base)) {
                     if r.x >= x {
-                        right = right.min(r.x - wrap::GAP);
+                        right = right.min(r.x - wrap::NEAR);
                     } else if r.x + r.width > c0 {
                         left_ink = true;
                     }
@@ -238,7 +239,7 @@ impl Journal {
                 }
             }
         }
-        if right - x < wrap::MIN_ROW {
+        if right - x < wrap::NARROW {
             return false;
         }
         b.checkpoint();
