@@ -994,6 +994,10 @@ impl Journal {
             b.sel_page = n;
             return;
         }
+        // a text begun and left empty goes away now, and is in nobody's way
+        if b.editing.as_ref().is_some_and(|e| e.buf.trim().is_empty()) {
+            b.commit_edit();
+        }
         // past a row's end, writing goes on in that row; just before a
         // row's start, where a text of its own has no room, it goes in there
         let edge = self.row_edge_near(b, n, at);
