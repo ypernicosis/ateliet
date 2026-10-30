@@ -106,6 +106,11 @@ impl Journal {
                                 self.out.push(Out::Open(nb.path.clone()));
                                 ui.close_menu();
                             }
+                            kit::menu_sep(ui, p);
+                            if kit::menu_danger(ui, icons::TRASH_2, "Apagar o caderno…", p) {
+                                self.delete_dlg = Some(nb.clone());
+                                ui.close_menu();
+                            }
                         });
                     }
                 });
@@ -114,6 +119,74 @@ impl Journal {
         if let Some(path) = open {
             let backup = cx.config_dir.as_ref().map(|d| d.join("ateliet").join("journal"));
             self.open_notebook(cx.vault, &path, backup);
+        }
+    }
+
+    /// Asked before a notebook goes: its index note and its pages go to the
+    /// trash; anything else in its folder (pictures, storyboards drawn for
+    /// it) stays, and the folder goes only when nothing is left in it.
+    pub fn delete_dialog(&mut self, ctx: &egui::Context, cx: &mut Cx) {
+        let Some(nb) = self.delete_dlg.take() else { return };
+        let p = cx.palette;
+        let mut keep = true;
+        let mut go = false;
+        kit::scrim(ctx, p);
+        egui::Window::new("journal-delete").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0)).fixed_size(vec2(400.0, 0.0)).frame(egui::Frame::window(&ctx.style()).fill(p.bg).inner_margin(egui::Margin::same(18))).show(ctx, |ui| {
+            ui.label(RichText::new(format!("Apagar o caderno “{}”?", nb.name)).font(kit::bold(16.0)).color(p.text));
+            ui.add_space(8.0);
+            let mut full = nb.clone();
+            full.scan(&cx.vault.root);
+            let n = full.pages.len();
+            ui.label(RichText::new(format!("A nota-índice e {n} {} vão para a lixeira do sistema, de onde podem ser recuperadas. Imagens e outros arquivos da pasta ficam.", if n == 1 { "página" } else { "páginas" })).size(12.5).color(p.muted));
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if kit::danger(ui, "Apagar", p).clicked() {
+                        go = true;
+                    }
+                    if kit::button(ui, None, "Cancelar", p).clicked() {
+                        keep = false;
+                    }
+                });
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                keep = false;
+            }
+        });
+        if go {
+            // the open notebook closes first (all saved)
+            if self.book.as_ref().is_some_and(|b| b.nb.path == nb.path) {
+                self.close(cx.vault);
+                self.book = None;
+            }
+            let mut full = nb.clone();
+            full.scan(&cx.vault.root);
+            let mut files: Vec<String> = full.pages.iter().map(|r| r.path.clone()).collect();
+            files.push(nb.path.clone());
+            let mut failed = 0;
+            for f in &files {
+                let abs = cx.vault.abs(f);
+                if trash::delete(&abs).is_err() && std::fs::remove_file(&abs).is_err() {
+                    failed += 1;
+                }
+                if let Some(d) = &cx.config_dir {
+                    let _ = std::fs::remove_file(d.join("ateliet").join("journal").join(format!("{}.json", f.replace('/', "__"))));
+                }
+            }
+            if !nb.folder.is_empty() {
+                let dir = cx.vault.abs(&nb.folder);
+                if std::fs::read_dir(&dir).map(|mut d| d.next().is_none()).unwrap_or(false) {
+                    let _ = std::fs::remove_dir(&dir);
+                }
+            }
+            self.covers.remove(&nb.path);
+            self.shelf = self.shelf.take().map(|l| l.into_iter().filter(|x| x.path != nb.path).collect());
+            self.out.push(Out::Rescan);
+            self.out.push(Out::Toast(if failed == 0 { format!("Caderno “{}” apagado.", nb.name) } else { format!("{failed} arquivos do caderno não puderam ser apagados.") }));
+            keep = false;
+        }
+        if keep {
+            self.delete_dlg = Some(nb);
         }
     }
 

@@ -411,11 +411,20 @@ fn md_job(it: &Item, text: &str, lay: &Layout, k: f32, color: Color32, accent: C
     job
 }
 
-/// Paint a galley so its rows sit on the ruling: the first baseline on
-/// the line one row below the box's top.
-pub fn galley_on_lines(painter: &egui::Painter, galley: std::sync::Arc<egui::Galley>, pv: &PageView, it: &Item, color: Color32) {
-    let at = text_origin(&galley, pv, it);
-    painter.galley(at, galley, color);
+/// The rows of a laid-out text as rectangles of its page (mm): each from
+/// its first letter to its last, as tall as the row (an empty row, a blank
+/// line of the text, keeps a sliver at its start).
+pub fn ink_rows(g: &egui::Galley, at: Pos2, pv: &PageView) -> Vec<ateliet_core::canvas::Rect> {
+    g.rows.iter().map(|r| {
+        let (x0, x1) = match (r.glyphs.first(), r.glyphs.iter().rev().find(|g| !g.chr.is_whitespace())) {
+            (Some(a), Some(z)) => (a.pos.x, z.max_x()),
+            (Some(a), None) => (a.pos.x, a.pos.x + 1.0),
+            _ => (r.rect.min.x, r.rect.min.x + 1.0),
+        };
+        let a = pv.w(at + vec2(x0, r.rect.min.y));
+        let b = pv.w(at + vec2(x1, r.rect.max.y));
+        ateliet_core::canvas::Rect { x: a.0, y: a.1, w: (b.0 - a.0).max(0.5), h: b.1 - a.1 }
+    }).collect()
 }
 
 /// Where a text's galley goes for its rows to sit on the ruling.
@@ -552,7 +561,11 @@ impl Journal {
             Kind::Text => {
                 let job = rich_job(it, it.content(), &pv.lay, pv.k, it.style.color.as_deref().and_then(hex).unwrap_or(ink_color(p)), p.accent_strong);
                 let g = ctx.fonts(|f| lay_out(f, it, job));
-                galley_on_lines(painter, g, pv, it, ink);
+                let at = text_origin(&g, pv, it);
+                if it.r == 0.0 {
+                    self.ink.insert(it.id.clone(), (pv.n, ink_rows(&g, at, pv)));
+                }
+                painter.galley(at, g, ink);
             }
             Kind::Excerpt => {
                 let parts = journal::excerpt_parts(it.content());

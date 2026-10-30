@@ -454,6 +454,19 @@ As primeiras texturas eram ruído somado à cor, pixel a pixel, numa imagem pequ
 
 Cada textura: **linho** (fios irregulares nos dois sentidos, com nós e tons por fio), **tecido** (trama de um sobre um, fios desiguais), **papel kraft** (manchas de polpa, fibras no sentido da folha, pintas escuras), **couro** (grão em seixos de Voronoi, dobras largas), **marmorizada**, **cortiça** (grânulos de tons diferentes, poros) e **pontilhada** (pequenos afundados em fileiras alternadas).
 
+## 18. A digitação
+
+O que estava errado não era um detalhe, era o modelo: um texto era a sua caixa. A caixa de um texto começado no meio da linha vai de margem a margem, e a do editor ia até o fim da página; tudo o que caía dentro dela era "clicar no texto", inclusive o papel vazio ao lado de uma linha curta, abaixo do texto ou entre duas palavras distantes. Escrever onde o ponteiro está era impossível justamente onde mais se quer: ao lado do que já foi escrito. A arquitetura agora parte do papel:
+
+- **Um texto é a sua tinta.** A cada desenho, cada texto registra onde estão as suas letras, linha por linha, em milímetros da página (o mapa de tinta). Acertar um texto é acertar as suas letras (com uma folga de pouco mais de um milímetro); o resto da caixa é papel. A caixa continua existindo, mas só como a largura em que o texto quebra.
+- **Clicar é escrever.** Num ponto com letras, o cursor vai para aquele caractere, sem passo de seleção. Num ponto de papel, começa um texto ali, na linha da pauta sob o ponteiro, mesmo dentro da caixa de outro texto. Arrastar letras move o texto; `Esc` termina a edição e deixa o texto selecionado (para apagar, mudar de camada, girar).
+- **O editor é do tamanho do texto.** Ele cobre as linhas do texto e mais uma (o espaço de digitar a próxima), não a página; um clique dentro dele mas fora das letras é papel: termina a edição e começa um texto no ponto. O clique que acabou de abrir um texto não conta como clique dentro dele.
+- **Dois textos na mesma linha não se cruzam.** Um texto novo para antes das letras que já estão à sua direita naquela linha; um texto de uma linha à sua esquerda passa a quebrar antes dele; e, com letras à esquerda, o texto novo não volta à margem nas linhas seguintes (ficaria debaixo delas), segue alinhado onde começou.
+- **Crescer nunca escreve por cima.** Quando um texto cresce (digitado no Journal, no modo notas, colado), o que ele passaria a tocar abaixo da sua primeira linha desce, até a linha da pauta logo abaixo; o que esse descer toca desce também, em cascata; o que passa do fim da página vai para a seguinte. O que não está no caminho não se mexe.
+- **O que se vê é o que se acerta.** A seleção de um texto contorna as suas letras, e o ponteiro é o cursor de texto sobre o papel e sobre as letras (o de mover sobre imagens e o resto).
+
+Esses princípios valem para a escrita imersiva (digitar sem clicar começa nas primeiras linhas livres depois do que está na coluna) e para o modo notas (o que se escreve lá entra na página e empurra o que estiver embaixo).
+
 ## Fontes consultadas
 
 - Pinterest, [Create a collage](https://help.pinterest.com/en/article/create-a-collage)
