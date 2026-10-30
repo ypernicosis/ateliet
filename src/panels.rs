@@ -27,6 +27,8 @@ enum FileCmd {
     MoveManyTo(Vec<String>, String),
     /// Open the selected files, each in a tab.
     OpenMany(Vec<String>),
+    /// Open in a pane beside the one in use.
+    Beside,
 }
 
 /// The explorer's selection: several files and folders picked with Shift
@@ -417,6 +419,7 @@ fn files(app: &mut App, ui: &mut egui::Ui) {
                     app.open(&it, true);
                 }
             }
+            FileCmd::Beside => app.open_beside(&path),
             FileCmd::NewQuadro => app.new_quadro(&path, false),
             FileCmd::NewDrawing => app.new_quadro(&path, true),
             FileCmd::Similar => {
@@ -676,6 +679,9 @@ fn folder_files(ui: &mut egui::Ui, f: &Folder, depth: usize, fx: &mut FolderCx) 
         r.context_menu(|ui| {
             if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir em nova aba", p) {
                 *open = Some((full.clone(), true));
+            }
+            if kit::menu_item(ui, icons::SQUARE_SPLIT_HORIZONTAL, "Abrir ao lado", p) {
+                *cmd = Some((full.clone(), FileCmd::Beside));
             }
             let marked = marks.iter().any(|m| m == full);
             if kit::menu_item(ui, icons::BOOKMARK, if marked { "Remover dos favoritos" } else { "Favoritar" }, p) {
@@ -1084,7 +1090,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 app.left_open = !app.left_open;
             }
             ui.add_space(4.0);
-            let right_w = 118.0;
+            let right_w = 176.0;
             let avail = (ui.available_width() - right_w).max(100.0);
             let n = app.tabs.len().max(1) as f32;
             let tab_w = (avail / n - 2.0).clamp(110.0, 220.0);
@@ -1223,6 +1229,21 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 if icon_button(ui, g, tip, false, p).clicked() {
                     app.right_open = !app.right_open;
                 }
+                // a book beside the notes, as beside the Journal
+                let beside = app.side_reader.is_some();
+                if icon_button(ui, icons::LIBRARY, if beside { "Fechar o leitor ao lado" } else { "Ler ao lado das notas" }, beside, p).clicked() {
+                    if beside {
+                        app.close_side_reader();
+                    } else {
+                        let book = app.tabs.get(app.active).and_then(|t| t.reader.as_ref()).and_then(|r| r.here());
+                        app.read_beside_notes(book);
+                    }
+                }
+                // two notes side by side
+                let split = app.split_shown();
+                if icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, if split { "Juntar os painéis" } else { "Dividir: duas notas lado a lado" }, split, p).clicked() {
+                    app.toggle_split();
+                }
                 if let Some(t) = app.tabs.get_mut(app.active) {
                     if t.view.is_none() && t.board.is_none() && t.quadro.is_none() {
                         focus = kit::icon_button(ui, icons::FOCUS, "Modo foco", false, p).clicked();
@@ -1250,7 +1271,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
             });
         });
         if let Some(i) = select {
-            app.active = i;
+            app.focus_tab(i);
         }
         if let Some(i) = close {
             app.close_tab(i);
@@ -1271,6 +1292,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                     if let Some(t) = app.tabs.get(i) {
                         app.split = Some(t.path.clone());
                         app.split_right = true;
+                        app.save_session();
                     }
                 }
                 TabCmd::Reveal | TabCmd::OpenExternal => {

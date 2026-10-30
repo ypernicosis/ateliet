@@ -41,11 +41,11 @@ pub enum Out {
     Rescan,
     /// Open a note.
     Open(String),
-    /// An excerpt was kept: for the Journal's open page.
+    /// An excerpt was kept: for the Journal's open page (or the note beside).
     Snippet { note: String, snippet: Snippet },
-    /// Read this book beside the Journal.
-    Beside { file: String, at: Option<Locator> },
-    /// Close the reader beside the Journal.
+    /// Read this book beside the Journal, or beside the notes.
+    Beside { file: String, at: Option<Locator>, journal: bool },
+    /// Close the reader beside.
     CloseSide,
 }
 
@@ -54,8 +54,10 @@ pub struct Cx<'a> {
     pub vault: &'a Vault,
     pub palette: Palette,
     pub config_dir: Option<PathBuf>,
-    /// A notebook is open in the Journal.
+    /// A notebook is open in the Journal, beside the reader.
     pub journal_open: bool,
+    /// The reader is beside the notes: what it keeps goes into the note in use.
+    pub notes_beside: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
