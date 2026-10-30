@@ -142,27 +142,40 @@ impl Journal {
         typeset::char_near(&set, &rows, pv, at).map(|d| st.buf_of(d))
     }
 
-    /// Paper just past the end of a row's letters: that row's text, and the
-    /// char at the end of the row (writing goes on there, not in a new text).
-    pub fn row_end_near(&self, b: &mut Book, n: usize, at: (f64, f64)) -> Option<(String, usize)> {
+    /// Paper beside a row's letters, on its line: just past their end (writing
+    /// goes on there, not in a new text), or just before their start, too
+    /// near them for a text of its own. The nearest such row: its text, the
+    /// char at that edge, and whether it is the row's start.
+    pub fn row_edge_near(&self, b: &mut Book, n: usize, at: (f64, f64)) -> Option<(String, usize, bool)> {
         let sh = self.shown.get(&n)?;
+        let mut best: Option<(f64, String, usize, bool)> = None;
         for t in &sh.set.texts {
             if b.page(n).and_then(|p| p.item(&t.id)).is_none_or(|i| i.locked) {
                 continue;
             }
+            let Some(st) = sh.styled.get(&t.id) else { continue };
             for (r, row) in t.rows.iter().enumerate() {
+                if at.1 < row.base - t.row_h || at.1 > row.base + 0.4 {
+                    continue;
+                }
                 let end = row.x + row.width;
-                if at.1 >= row.base - t.row_h && at.1 <= row.base + 0.4 && at.0 >= end && at.0 <= end + wrap::GAP + 3.0 {
-                    let st = sh.styled.get(&t.id)?;
+                let edge = if at.0 >= end && at.0 <= end + wrap::GAP + 3.0 {
                     let mut d = row.to;
                     if !row.newline && r + 1 < t.rows.len() && d > row.from && st.chars.get(d - 1).is_some_and(|c| c.is_whitespace()) {
                         d -= 1;
                     }
-                    return Some((t.id.clone(), st.buf_of(d)));
+                    Some((at.0 - end, d, false))
+                } else if at.0 < row.x && at.0 > row.x - wrap::GAP - wrap::MIN_ROW {
+                    Some((row.x - at.0, row.from, true))
+                } else {
+                    None
+                };
+                if let Some((dist, d, start)) = edge.filter(|e| best.as_ref().is_none_or(|b| e.0 < b.0)) {
+                    best = Some((dist, t.id.clone(), st.buf_of(d), start));
                 }
             }
         }
-        None
+        best.map(|(_, id, c, start)| (id, c, start))
     }
 
     // ── where writing starts ──────────────────────────────────────────────
@@ -190,11 +203,12 @@ impl Journal {
     /// measure runs to what is next on that line (another text's letters, a
     /// picture) or the column's end; its rows go round whatever is in their
     /// way below. Begun mid-line with nothing to its left (and the notebook
-    /// set so), its next rows go back to the column's margin.
-    pub fn write_at(&mut self, b: &mut Book, pv: &PageView, at: (f64, f64)) {
+    /// set so), its next rows go back to the column's margin. False when
+    /// there is no room for one there.
+    pub fn write_at(&mut self, b: &mut Book, pv: &PageView, at: (f64, f64)) -> bool {
         let lay = &pv.lay;
         if at.1 > lay.last_baseline() + 1.0 || at.1 < 0.0 || at.0 < 0.0 || at.0 > lay.w {
-            return;
+            return false;
         }
         let (c0, c1) = lay.column_at(at.0);
         let s = lay.paper.line();
@@ -224,7 +238,7 @@ impl Journal {
             }
         }
         if right - x < wrap::MIN_ROW {
-            return;
+            return false;
         }
         b.checkpoint();
         let mut it = if b.nb.wrap_to_margin && x > c0 && !left_ink && right >= c1 - 0.01 {
@@ -252,6 +266,7 @@ impl Journal {
         b.sel_page = pv.n;
         b.sel = vec![id.clone()];
         b.editing = Some(Editing::new(pv.n, &id, String::new(), true, Some(0)));
+        true
     }
 
     /// A new text on the first free lines of the page's main column,
