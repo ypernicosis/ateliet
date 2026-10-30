@@ -53,12 +53,6 @@ impl Book {
         l == Some(n) || r == Some(n)
     }
 
-    /// The topmost item under a point of page `n`.
-    fn hit(&mut self, n: usize, at: (f64, f64)) -> Option<String> {
-        let page = self.page(n)?;
-        page.items.iter().rev().find(|it| hit_item(it, at)).map(|it| it.id.clone())
-    }
-
     fn sel_items(&mut self) -> Vec<Item> {
         let ids = self.sel.clone();
         let n = self.sel_page;
@@ -255,6 +249,11 @@ impl Journal {
     pub fn notebook_ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) {
         let Some(mut b) = self.book.take() else { return };
         let ctx = ui.ctx().clone();
+        // the ink of what is gone (deleted, an empty text dropped) goes too
+        let (l, r) = b.spread_pages();
+        let shown: Vec<usize> = [l, r].into_iter().flatten().collect();
+        let alive: std::collections::HashSet<String> = shown.iter().filter_map(|n| b.page_ro(*n)).flat_map(|p| p.items.iter().map(|i| i.id.clone())).collect();
+        self.ink.retain(|id, (n, _)| !shown.contains(n) || alive.contains(id));
         // not while typing: the text in the box is not the one being typed
         if b.editing.is_none() && !b.pending_reflow.is_empty() {
             let k = b.views(ui.available_rect_before_wrap()).0.first().map(|v| v.k).unwrap_or(4.0).max(2.0);
@@ -491,12 +490,16 @@ impl Journal {
             let icon = match self.tool {
                 Tool::Write => egui::CursorIcon::Text,
                 Tool::Pen | Tool::Line | Tool::Tape => egui::CursorIcon::Crosshair,
+                // letters and paper take typing (the I-beam); other things move
                 Tool::Select => {
                     let over_handle = self.handle_at(b, views, q).is_some();
                     if over_handle {
                         egui::CursorIcon::Grab
-                    } else if let Some((pv, at)) = Self::at(views, q) {
-                        if b.hit(pv.n, at).is_some() { egui::CursorIcon::Move } else { egui::CursorIcon::Default }
+                    } else if let Some((pv, at)) = Self::at(views, q).filter(|(pv, _)| pv.rect.contains(q)) {
+                        match self.hit_at(b, pv.n, at).and_then(|id| b.page(pv.n).and_then(|p| p.item(&id)).map(|i| i.kind.is_text())) {
+                            Some(false) => egui::CursorIcon::Move,
+                            _ => egui::CursorIcon::Text,
+                        }
                     } else {
                         egui::CursorIcon::Default
                     }
@@ -525,10 +528,11 @@ impl Journal {
         }
         if resp.double_clicked() {
             if let Some((pv, at)) = Self::at(views, q) {
-                if let Some(id) = b.hit(pv.n, at) {
+                if let Some(id) = self.hit_at(b, pv.n, at) {
                     let kind = b.page(pv.n).and_then(|p| p.item(&id)).map(|i| i.kind.clone());
                     match kind {
-                        Some(Kind::Text) | Some(Kind::Excerpt) => self.edit(b, pv.n, &id, false),
+                        // (a text's double click picks a word, in its editor)
+                        Some(Kind::Text) | Some(Kind::Excerpt) => {}
                         Some(Kind::Image) => self.start_crop(b, pv.n, &id),
                         Some(Kind::Note) => {
                             let target = b.page(pv.n).and_then(|p| p.item(&id)).and_then(|i| journal::embed_target(i.content()));
@@ -543,7 +547,7 @@ impl Journal {
         }
         if resp.secondary_clicked() {
             if let Some((pv, at)) = Self::at(views, q) {
-                if let Some(id) = b.hit(pv.n, at) {
+                if let Some(id) = self.hit_at(b, pv.n, at) {
                     if !b.sel.contains(&id) || b.sel_page != pv.n {
                         b.sel_page = pv.n;
                         b.sel = vec![id];
@@ -595,10 +599,10 @@ impl Journal {
         match self.tool {
             Tool::Select | Tool::Write => {
                 // a left page's item that lies across, grabbed on the right
-                let mut hit = b.hit(n, at).map(|id| (n, id));
+                let mut hit = self.hit_at(b, n, at).map(|id| (n, id));
                 if hit.is_none() && pv.lay.right && n > 1 {
                     let left_at = (at.0 + pv.lay.w, at.1);
-                    if let Some(id) = b.hit(n - 1, left_at) {
+                    if let Some(id) = self.hit_at(b, n - 1, left_at) {
                         if b.page(n - 1).and_then(|p| p.item(&id)).is_some_and(|i| i.across) && views.iter().any(|v| v.n == n - 1) {
                             hit = Some((n - 1, id));
                         }
@@ -953,6 +957,9 @@ impl Journal {
         b.touch(to);
     }
 
+    /// A click: on letters, the cursor goes there (no picking first); on
+    /// a picture or anything else, it is picked; on the paper, writing
+    /// starts right there, whatever box is around.
     fn click(&mut self, ctx: &egui::Context, b: &mut Book, views: &[PageView], q: Pos2, shift: bool) {
         let Some((pv, at)) = Self::at(views, q) else {
             b.commit_edit();
@@ -963,12 +970,9 @@ impl Journal {
         if matches!(self.tool, Tool::Pen | Tool::Line | Tool::Tape) {
             return;
         }
-        if let Some(id) = b.hit(n, at) {
+        if let Some(id) = self.hit_at(b, n, at) {
             let kind = b.page(n).and_then(|p| p.item(&id)).map(|i| i.kind.clone());
-            // a text: typing starts where it was clicked (with the writing
-            // tool, or on a text already picked)
-            let picked = b.sel_page == n && b.sel == [id.clone()];
-            if kind.as_ref().is_some_and(|k| k.is_text()) && !shift && (self.tool == Tool::Write || picked) {
+            if kind.as_ref().is_some_and(|k| k.is_text()) && !shift {
                 let at_char = self.char_at(ctx, b, pv, &id, at);
                 self.edit(b, n, &id, false);
                 b.edit_cursor = at_char;
@@ -984,45 +988,76 @@ impl Journal {
             b.sel_page = n;
             return;
         }
-        let had = !b.sel.is_empty() || b.editing.is_some();
         b.commit_edit();
         b.sel.clear();
-        // a click on an empty spot starts writing there (the second click,
-        // when something was selected)
-        if self.tool == Tool::Write || !had {
-            self.write_at(ctx, b, pv, at);
-        }
+        self.write_at(b, pv, at);
+    }
+
+    /// What is under a point of page `n`, topmost first: a text where its
+    /// letters are (a little round them), anything else in its box.
+    pub fn hit_at(&self, b: &mut Book, n: usize, at: (f64, f64)) -> Option<String> {
+        let ink = &self.ink;
+        let page = b.page(n)?;
+        page.items.iter().rev().find(|it| match (&it.kind, ink.get(&it.id)) {
+            (Kind::Text, Some((pn, rows))) if *pn == n && it.r == 0.0 => rows.iter().any(|r| at.0 >= r.x - 1.2 && at.0 <= r.x + r.w + 1.2 && at.1 >= r.y && at.1 <= r.y + r.h),
+            _ => hit_item(it, at),
+        }).map(|it| it.id.clone())
     }
 
     /// A new text whose first line sits on the line under the point, as
     /// wide as the column there.
-    fn write_at(&mut self, ctx: &egui::Context, b: &mut Book, pv: &PageView, at: (f64, f64)) {
+    fn write_at(&mut self, b: &mut Book, pv: &PageView, at: (f64, f64)) {
         let lay = &pv.lay;
         if at.1 > lay.last_baseline() + 1.0 || at.1 < 0.0 || at.0 < 0.0 || at.0 > lay.w {
             return;
         }
         let (c0, c1) = lay.column_at(at.0);
-        let x = if at.0 - c0 > 8.0 && at.0 < c1 - 10.0 { at.0 } else { c0 };
-        let y = lay.text_top(at.1 - lay.paper.line() * 0.5, 1.0);
-        // never a new text over one already there: its first line would fall
-        // on that text, so that text is the one written in (where clicked)
-        let line = MRect { x: if b.nb.wrap_to_margin { c0 } else { x }, y, w: c1 - x, h: lay.paper.line() };
-        let under = b.page(pv.n).and_then(|p| p.items.iter().rev().find(|i| i.kind.is_text() && i.bbox().intersects(&line)).map(|i| i.id.clone()));
-        if let Some(id) = under {
-            let at_char = self.char_at(ctx, b, pv, &id, at);
-            self.edit(b, pv.n, &id, false);
-            b.edit_cursor = at_char;
+        let s = lay.paper.line();
+        // right where clicked (at the margin when the click is close to it)
+        let x = if at.0 - c0 < 3.0 { c0 } else { at.0.min(c1 - 6.0) };
+        let y = lay.text_top(at.1 - s * 0.5, 1.0);
+        // the letters already on that line: the new text stops before those
+        // to its right; those to its left that are one line long stop before
+        // it; with letters to its left, it keeps to its own side (no going
+        // back to the margin under them)
+        let row = |r: &MRect| r.y < y + s - 0.3 && r.y + r.h > y + 0.3;
+        let mut right_edge = c1;
+        let mut left_ink = false;
+        let mut shorten: Vec<(String, f64)> = Vec::new();
+        for (id, (pn, rows)) in self.ink.iter() {
+            if *pn != pv.n || b.editing.as_ref().is_some_and(|e| &e.id == id) {
+                continue;
+            }
+            for r in rows.iter().filter(|r| row(r)) {
+                if r.x >= x {
+                    right_edge = right_edge.min(r.x - 1.0);
+                } else if r.x + r.w > c0 {
+                    left_ink = true;
+                    if rows.len() == 1 {
+                        shorten.push((id.clone(), x - 1.0));
+                    }
+                }
+            }
+        }
+        if right_edge - x < 6.0 {
             return;
         }
         b.checkpoint();
+        for (id, edge) in shorten {
+            if let Some(t) = b.page(pv.n).and_then(|p| p.item_mut(&id)) {
+                if t.x + t.w > edge {
+                    t.w = (edge - t.x).max(4.0);
+                }
+            }
+        }
         // begun mid-line: the box from the margin, the first line indented
         // (or, kept to where it began, the box from there)
-        let mut it = if b.nb.wrap_to_margin && x > c0 {
-            let mut it = Item::new(Kind::Text, c0, y, c1 - c0, lay.paper.line());
+        let mut it = if b.nb.wrap_to_margin && x > c0 && !left_ink && right_edge >= c1 {
+            let mut it = Item::new(Kind::Text, c0, y, c1 - c0, s);
             it.style.indent = ((x - c0) * 100.0).round() / 100.0;
             it
         } else {
-            Item::new(Kind::Text, x, y, (c1 - x).max(10.0), lay.paper.line())
+            Item::new(Kind::Text, x, y, (right_edge - x).max(6.0), s)
         };
         if (b.nb.text_size - 1.0).abs() > 1e-6 {
             it.style.size = b.nb.text_size;
@@ -1170,7 +1205,9 @@ impl Journal {
                 b.touch(t);
             }
         }
-        let rect = Rect::from_min_size(origin, vec2(it.w as f32 * k, (cap as f32 + 1.0) * lh));
+        // the editor is as tall as the text (and a line): the paper under and
+        // beside it stays paper
+        let rect = Rect::from_min_size(origin, vec2(it.w as f32 * k, (rows.min(cap) as f32 + 1.0) * lh));
         let edit_id = egui::Id::new(("journal-edit", &id));
         if let Some(c) = b.edit_cursor.take() {
             let mut st = egui::text_edit::TextEditState::load(ui.ctx(), edit_id).unwrap_or_default();
@@ -1181,7 +1218,7 @@ impl Journal {
         let lay2 = lay.clone();
         let mut layouter = move |ui: &egui::Ui, text: &str, _w: f32| ui.fonts(|f| draw::lay_out(f, &it2, draw::live_job(&it2, text, &lay2, k, ink, accent)));
         let Some(e) = b.editing.as_mut() else { return };
-        let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(edit_id);
+        let te = egui::TextEdit::multiline(&mut e.buf).frame(false).margin(egui::Margin::ZERO).desired_rows(1).desired_width(it.w as f32 * k).text_color(ink).layouter(&mut layouter).id(edit_id);
         // typed text never shows past the page
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
         child.set_clip_rect(pv.clip.intersect(ui.clip_rect()));
@@ -1192,6 +1229,19 @@ impl Journal {
         child.visuals_mut().selection.stroke = Stroke::NONE;
         let out = te.show(&mut child);
         let buf_len = e.buf.chars().count();
+        // where its letters are now (a text that only now began has no
+        // clicks of its own yet: the click that began it is not one)
+        let rows_ink = draw::ink_rows(&out.galley, out.galley_pos, &pv);
+        let fresh = self.ink.insert(id.clone(), (n, rows_ink.clone())).is_none();
+        // a click in the editor but off the letters: that is paper, and
+        // writing starts there (the text being typed is left as it is)
+        let off_letters = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten()).filter(|q| !fresh && (rect.contains(*q) || out.response.rect.contains(*q))).map(|q| pv.w(q)).filter(|a| !rows_ink.iter().any(|r| a.0 >= r.x - 1.2 && a.0 <= r.x + r.w + 1.2 && a.1 >= r.y && a.1 <= r.y + r.h));
+        if let Some(at) = off_letters {
+            b.commit_edit();
+            b.sel.clear();
+            self.write_at(b, &pv, at);
+            return;
+        }
         b.caret = out.cursor_range.map(|c| out.galley_pos + out.galley.pos_from_cursor(&c.primary).center().to_vec2());
         let resp = out.response;
         if let (Some(c), true) = (out.cursor_range, resp.has_focus()) {
@@ -1281,7 +1331,12 @@ impl Journal {
             }
             let mut c: Vec<Pos2> = it.corners().iter().map(|q| pv.s(*q)).collect();
             if it.kind.is_text() {
-                // a picked text: a light dotted line round it
+                // a picked text: a light dotted line round its letters (not
+                // round the room it may take)
+                if let Some(u) = self.ink.get(&it.id).filter(|(pn, _)| *pn == pv.n).and_then(|(_, rows)| rows.iter().copied().reduce(union)) {
+                    let r = Rect::from_min_max(pv.s((u.x - 1.0, u.y)), pv.s((u.x + u.w + 1.0, u.y + u.h)));
+                    c = vec![r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+                }
                 c.push(c[0]);
                 painter.add(egui::Shape::dotted_line(&c, p.accent_strong.gamma_multiply(0.6), 5.0, 1.0));
             } else {

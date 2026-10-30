@@ -235,6 +235,12 @@ pub struct Journal {
     cover_tex: HashMap<String, CoverTex>,
     /// Covers of the shelf's notebooks: index note → (modified, cover page).
     covers: HashMap<String, (u64, Page)>,
+    /// Where each text's letters are, row by row (mm of its page), as last
+    /// drawn: a text is where its ink is, not its box, so the paper beside
+    /// a short line is still paper to write on.
+    pub ink: HashMap<String, (usize, Vec<ateliet_core::canvas::Rect>)>,
+    /// A notebook to be deleted, waiting for a yes.
+    pub delete_dlg: Option<Notebook>,
 }
 
 impl Default for Journal {
@@ -265,6 +271,8 @@ impl Default for Journal {
             board_dlg: None,
             anims: HashMap::new(),
             cover_tex: HashMap::new(),
+            ink: HashMap::new(),
+            delete_dlg: None,
             covers: HashMap::new(),
         }
     }
@@ -982,35 +990,49 @@ impl Book {
         self.edited_body(n, &id);
     }
 
-    /// A text on page `n` grew from `old_bottom` to `new_bottom`: what lies
-    /// under it in the same columns moves down as much (as text does in a
-    /// note), so nothing is written over. Texts pushed down are laid out
+    /// A text on page `n` grew down to `new_bottom`: whatever it would now
+    /// run into, under its first line and across its width, goes down
+    /// below it, and so on down the page (what that moved runs into goes
+    /// down in turn): nothing is ever written over. Texts moved are laid out
     /// again (what passes the last line goes on to the next page); anything
-    /// pushed past the page goes to the top of the next one. The pages
-    /// touched come back.
+    /// moved past the page goes to the top of the next one. Things not in
+    /// the way do not move. The pages touched come back.
     fn make_room(&mut self, n: usize, id: &str, (x0, x1): (f64, f64), old_bottom: f64, new_bottom: f64) -> Vec<usize> {
-        let d = new_bottom - old_bottom;
-        if d <= 0.01 {
+        if new_bottom <= old_bottom + 0.01 {
             return Vec::new();
         }
         let lay = self.layout(n);
         let s = lay.paper.line();
+        let Some(top) = self.page(n).and_then(|p| p.item(id)).map(|i| i.y) else { return Vec::new() };
         let mut texts = Vec::new();
         let mut off: Vec<Item> = Vec::new();
         if let Some(p) = self.page(n) {
-            for it in p.items.iter_mut() {
-                if it.id == id || it.locked {
-                    continue;
-                }
-                let bb = it.bbox();
-                if bb.x < x1 - 0.5 && bb.x + bb.w > x0 + 0.5 && bb.y >= old_bottom - 0.5 {
-                    it.y += d;
+            // what is taken: the grown text, then each thing as it settles
+            let mut taken = vec![ateliet_core::canvas::Rect { x: x0, y: top, w: x1 - x0, h: new_bottom - top }];
+            let mut order: Vec<usize> = (0..p.items.len()).filter(|&k| {
+                let it = &p.items[k];
+                it.id != id && !it.locked && it.bbox().y > top + 0.5
+            }).collect();
+            order.sort_by(|a, b| p.items[*a].bbox().y.total_cmp(&p.items[*b].bbox().y));
+            for k in order {
+                let bb = p.items[k].bbox();
+                let below = taken.iter().filter(|t| t.intersects(&ateliet_core::canvas::Rect { x: bb.x + 0.3, y: bb.y + 0.3, w: (bb.w - 0.6).max(0.1), h: (bb.h - 0.6).max(0.1) })).map(|t| t.y + t.h).fold(f64::NEG_INFINITY, f64::max);
+                if below.is_finite() && below > bb.y {
+                    let it = &mut p.items[k];
+                    // down to the next line of the ruling under what it hit
+                    let d = below - bb.y;
+                    it.y += (d / s).ceil() * s;
                     let past = if it.kind.is_text() { it.y > lay.last_baseline() - s + 0.01 } else { it.y + it.h > lay.h - 4.0 };
                     if past {
                         off.push(it.clone());
-                    } else if it.kind.is_text() {
+                        continue;
+                    }
+                    if it.kind.is_text() {
                         texts.push(it.id.clone());
                     }
+                    taken.push(it.bbox());
+                } else {
+                    taken.push(bb);
                 }
             }
             let gone: Vec<String> = off.iter().map(|i| i.id.clone()).collect();
@@ -1223,6 +1245,7 @@ impl Journal {
         });
         self.new_notebook_dialog(ctx, cx);
         self.board_dialog_ui(ctx, cx);
+        self.delete_dialog(ctx, cx);
         if std::mem::take(&mut self.close_requested) {
             self.close(cx.vault);
         }

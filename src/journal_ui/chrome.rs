@@ -197,6 +197,10 @@ impl Journal {
                                 b.delete_page(pn, &mut self.out);
                             }
                         }
+                        kit::menu_sep(ui, p);
+                        if kit::menu_danger(ui, icons::TRASH_2, "Apagar este caderno…", p) {
+                            self.delete_dlg = Some(b.nb.clone());
+                        }
                     });
                 });
             });
