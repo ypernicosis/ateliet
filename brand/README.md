@@ -24,6 +24,8 @@ A haste é inclinada a 13°, o mesmo ângulo das hastes do itálico do logotipo,
 
 `icons/icon.png` e `icons/icon.icns` são gerados a partir de `icon.svg` e `icon-small.svg`.
 
+O filme de apresentação, de 15 segundos, está em `video/` ([video/README.md](video/README.md)).
+
 ## regras
 
 - Tudo em minúsculas: o nome, os títulos, as frases da marca. "ateliet", nunca "Ateliet" nem "ATELIET".
