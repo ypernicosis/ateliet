@@ -29,6 +29,27 @@ fn main() {
         }
     }
     link_clang_rt();
+    build_work_video();
+}
+
+fn build_work_video() {
+    println!("cargo:rerun-if-changed=native/work_video.m");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") { return; }
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let object = out.join("work_video.o");
+    let archive = out.join("libateliet_work_video.a");
+    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("aarch64") => "arm64", Ok("x86_64") => "x86_64", _ => panic!("unsupported macOS architecture"),
+    };
+    let status = Command::new("xcrun").args(["clang", "-arch", arch, "-fobjc-arc", "-Wall", "-Wextra", "-Wno-unused-parameter", "-mmacosx-version-min=13.4", "-c", "native/work_video.m", "-o"]).arg(&object).status().expect("Xcode Command Line Tools are required for the macOS video player");
+    assert!(status.success(), "could not compile the macOS video player");
+    let status = Command::new("xcrun").args(["ar", "crs"]).arg(&archive).arg(&object).status().expect("could not run ar");
+    assert!(status.success(), "could not archive the macOS video player");
+    println!("cargo:rustc-link-search=native={}", out.display());
+    println!("cargo:rustc-link-lib=static=ateliet_work_video");
+    for framework in ["AppKit", "AVKit", "AVFoundation", "WebKit", "CoreMedia"] {
+        println!("cargo:rustc-link-lib=framework={framework}");
+    }
 }
 
 // The prebuilt ONNX Runtime objects (CoreML provider) use `@available`, which

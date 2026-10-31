@@ -1,5 +1,5 @@
 //! Ateliet: the same vault, notes and built-in tools as Obsidian, drawn with
-//! egui (no web view, no GTK).
+//! egui, with a separate native video companion on macOS (no GTK).
 
 mod align;
 mod app;
@@ -35,6 +35,7 @@ mod vault;
 #[cfg(feature = "clip")]
 mod vision;
 mod writing;
+mod work_video;
 
 use std::path::PathBuf;
 
