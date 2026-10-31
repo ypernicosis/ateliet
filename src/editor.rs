@@ -836,6 +836,50 @@ pub fn galley(ui: &egui::Ui, text: &str, cache: &mut HighlightCache, st: &Styles
     ui.fonts(|f| crate::align::layout(f, job, width, crate::align::current()))
 }
 
+/// The cursor of an editor, as tall as the font of the letter beside it (the
+/// one before it, or after it at the start of a row), blinking as egui's does.
+/// Marks set out of sight (a font of half a point) do not count as a letter.
+fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutput, stroke: Stroke) {
+    let Some(range) = out.cursor_range else { return };
+    if !out.response.has_focus() || stroke.is_empty() {
+        return;
+    }
+    let galley = &out.galley;
+    let at = galley.pos_from_cursor(&range.primary);
+    let (x, mid) = (at.center().x, at.center().y);
+    let seen = |g: &&egui::epaint::text::Glyph| g.font_height >= 2.0;
+    let glyph = galley.rows.iter().find(|r| r.min_y() <= mid && mid < r.max_y()).and_then(|r| {
+        let before = r.glyphs.iter().rev().filter(|g| g.pos.x < x - 0.01).find(seen);
+        before.or_else(|| r.glyphs.iter().filter(|g| g.pos.x >= x - 0.01).find(seen))
+    });
+    let (top, bottom) = match glyph {
+        Some(g) => (g.pos.y - g.font_ascent, g.pos.y - g.font_ascent + g.font_height),
+        None => (at.min.y, at.max.y),
+    };
+    let (top, bottom) = (top.max(at.min.y), bottom.min(at.max.y).max(top.max(at.min.y)));
+    let ctx = ui.ctx();
+    let (now, key) = (ctx.input(|i| i.time), (range.primary.ccursor.index, galley.job.text.len()));
+    let slot = id.with("caret-since");
+    let (last, mut since): ((usize, usize), f64) = ctx.data(|d| d.get_temp(slot)).unwrap_or((key, now));
+    if last != key {
+        since = now;
+    }
+    ctx.data_mut(|d| d.insert_temp(slot, (key, since)));
+    let blink = ui.visuals().text_cursor.clone();
+    if blink.blink {
+        let cycle = (blink.on_duration + blink.off_duration).max(0.1);
+        let t = ((now - since) % cycle as f64) as f32;
+        if t >= blink.on_duration {
+            ctx.request_repaint_after_secs(cycle - t);
+            return;
+        }
+        ctx.request_repaint_after_secs(blink.on_duration - t);
+    }
+    let x = out.galley_pos.x + x;
+    let dy = out.galley_pos.y;
+    ui.painter().with_clip_rect(out.text_clip_rect).line_segment([egui::pos2(x, dy + top), egui::pos2(x, dy + bottom)], stroke);
+}
+
 /// The note editor; `min_rows` keeps an empty note clickable.
 pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut HighlightCache, st: &'a Styles, min_rows: usize) -> impl egui::Widget + 'a {
     let rows = text.split('\n').count().max(min_rows);
@@ -863,7 +907,13 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
             // where the reading view puts the text
             edit = edit.margin(egui::Margin::ZERO);
         }
+        // egui's cursor spans the whole row, however loose its spacing or
+        // large the heading; this one is painted below, the letter's height
+        let cursor_stroke = ui.visuals().text_cursor.stroke;
+        ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
+        ui.visuals_mut().text_cursor.stroke = cursor_stroke;
+        paint_caret(ui, id, &out, cursor_stroke);
         let resp = out.response.clone();
         let wrote = crate::writing::after(ui, id, text, &out, st.p);
         if resp.hovered() && ui.input(|i| i.pointer.secondary_pressed()) {
