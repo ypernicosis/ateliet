@@ -8,7 +8,7 @@
 
 Um clone minimalista do Obsidian, escrito em **Rust**, que abre **o mesmo vault** que o Obsidian, com as mesmas notas e configurações.
 
-- **Nativo**: a interface é desenhada com egui, sem webview, sem GTK e sem Chromium embutido. O binário tem cerca de 14 MB, com a fonte Inter e os ícones Lucide embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
+- **Nativo**: a interface principal é desenhada com egui, sem GTK e sem Chromium embutido. O player auxiliar de vídeo usa AVKit no macOS e cria uma WKWebView do sistema somente para vídeos do YouTube. A fonte Inter e os ícones Lucide vêm embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
 - **Compatível**: lê e grava `.obsidian/` (preferências, atalhos, favoritos, notas diárias, templates, temas e snippets) nos mesmos arquivos do Obsidian, e traz embutidos o Dataview, o Templater e o Calendar.
 
 ## Rodando
@@ -23,6 +23,8 @@ sh scripts/bundle-macos.sh --install    # macOS: gera e instala /Applications/At
 Sem argumento, o Ateliet reabre o último vault ou mostra o seletor, que já lista os vaults conhecidos pelo Obsidian.
 
 ## O que funciona
+
+- **Vídeo enquanto trabalho** (macOS): botão de filme na barra lateral ou `Cmd+Option+V` abre um arquivo do computador ou um link do YouTube. A janela auxiliar é movível, redimensionável e pode ficar sempre por cima; a reprodução acompanha a navegação entre notas, Journal, Imagens e Leitor. Os últimos oito vídeos guardam a posição. Arquivos ficam onde estão, sem importação para o cofre; os formatos locais dependem dos codecs do macOS. Fechar ou minimizar pausa, e o app inicia sem tocar vídeos. A paleta também oferece mostrar a janela e pausar/continuar. Em outros sistemas, o seletor oferece abertura no aplicativo padrão. [Arquitetura e validação](docs/VIDEO.md).
 
 - **Notas**: editor com Live Preview por bloco (o bloco em edição tem a mesma aparência da leitura, com as marcas do Markdown aparecendo só onde está o cursor, e o cursor cai onde se clicou), modo código-fonte e modo de leitura. Alinhamento por nota (esquerda, justificado, centro, direita). Salvamento automático, abas reabertas por vault, propriedades do frontmatter. Duas notas lado a lado, como no Obsidian: o botão de dividir na barra de abas (ou "Abrir ao lado" no explorador e no menu de uma aba) põe outra nota num segundo painel; clicar num painel faz dele o painel em uso, a divisória se arrasta (duplo clique volta ao meio) e a divisão fica guardada na sessão.
 - **Diagramas, fórmulas e mídia**: blocos `mermaid` de fluxograma, sequência, pizza, Gantt, classes e estados; fórmulas em bloco (`$$…$$`) diagramadas (frações, raízes, matrizes, limites, delimitadores altos), as do meio do texto em Unicode; áudio, vídeo (com o ffmpeg instalado) e PDF incorporados tocam e aparecem dentro da nota.

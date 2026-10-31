@@ -35,7 +35,7 @@
 
 O repositório é um workspace com dois crates, mais um terceiro vazio:
 - **`core/` (`ateliet_core`)**: tudo o que não depende de janela. A busca de imagens por CLIP (ONNX Runtime) entra pelas features `ort-bundled` e `ort-dynamic`.
-- **`.` (`ateliet`)**: o app, desenhado com egui, sem webview nem GTK. As features são `vision` (CLIP com ONNX Runtime embutido, padrão), `vision-dynamic` (ONNX Runtime do sistema) e `audio` (rodio, padrão).
+- **`.` (`ateliet`)**: a janela principal é desenhada com egui, sem GTK. O player auxiliar usa AVKit e, somente para YouTube, uma WKWebView do sistema no macOS. As features são `vision` (CLIP com ONNX Runtime embutido, padrão), `vision-dynamic` (ONNX Runtime do sistema) e `audio` (rodio, padrão).
 - **`compat/tauri` (`tauri-compat`)**: um crate sem código, ligado como dependência `tauri`. Existe só para que o atualizador da versão anterior do Ateliet (feita com Tauri), que compila com `--features tauri/custom-protocol` e roda `build.sh` antes, consiga compilar esta versão e trocar o executável instalado por ela.
 
 ## Princípios
@@ -43,6 +43,16 @@ O repositório é um workspace com dois crates, mais um terceiro vazio:
 1. **O vault é a fonte da verdade.** Nada fica num banco próprio. O índice é recalculado a cada abertura e mantido por eventos do watcher.
 2. **Escrita mínima e cirúrgica nos arquivos compartilhados.** As configurações de `.obsidian/` são gravadas com *merge* das chaves alteradas, preservando as desconhecidas. O que é só do Ateliet fica em `.obsidian/ateliet/`.
 3. **Nada de trabalho pesado na thread da janela.** Índices, imagens, composição de páginas, scripts e a atualização rodam em threads e entregam o resultado por canais; a janela redesenha quando ele chega.
+
+## Vídeo durante o trabalho
+
+O projeto e os critérios de UX estão em [docs/VIDEO.md](docs/VIDEO.md).
+`core/src/work_video.rs` valida fontes e mantém os recentes;
+`src/work_video.rs` mantém uma sessão global, independente das abas, com
+seletor na interface e acesso pela paleta. No macOS, `native/work_video.m`
+desenha uma janela auxiliar com AVKit para arquivos e WKWebView para o player
+oficial do YouTube. A janela principal continua em egui; a webview é criada
+somente ao solicitar YouTube. Fechar o player libera mídia e preserva a posição.
 
 ## Autoatualização (`src/update.rs`)
 

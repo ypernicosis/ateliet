@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="pt-BR"><meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>html,body,#player{margin:0;width:100%;height:100%;background:#111;overflow:hidden}</style>
+<div id="player"></div>
+<script>
+'use strict';
+const config = __ATELIET_CONFIG__;
+let player, ready = false;
+const report = data => window.webkit.messageHandlers.video.postMessage(data);
+window.atelietToggle = () => {
+  if (!ready) return;
+  player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
+};
+window.atelietPause = () => { if (ready) player.pauseVideo(); };
+window.onYouTubeIframeAPIReady = () => {
+  player = new YT.Player('player', {
+    width:'100%', height:'100%', videoId:config.id,
+    playerVars:{autoplay:1, playsinline:1, controls:1, start:Math.floor(config.position), origin:config.origin},
+    events:{
+      onReady:() => { ready = true; report({ready:true}); },
+      onStateChange:() => report({playing:player.getPlayerState() === 1}),
+      onAutoplayBlocked:() => report({error:'Clique em reproduzir no vídeo para começar.'}),
+      onError:event => {
+        const messages = {
+          2:'O endereço deste vídeo é inválido.',
+          5:'O YouTube não conseguiu reproduzir este vídeo.',
+          100:'Este vídeo foi removido ou é privado.',
+          101:'O autor não permite reprodução fora do YouTube.',
+          150:'O autor não permite reprodução fora do YouTube.',
+          153:'O YouTube recusou a identificação do aplicativo.'
+        };
+        report({error:messages[event.data] || 'Não foi possível reproduzir. Tente abrir no YouTube.'});
+      }
+    }
+  });
+};
+const script = document.createElement('script');
+script.src = 'https://www.youtube.com/iframe_api';
+script.onerror = () => report({error:'Sem conexão com o YouTube. Verifique a rede ou abra no navegador.'});
+document.head.appendChild(script);
+setInterval(() => {
+  if (!ready) return;
+  const data = player.getVideoData();
+  const state = player.getPlayerState();
+  report({position:state === 0 ? 0 : player.getCurrentTime(), playing:state === 1, title:data.title || 'YouTube', id:data.video_id || config.id});
+}, 1000);
+setTimeout(() => { if (!ready) report({error:'O YouTube demorou a responder. Verifique a rede ou abra no navegador.'}); }, 20000);
+</script></html>

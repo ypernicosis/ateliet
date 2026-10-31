@@ -197,6 +197,10 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
                 app.open_book(crate::reader_ui::SHELF, None, true);
             }
             storyboards_button(app, ui, p);
+            let video_tip = if cfg!(target_os = "macos") { "Vídeo: computador ou YouTube (⌘⌥V)" } else { "Vídeo: computador ou YouTube (Ctrl+Alt+V)" };
+            if icon_button(ui, icons::FILM, video_tip, app.video.active(), p).clicked() {
+                app.video.open_dialog();
+            }
             if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());
             }
@@ -1323,6 +1327,7 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
                 ui.label(small("Executando modelo…".into()));
             }
             mini_player(app, ui);
+            app.video.status(ui, p);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 if let Some(s) = app.sprint.as_ref() {

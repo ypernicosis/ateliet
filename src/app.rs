@@ -195,6 +195,7 @@ pub struct App {
     hover_rect: Option<egui::Rect>,
     pub updater: crate::update::Updater,
     pub music: crate::music::Music,
+    pub video: crate::work_video::Video,
     pub focus: Option<crate::sc::focus::Focus>,
     pub sprint: Option<crate::sc::focus::Sprint>,
     pub focus_restore: (bool, bool),
@@ -261,6 +262,7 @@ impl App {
             hover_rect: None,
             updater: crate::update::Updater::new(),
             music: Default::default(),
+            video: Default::default(),
             focus: None,
             sprint: None,
             focus_restore: (true, true),
@@ -365,7 +367,8 @@ impl App {
 
     // ── files and tabs ─────────────────────────────────────────────────────
 
-    /// Open a note (or focus its tab). Non-markdown files open in the system app.
+    /// Open a note (or focus its tab), a book, or the work-session video.
+    /// Other non-markdown files open in the system app.
     pub fn open(&mut self, path: &str, new_tab: bool) {
         let Some(v) = &self.vault else { return };
         if let Some(view) = crate::sc::View::from_path(path) {
@@ -388,6 +391,11 @@ impl App {
             return;
         }
         let lower = path.to_lowercase();
+        if ateliet_core::work_video::is_video(std::path::Path::new(path)) {
+            let abs = v.abs(path);
+            self.video.play_local(abs);
+            return;
+        }
         let is_board = lower.ends_with(".storyboard");
         let is_quadro = lower.ends_with(".excalidraw") || (lower.ends_with(".md") && crate::quadro_ui::is_quadro(&v.abs(path)));
         if !lower.ends_with(".md") && !is_board && !is_quadro {
@@ -1189,6 +1197,8 @@ impl eframe::App for App {
             self.themed = true;
         }
         if self.vault.is_none() {
+            self.video.tick(ctx);
+            self.video.ui(ctx, self.palette);
             panels::vault_picker(self, ctx);
             return;
         }
@@ -1241,6 +1251,8 @@ impl eframe::App for App {
         self.finish_templates();
         self.music_tick(ctx);
         commands::shortcuts(self, ctx);
+        self.video.tick(ctx);
+        self.video.ui(ctx, self.palette);
 
         self.sprint_tick();
         if self.focus.is_some() && !self.images_mode && !self.journal_mode {
@@ -1306,6 +1318,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.video.shutdown();
         if let (Some(v), Some(sc)) = (&self.vault, &self.sc) {
             let ix = v.index.read().unwrap();
             self.music.flush(&v.root, &ix, &sc.author());
@@ -1509,6 +1522,7 @@ impl App {
     /// Files dropped on the window, and an image pasted into a note.
     fn drops_and_paste(&mut self, ctx: &egui::Context) {
         let dropped: Vec<std::path::PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        if !dropped.is_empty() && self.video.captures_drop(ctx) { return; }
         let board = self.tabs.get(self.active).is_some_and(|t| t.board.is_some());
         // in the Journal, the note behind it is not where things go
         let note = !self.journal_mode && self.tabs.get(self.active).is_some_and(|t| t.board.is_none() && t.quadro.is_none() && t.view.is_none() && t.path.to_lowercase().ends_with(".md"));
