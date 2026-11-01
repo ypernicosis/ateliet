@@ -476,23 +476,83 @@ pub fn note_link(ix: &Index, target: &str, from: &str) -> String {
     }
 }
 
+/// The sheet a new character starts from when the vault has no model note:
+/// the "personagens v2.1" sheet. Short fields are attributes, long ones are
+/// sections, relationships are lists of people.
+pub fn default_character_model() -> super::sheet::Sheet {
+    let mut fm = serde_json::Map::new();
+    for k in ["papel", "retrato", "nome_completo", "apelidos", "idade", "genero", "orientacao", "etnia", "altura", "peso", "filiacao", "ars", "nivel_ars", "estilo_luta", "treinamento", "simbolo", "cor_aura", "frase", "cor"] {
+        fm.insert(k.into(), json!(""));
+    }
+    let lists = ["familia", "mentores", "amigos", "rivais", "amores"];
+    for l in lists {
+        fm.insert(l.into(), json!([]));
+    }
+    fm.insert("listas".into(), json!(lists));
+    let sections = [
+        "Aparência",
+        "Personalidade",
+        "Origem e infância",
+        "Fobias ou fraquezas",
+        "Conexão com o Ars Vortices",
+        "Motivação principal",
+        "Sonho, objetivo ou ambição",
+        "Arco de desenvolvimento",
+        "Evolução emocional",
+        "Cenas e temas focados",
+        "Ars",
+        "Restrição ou custo do Ars",
+        "Notas",
+    ];
+    super::sheet::Sheet { fm, invalid: None, pre: String::new(), sections: sections.iter().map(|t| (t.to_string(), String::new())).collect() }
+}
+
+/// The model note (`scriptorium: modelo-ficha`) new characters copy: the
+/// one inside the book's folder, else the first one in the vault.
+pub fn character_model(ix: &Index, book: &Book) -> Option<String> {
+    let mut models: Vec<&String> = ix.page_paths().filter(|p| ix.page(p).is_some_and(|pg| kind(pg) == "modelo-ficha")).collect();
+    models.sort_by(|a, b| crate::text::natural_cmp(a, b));
+    let prefix = format!("{}/", book.folder);
+    models.iter().find(|p| !book.folder.is_empty() && p.starts_with(&prefix)).or(models.first()).map(|p| p.to_string())
+}
+
+/// The model note to edit: the one in use, else a new one in the book's
+/// "Personagens" folder holding the default sheet.
+pub fn ensure_character_model(root: &Path, ix: &Index, book: &Book) -> Result<(String, bool), String> {
+    if let Some(p) = character_model(ix, book) {
+        return Ok((p, false));
+    }
+    let path = unique(root, &join(&join(&book.folder, "Personagens"), "Modelo de ficha.md"));
+    let mut m = default_character_model();
+    let mut fm = serde_json::Map::new();
+    fm.insert("scriptorium".into(), json!("modelo-ficha"));
+    fm.extend(std::mem::take(&mut m.fm));
+    m.fm = fm;
+    m.pre = "Modelo das fichas de personagem. Cada ficha nova copia as propriedades, as listas e as seções desta nota.".into();
+    write(root, &path, &m.to_text())?;
+    Ok((path, true))
+}
+
 pub fn create_character(root: &Path, ix: &Index, book: &Book, name: &str) -> Result<String, String> {
     let path = unique(root, &join(&join(&book.folder, "Personagens"), &format!("{}.md", safe_name(name))));
-    let fm = [
-        ("scriptorium", json!("personagem")),
-        ("livro", json!(note_link(ix, &book.path, &path))),
-        ("papel", json!("")),
-        ("retrato", json!("")),
-        ("apelidos", json!("")),
-        ("grupo", json!("")),
-        ("idade", json!("")),
-        ("frase", json!("")),
-        ("aliados", json!([])),
-        ("inimigos", json!([])),
-        ("cor", json!("")),
-    ];
-    let body = "\n## Descrição física\n\n\n## Personalidade\n\n\n## Arco do personagem\n\n\n## Notas\n\n";
-    write(root, &path, &note_with(&fm, body))?;
+    let model = character_model(ix, book)
+        .and_then(|m| std::fs::read_to_string(root.join(m)).ok())
+        .map(|t| super::sheet::Sheet::parse(&t))
+        .filter(|s| s.invalid.is_none())
+        .unwrap_or_else(default_character_model);
+    let mut fm = serde_json::Map::new();
+    fm.insert("scriptorium".into(), json!("personagem"));
+    fm.insert("livro".into(), json!(note_link(ix, &book.path, &path)));
+    for (k, v) in &model.fm {
+        if !["scriptorium", "livro", "livros", "modelo", "modelo_sobre"].contains(&k.as_str()) {
+            fm.insert(k.clone(), v.clone());
+        }
+    }
+    if fm.get("nome_completo").is_some_and(|v| v.as_str() == Some("")) {
+        fm.insert("nome_completo".into(), json!(name.trim()));
+    }
+    let sheet = super::sheet::Sheet { fm, invalid: None, pre: String::new(), sections: model.sections };
+    write(root, &path, &sheet.to_text())?;
     Ok(path)
 }
 
@@ -569,7 +629,33 @@ mod tests {
         assert_eq!(book_for(&ix, &c2, "").unwrap().path, b.path);
         let ch = create_character(&root, &ix, b, "Ana").unwrap();
         ix.update(&[ch.clone()]);
-        assert_eq!(characters(&ix, b), vec![ch]);
+        assert_eq!(characters(&ix, b), vec![ch.clone()]);
+        // no model note: the v2.1 sheet
+        let ana = super::super::sheet::Sheet::parse(&std::fs::read_to_string(root.join(&ch)).unwrap());
+        assert_eq!(ana.str("nome_completo"), "Ana");
+        assert!(ana.attr_keys().contains(&"cor_aura".to_string()));
+        assert_eq!(ana.lists(), vec!["familia", "mentores", "amigos", "rivais", "amores"]);
+        assert_eq!(ana.sections.len(), 13);
+        assert_eq!(ana.sections[4].0, "Conexão com o Ars Vortices");
+        // the model note, once made, is what new sheets copy
+        let (m, made) = ensure_character_model(&root, &ix, b).unwrap();
+        assert!(made);
+        ix.update(&[m.clone()]);
+        assert_eq!(ensure_character_model(&root, &ix, b).unwrap(), (m.clone(), false));
+        let mut model = super::super::sheet::Sheet::parse(&std::fs::read_to_string(root.join(&m)).unwrap());
+        assert_eq!(model.str("scriptorium"), "modelo-ficha");
+        model.sections.truncate(2);
+        model.sections[1].1 = "Três adjetivos.".into();
+        model.fm.insert("vortice".into(), json!(""));
+        std::fs::write(root.join(&m), model.to_text()).unwrap();
+        ix.update(&[m.clone()]);
+        let bia = create_character(&root, &ix, b, "Bia").unwrap();
+        ix.update(&[bia.clone()]);
+        let bs = super::super::sheet::Sheet::parse(&std::fs::read_to_string(root.join(&bia)).unwrap());
+        assert_eq!(bs.str("scriptorium"), "personagem");
+        assert_eq!(bs.sections, vec![("Aparência".to_string(), String::new()), ("Personalidade".to_string(), "Três adjetivos.".to_string())]);
+        assert!(bs.attr_keys().contains(&"vortice".to_string()));
+        assert_eq!(characters(&ix, b).len(), 2);
         let cfg = layout(b);
         assert_eq!(cfg["largura"], json!(140.0));
         assert_eq!(chapter_label(&cfg, &chs[1], 23), "Capítulo Vinte e Três");

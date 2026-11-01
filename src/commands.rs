@@ -53,6 +53,7 @@ pub enum Cmd {
     NewBook,
     NewChapter,
     NewCharacter,
+    CharacterModel,
     ContinueBook,
     ExportBook,
     Focus,
@@ -116,6 +117,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::NewBook, "scriptorium-omena:novo-livro", "Scriptorium: Novo livro"),
     (Cmd::NewChapter, "scriptorium-omena:novo-capitulo", "Scriptorium: Novo capítulo"),
     (Cmd::NewCharacter, "scriptorium-omena:novo-personagem", "Scriptorium: Novo personagem"),
+    (Cmd::CharacterModel, "scriptorium-omena:modelo-ficha", "Scriptorium: Editar modelo de ficha de personagem"),
     (Cmd::ContinueBook, "scriptorium-omena:continuar", "Scriptorium: Continuar escrevendo"),
     (Cmd::ExportBook, "scriptorium-omena:exportar", "Scriptorium: Exportar livro…"),
     (Cmd::Focus, "scriptorium-omena:modo-foco", "Scriptorium: Alternar modo foco"),
@@ -280,10 +282,11 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             None => app.toast("Abra um capítulo ou escolha um livro na Biblioteca."),
         },
         Cmd::NewBook => app.new_book_form(),
-        Cmd::NewChapter | Cmd::NewCharacter | Cmd::ContinueBook | Cmd::ExportBook => match app.current_book() {
+        Cmd::NewChapter | Cmd::NewCharacter | Cmd::CharacterModel | Cmd::ContinueBook | Cmd::ExportBook => match app.current_book() {
             Some(b) => app.sc_apply(match c {
                 Cmd::NewChapter => crate::sc::Action::NewChapter(b.path),
                 Cmd::NewCharacter => crate::sc::Action::NewCharacter(b.path),
+                Cmd::CharacterModel => crate::sc::Action::CharacterModel(b.path),
                 Cmd::ExportBook => crate::sc::Action::Export(b.path),
                 _ => crate::sc::Action::Continue(b.path),
             }),
