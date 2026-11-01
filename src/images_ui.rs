@@ -25,6 +25,8 @@ const FULL_MAX: u32 = 2560;
 
 mod pinterest;
 pub mod moodboard;
+#[cfg(test)]
+mod side_tests;
 
 pub fn thumb_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("ateliet").join("thumbnails")
@@ -165,6 +167,8 @@ pub struct ImagesState {
     pass: u64,
     loader: Option<Arc<Loader>>,
     pub viewer: Option<Viewer>,
+    /// The picture open in the side panel (its key), over the grid.
+    pub side_view: Option<String>,
     pub selection: HashSet<usize>,
     scanning: Option<std::sync::mpsc::Receiver<(Vec<ImageEntry>, images::Index)>>,
     root: PathBuf,
@@ -237,6 +241,7 @@ impl Default for ImagesState {
             pass: 0,
             loader: None,
             viewer: None,
+            side_view: None,
             selection: HashSet::new(),
             scanning: None,
             root: PathBuf::new(),
@@ -1026,8 +1031,19 @@ impl ImagesState {
     /// squares; a click puts the picture in the note.
     pub fn side_ui(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) -> Option<ImageAction> {
         self.poll(ui.ctx());
+        self.refresh_shown();
+        if let Some(key) = self.side_view.clone() {
+            match self.shown.iter().position(|&i| self.entries[i].key == key) {
+                Some(pos) => return self.side_picture(ui, pos, p),
+                None => self.side_view = None,
+            }
+        }
         let mut action = None;
-        kit::search_field(ui, &mut self.query, "Buscar imagens", p);
+        ui.horizontal(|ui| {
+            let w = ui.available_width() - 62.0;
+            ui.allocate_ui(egui::vec2(w.max(80.0), 26.0), |ui| kit::search_field(ui, &mut self.query, "Buscar imagens", p));
+            self.order_buttons(ui, p);
+        });
         ui.add_space(8.0);
         self.refresh_shown();
         if self.shown.is_empty() {
@@ -1047,7 +1063,7 @@ impl ImagesState {
                     ui.spacing_mut().item_spacing.x = gap;
                     for c in 0..cols {
                         let Some(&i) = shown.get(r * cols + c) else { break };
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cell, cell), Sense::click_and_drag());
                         ui.painter().rect_filled(rect, 6.0, p.bg_hover);
                         if let Some(t) = self.thumb(i) {
                             let e = &self.entries[i];
@@ -1058,15 +1074,160 @@ impl ImagesState {
                         if resp.hovered() {
                             ui.painter().rect_stroke(rect, 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                         }
-                        let name = self.entries[i].name.clone();
-                        if resp.on_hover_text(format!("{name}\nClique para pôr na nota")).clicked() {
-                            action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
+                        if resp.drag_started() {
+                            resp.dnd_set_drag_payload(vec![i]);
                         }
+                        if resp.dragged() {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                            self.drag_ghost(ui, i, p);
+                        }
+                        let name = self.entries[i].name.clone();
+                        let resp = resp.on_hover_text(format!("{name}\nClique para ver; arraste para a nota"));
+                        if resp.clicked() {
+                            self.side_view = Some(self.entries[i].key.clone());
+                        }
+                        resp.context_menu(|ui| {
+                            if kit::menu_item(ui, icons::IMAGE, "Ver aqui", p) {
+                                self.side_view = Some(self.entries[i].key.clone());
+                            }
+                            if kit::menu_item(ui, icons::FILE_PLUS, "Pôr na nota", p) {
+                                action = Some(ImageAction::Insert(vec![self.entries[i].key.clone()]));
+                            }
+                            if kit::menu_item(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", p) {
+                                let _ = open::that(&self.entries[i].abs);
+                            }
+                        });
                     }
                 });
                 ui.add_space(gap - ui.spacing().item_spacing.y);
             }
         });
+        action
+    }
+
+    /// The order of the pictures (shared with image mode) and, when
+    /// shuffled, a new shuffle.
+    fn order_buttons(&mut self, ui: &mut egui::Ui, p: crate::theme::Palette) {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let (glyph, tip) = match self.order {
+            Order::Newest => (icons::CALENDAR_CLOCK, "Salvas por último primeiro"),
+            Order::Oldest => (icons::CALENDAR_RANGE, "Na ordem em que foram salvas"),
+            Order::Shuffled(_) => (icons::SHUFFLE, "Embaralhadas"),
+        };
+        let or = kit::icon_button_sized(ui, glyph, tip, false, p, 26.0, 14.0);
+        let oid = ui.make_persistent_id("side-images-order");
+        if or.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(oid));
+        }
+        let mut pick = None;
+        egui::popup_below_widget(ui, oid, &or, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+            ui.set_min_width(220.0);
+            for (o, g, l) in [(Order::Newest, icons::CALENDAR_CLOCK, "Salvas por último primeiro"), (Order::Oldest, icons::CALENDAR_RANGE, "Na ordem em que foram salvas"), (Order::Shuffled(0), icons::SHUFFLE, "Embaralhar")] {
+                let on = std::mem::discriminant(&o) == std::mem::discriminant(&self.order);
+                if kit::menu_entry(ui, g, l, if on { "✓" } else { "" }, true, false, p) {
+                    pick = Some(o);
+                }
+            }
+        });
+        let again = matches!(self.order, Order::Shuffled(_));
+        if kit::icon_button_sized(ui, if again { icons::REFRESH_CW } else { icons::SHUFFLE }, if again { "Embaralhar de novo" } else { "Embaralhar" }, false, p, 26.0, 14.0).clicked() {
+            pick = Some(Order::Shuffled(0));
+        }
+        if let Some(o) = pick {
+            self.set_order(if let Order::Shuffled(_) = o { Order::Shuffled(new_seed()) } else { o });
+        }
+    }
+
+    /// A small copy of the picture under the pointer while it is dragged.
+    fn drag_ghost(&mut self, ui: &egui::Ui, i: usize, p: crate::theme::Palette) {
+        let Some(pos) = ui.ctx().pointer_interact_pos() else { return };
+        let Some(t) = self.thumb(i) else { return };
+        let e = &self.entries[i];
+        let k = e.width.max(1) as f32 / e.height.max(1) as f32;
+        let size = if k > 1.0 { egui::vec2(96.0, 96.0 / k) } else { egui::vec2(96.0 * k, 96.0) };
+        let rect = egui::Rect::from_min_size(pos + egui::vec2(10.0, 10.0), size);
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("side-picture-ghost")));
+        painter.rect_filled(rect.expand(2.0), 6.0, p.bg);
+        painter.add(egui::epaint::RectShape::filled(rect, 5.0, Color32::from_white_alpha(220)).with_texture(t, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))));
+    }
+
+    /// One picture large in the side panel: back to the grid, the ones
+    /// before and after, drag it onto the note.
+    fn side_picture(&mut self, ui: &mut egui::Ui, pos: usize, p: crate::theme::Palette) -> Option<ImageAction> {
+        let mut action = None;
+        let i = self.shown[pos];
+        let e = self.entries[i].clone();
+        let n = self.shown.len();
+        let mut go: Option<usize> = None;
+        let mut back = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if kit::icon_button(ui, icons::ARROW_LEFT, "Voltar às imagens", false, p).clicked() {
+                back = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if kit::icon_button(ui, icons::EXTERNAL_LINK, "Abrir no app padrão", false, p).clicked() {
+                    let _ = open::that(&e.abs);
+                }
+                if kit::icon_button(ui, icons::CHEVRON_RIGHT, "Próxima", false, p).clicked() {
+                    go = Some((pos + 1) % n);
+                }
+                ui.label(RichText::new(format!("{} / {n}", pos + 1)).size(11.5).color(p.faint));
+                if kit::icon_button(ui, icons::CHEVRON_LEFT, "Anterior", false, p).clicked() {
+                    go = Some((pos + n - 1) % n);
+                }
+            });
+        });
+        ui.add_space(6.0);
+        let avail = ui.available_size();
+        let k = e.width.max(1) as f32 / e.height.max(1) as f32;
+        let max_h = (avail.y - 70.0).max(120.0);
+        let mut size = egui::vec2(avail.x, avail.x / k);
+        if size.y > max_h {
+            size = egui::vec2(max_h * k, max_h);
+        }
+        let (row, _) = ui.allocate_exact_size(egui::vec2(avail.x, size.y), Sense::hover());
+        let rect = egui::Rect::from_center_size(row.center(), size);
+        let resp = ui.interact(rect, ui.id().with(("side-picture", i)), Sense::click_and_drag());
+        ui.painter().rect_filled(rect, 6.0, p.bg_hover);
+        let px = size.x.max(size.y) * ui.ctx().pixels_per_point();
+        if let Some(t) = self.thumb_sized(i, px, true, false) {
+            ui.painter().add(egui::epaint::RectShape::filled(rect, 6.0, Color32::WHITE).with_texture(t, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0))));
+        }
+        if resp.drag_started() {
+            resp.dnd_set_drag_payload(vec![i]);
+        }
+        if resp.dragged() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            self.drag_ghost(ui, i, p);
+        } else if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        resp.on_hover_text("Arraste para a nota");
+        ui.add_space(8.0);
+        ui.label(RichText::new(&e.name).font(kit::medium(13.0)).color(p.text));
+        ui.label(RichText::new(format!("{} × {}", e.width, e.height)).size(11.5).color(p.faint));
+        ui.add_space(6.0);
+        if kit::button(ui, Some(icons::FILE_PLUS), "Pôr na nota", p).on_hover_text("No ponto do cursor da nota").clicked() {
+            action = Some(ImageAction::Insert(vec![e.key.clone()]));
+        }
+        // ← and → walk through them with the pointer over the panel, while
+        // nothing is being typed in (a storyboard uses them for its frames)
+        if !ui.ctx().wants_keyboard_input() && ui.ui_contains_pointer() {
+            if ui.input(|inp| inp.key_pressed(egui::Key::ArrowRight)) {
+                go = Some((pos + 1) % n);
+            } else if ui.input(|inp| inp.key_pressed(egui::Key::ArrowLeft)) {
+                go = Some((pos + n - 1) % n);
+            } else if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                back = true;
+            }
+        }
+        if let Some(g) = go {
+            self.side_view = Some(self.entries[self.shown[g]].key.clone());
+        }
+        if back {
+            self.side_view = None;
+        }
         action
     }
 
