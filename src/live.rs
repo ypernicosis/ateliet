@@ -94,6 +94,9 @@ pub struct LiveState {
     pub query_edit: Option<usize>,
     query_focus: bool,
     query_hl: Vec<editor::HighlightCache>,
+    /// The blocks as drawn this frame, top to bottom: (top, bottom, first
+    /// line, last line). Where a dragged picture would land.
+    pub spots: Vec<(f32, f32, usize, usize)>,
 }
 
 impl LiveState {
@@ -112,6 +115,20 @@ impl LiveState {
         self.buf = seg.text.clone();
         self.buf_end = seg.end;
         self.cursor_at = Some(if cursor_at_end { seg.text.chars().count() } else { 0 });
+    }
+
+    /// The line a picture dropped at height `y` goes before, and the height
+    /// to mark it at; None when the note was not drawn in Live Preview.
+    pub fn drop_line(&self, y: f32) -> Option<(usize, f32)> {
+        let mut prev_bottom = None;
+        for &(top, bottom, start, _) in &self.spots {
+            if y < (top + bottom) / 2.0 {
+                let mark = prev_bottom.map(|b: f32| (b + top) / 2.0).unwrap_or(top - 4.0);
+                return Some((start, mark));
+            }
+            prev_bottom = Some(bottom);
+        }
+        self.spots.last().map(|&(_, bottom, _, end)| (end + 1, bottom + 4.0))
     }
 
     pub fn close(&mut self) {
@@ -472,6 +489,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
             }
         }
         let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
+        tab.live.spots.push((rect.top(), rect.bottom(), seg.start, seg.end));
         let clicked = ui.input(|inp| inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
         // the properties are edited with their own widgets, not as YAML
         if clicked && actions.len() == before && !seg.frontmatter {

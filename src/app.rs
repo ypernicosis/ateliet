@@ -1357,6 +1357,7 @@ impl App {
         let p = self.palette;
         let mut moves: Option<(Vec<String>, String)> = None;
         let mut dropped: Vec<String> = Vec::new();
+        let mut drop_line: Option<usize> = None;
         if let Some(n) = self.images.notice.take() {
             self.toast(n);
         }
@@ -1412,7 +1413,12 @@ impl App {
             }
             // pictures dragged from the library or the viewer go into the note
             let panel = ui.max_rect();
-            if egui::DragAndDrop::has_payload_of_type::<Vec<usize>>(ctx) && ui.rect_contains_pointer(panel) {
+            if !self.tabs.is_empty() {
+                if let Some((_, keys, line)) = self.picture_drop(ui, &[(panel, self.active)]) {
+                    dropped = keys;
+                    drop_line = line;
+                }
+            } else if egui::DragAndDrop::has_payload_of_type::<Vec<usize>>(ctx) && ui.rect_contains_pointer(panel) {
                 ui.painter().rect_stroke(panel.shrink(2.0), 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
                 if ctx.input(|i| i.pointer.any_released()) {
                     if let Some(idx) = egui::DragAndDrop::take_payload::<Vec<usize>>(ctx) {
@@ -1427,7 +1433,7 @@ impl App {
                 self.new_note(&folder);
                 self.ask = None;
             }
-            self.insert_pictures(&dropped);
+            self.insert_pictures_at(&dropped, drop_line);
         }
         let mut act = None;
         // a moodboard runs to the edges; the mosaic has a margin
@@ -1579,6 +1585,12 @@ impl App {
 
     /// `![[picture]]` lines at the cursor of the open note (a new note when none is open).
     pub fn insert_pictures(&mut self, keys: &[String]) {
+        self.insert_pictures_at(keys, None);
+    }
+
+    /// The same, before line `line` of the note when given (where a picture
+    /// was dropped), else at the cursor.
+    pub fn insert_pictures_at(&mut self, keys: &[String], line: Option<usize>) {
         if self.tabs.is_empty() {
             self.new_note("");
             self.ask = None;
@@ -1599,7 +1611,7 @@ impl App {
         // pictures from outside the vault (shared library, external folders) are copied in first
         let keys: Vec<String> = keys.iter().map(|k| self.picture_into_vault(k)).collect();
         let embeds: String = keys.iter().map(|k| format!("![[{}]]\n", k.rsplit('/').next().unwrap_or(k))).collect();
-        let Some(note) = self.embed_at_cursor(&embeds) else { return };
+        let Some(note) = self.embed_at(&embeds, line) else { return };
         self.toast(if keys.len() == 1 { format!("Imagem posta em {note}") } else { format!("{} imagens postas em {note}", keys.len()) });
     }
 
@@ -1607,8 +1619,29 @@ impl App {
     /// and never inside the frontmatter. The note's name, or None when the tab
     /// in use is not a note.
     pub fn embed_at_cursor(&mut self, embeds: &str) -> Option<String> {
+        self.embed_at(embeds, None)
+    }
+
+    /// Embed lines before line `line` of the note (its end past the last),
+    /// or at the cursor; the same rules as `embed_at_cursor`.
+    pub fn embed_at(&mut self, embeds: &str, line: Option<usize>) -> Option<String> {
         let t = self.tabs.get_mut(self.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none() && t.reader.is_none())?;
-        let mut b = editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count()));
+        let mut b = match line {
+            Some(l) => {
+                let mut at = 0;
+                for _ in 0..l {
+                    match t.text[at..].find('\n') {
+                        Some(j) => at += j + 1,
+                        None => {
+                            at = t.text.len();
+                            break;
+                        }
+                    }
+                }
+                at
+            }
+            None => editor::char_to_byte(&t.text, t.cursor.min(t.text.chars().count())),
+        };
         // never inside the frontmatter: after it
         if let Some(rest) = t.text.strip_prefix("---\n") {
             if let Some(i) = rest.find("\n---") {
@@ -1704,12 +1737,47 @@ impl App {
         self.note_ui(ui, actions, centered);
     }
 
+    /// Pictures dragged over the panes (from the side panel): a note shows
+    /// where they will go (the line between blocks in Live Preview, else the
+    /// cursor or the end), a storyboard takes them as references. On release:
+    /// (tab, picture keys, line).
+    fn picture_drop(&mut self, ui: &egui::Ui, panes: &[(egui::Rect, usize)]) -> Option<(usize, Vec<String>, Option<usize>)> {
+        let ctx = ui.ctx();
+        if !egui::DragAndDrop::has_payload_of_type::<Vec<usize>>(ctx) {
+            return None;
+        }
+        let pos = ctx.pointer_latest_pos()?;
+        let &(rect, i) = panes.iter().find(|(r, _)| r.contains(pos))?;
+        let t = self.tabs.get(i)?;
+        let note = t.view.is_none() && t.board.is_none() && t.quadro.is_none() && t.reader.is_none();
+        if !note && t.board.is_none() {
+            return None;
+        }
+        let p = self.palette;
+        let painter = ui.painter_at(rect);
+        painter.rect_stroke(rect.shrink(2.0), 6.0, egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+        let spot = if note { t.live.drop_line(pos.y) } else { None };
+        if let Some((_, y)) = spot {
+            let y = y.clamp(rect.top() + 4.0, rect.bottom() - 4.0);
+            painter.hline((rect.left() + 24.0)..=(rect.right() - 24.0), y, egui::Stroke::new(2.0_f32, p.accent_strong));
+            painter.circle_filled(egui::pos2(rect.left() + 24.0, y), 3.5, p.accent_strong);
+        }
+        // the end of the note when nothing tells where (the reading view)
+        let line = spot.map(|s| s.0).or_else(|| (note && t.mode == Mode::Read).then(|| t.text.split('\n').count()));
+        if !ctx.input(|inp| inp.pointer.any_released()) {
+            return None;
+        }
+        let idx = egui::DragAndDrop::take_payload::<Vec<usize>>(ctx)?;
+        Some((i, self.images.keys_of(&idx), line))
+    }
+
     fn central(&mut self, ctx: &egui::Context) {
         let p = self.palette;
         let frame = egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO);
         let mut actions: Vec<Action> = Vec::new();
         let mut sc_actions = Vec::new();
         let mut open_board: Option<String> = None;
+        let mut dropped = None;
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
@@ -1718,7 +1786,9 @@ impl App {
             // a split: the other pane shows the tab of `split`
             let other = self.split.as_ref().and_then(|sp| self.tabs.iter().position(|t| &t.path == sp)).filter(|&i| i != self.active);
             let Some(other) = other else {
+                let rect = ui.available_rect_before_wrap();
                 self.pane_ui(ui, &mut actions, &mut sc_actions, &mut open_board, true);
+                dropped = self.picture_drop(ui, &[(rect, self.active)]);
                 return;
             };
             let full = ui.available_rect_before_wrap();
@@ -1764,6 +1834,7 @@ impl App {
             }
             let line = if hr.hovered() || hr.dragged() { egui::Stroke::new(2.0_f32, p.accent_strong) } else { egui::Stroke::new(1.0_f32, p.border) };
             ui.painter().vline(mid, full.y_range(), line);
+            dropped = self.picture_drop(ui, &[(left, li), (right, ri)]);
             if let Some(i) = focus_to {
                 // the other pane becomes the one in use; the sides stay where they are
                 self.split = Some(self.tabs[self.active].path.clone());
@@ -1771,6 +1842,17 @@ impl App {
                 self.active = i;
             }
         });
+        // pictures dragged from the side panel: into the pane they were dropped on
+        if let Some((i, keys, line)) = dropped {
+            if i != self.active && i < self.tabs.len() {
+                if self.split.is_some() {
+                    self.split = Some(self.tabs[self.active].path.clone());
+                    self.split_right = !self.split_right;
+                }
+                self.active = i;
+            }
+            self.insert_pictures_at(&keys, line);
+        }
         // a storyboard the editor made (thumbnails turned into an animatic)
         if let Some(path) = open_board {
             if let Some(v) = self.vault.as_mut() {
@@ -1842,6 +1924,7 @@ impl App {
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
+            tab.live.spots.clear();
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
             let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
             let pad = if centered { 32.0 } else { 14.0 };
