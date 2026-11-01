@@ -142,7 +142,8 @@ pub fn hud(ctx: &egui::Context, p: Palette, session: i64, chapter: Option<i64>, 
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.memory(|m| m.focused().is_some() || m.any_popup_open()) {
         act = Some(HudAction::Exit);
     }
-    egui::Area::new(egui::Id::new("focus-hud")).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -22.0]).order(egui::Order::Foreground).show(ctx, |ui| {
+    let work = ctx.available_rect();
+    egui::Area::new(egui::Id::new("focus-hud")).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(egui::pos2(work.center().x, work.bottom() - 22.0)).order(egui::Order::Foreground).show(ctx, |ui| {
         ui.set_opacity(0.25 + 0.75 * alpha);
         egui::Frame::new().fill(p.bg).stroke(egui::Stroke::new(1.0_f32, p.border)).corner_radius(22.0).inner_margin(egui::Margin { left: 14, right: 8, top: 6, bottom: 6 }).shadow(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 80 } else { 22 }) }).show(ui, |ui| {
             ui.horizontal(|ui| {

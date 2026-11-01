@@ -60,20 +60,54 @@ static NSDictionary *snapshot(void *handle) {
     return [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
 }
 
+// These assertions do not decode media or contact YouTube. They exercise the
+// actual AppKit parent/geometry boundary, including egui zoom and return events.
+static void layout(void *handle, NSWindow *host) {
+    ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
+    void *view = (__bridge void *)host.contentView;
+    assert(!video.panel && !video.player && !video.web);
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+    assert(video.surface.superview == host.contentView);
+    assert(NSEqualRects(video.surface.frame, NSMakeRect(750, 560, 320, 200)));
+    assert(!video.panel); // Default integration must never create a window.
+    NSView *surface = video.surface;
+    ateliet_video_place(handle, view, 550, 400, 375, 20, 160, 100, 1);
+    assert(NSEqualRects(video.surface.frame, NSMakeRect(750, 560, 320, 200)));
+    ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 2);
+    assert(video.panel && video.surface == surface && surface.superview == video.panel.contentView);
+    [video returnToApp:nil];
+    assert(ateliet_video_has_event(handle));
+    assert([snapshot(handle)[@"presentation"] isEqual:@"docked"]);
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+    assert(surface.superview == host.contentView && !video.panel.isVisible);
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 0);
+    assert(surface.isHidden && !video.playing);
+    puts("PASS: native dock, coordinate scaling, detach and return preserve one surface");
+}
+
 int main(int argc, const char **argv) {
     @autoreleasepool {
-        assert(argc == 3);
+        assert(argc == 3 || argc == 4);
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         [NSApp finishLaunching];
         NSString *html = [NSString stringWithContentsOfFile:[NSString stringWithUTF8String:argv[1]] encoding:NSUTF8StringEncoding error:nil];
         assert(html);
-        NSString *path = [NSString stringWithUTF8String:argv[2]];
-        if (!fixture(path)) return 77; // Infrastructure unavailable, not a passing playback test.
+        NSWindow *host = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1100, 800) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        host.releasedWhenClosed = NO;
+        [host orderFront:nil];
+        void *view = (__bridge void *)host.contentView;
         void *handle = ateliet_video_create(html.UTF8String);
+        layout(handle, host);
+        if (argc == 4 && strcmp(argv[3], "--layout") == 0) {
+            ateliet_video_destroy(handle); [host close]; return 0;
+        }
+        NSString *path = [NSString stringWithUTF8String:argv[2]];
+        if (!fixture(path)) { ateliet_video_destroy(handle); [host close]; return 77; }
         NSDictionary *source = @{@"source":@{@"kind":@"local", @"path":path}, @"position":@2, @"title":@"Teste de vídeo", @"pinned":@YES};
         NSString *json = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:source options:0 error:nil] encoding:NSUTF8StringEncoding];
         ateliet_video_open(handle, json.UTF8String);
+        ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
         ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15];
         while (video.player.rate == 0 && deadline.timeIntervalSinceNow > 0) spin(0.05);
@@ -81,22 +115,34 @@ int main(int argc, const char **argv) {
         NSDictionary *playing = snapshot(handle);
         assert([playing[@"visible"] boolValue] && [playing[@"playing"] boolValue]);
         assert([playing[@"position"] doubleValue] >= 2);
+        AVPlayer *player = video.player;
+        AVPlayerView *localView = video.localView;
+        ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 2);
+        assert(video.player == player && video.localView == localView);
         assert(video.panel.level == NSFloatingWindowLevel);
-        ateliet_video_toggle(handle); spin(0.1);
-        NSDictionary *paused = snapshot(handle);
-        assert(![paused[@"playing"] boolValue]);
-        double position = [paused[@"position"] doubleValue];
-        spin(0.2);
+        [video returnToApp:nil]; snapshot(handle);
+        ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+        assert(video.player == player && video.localView == localView);
+        // Modal occlusion pauses and resumes only previously playing media.
+        ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 0); spin(0.1);
+        assert(![snapshot(handle)[@"playing"] boolValue]);
+        ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1); spin(0.1);
+        assert([snapshot(handle)[@"playing"] boolValue]);
+        ateliet_video_pause(handle);
+        double position = [snapshot(handle)[@"position"] doubleValue];
+        ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 0);
+        ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1); spin(0.2);
+        assert(![snapshot(handle)[@"playing"] boolValue]);
         assert(fabs([snapshot(handle)[@"position"] doubleValue] - position) < 0.1);
-        [video.panel performClose:nil]; spin(0.1);
-        assert(![snapshot(handle)[@"visible"] boolValue]);
-        assert(!video.player && !video.localView && !video.web);
-        ateliet_video_open(handle, json.UTF8String); spin(0.1);
-        assert(video.player && video.panel.isVisible);
-        [video stop]; // Pending seek completion must not restart a replaced session.
+        ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 2);
+        [video.panel performClose:nil];
+        assert([snapshot(handle)[@"presentation"] isEqual:@"collapsed"]);
+        assert(video.player == player && !video.playing);
+        ateliet_video_open(handle, json.UTF8String);
+        [video stop]; // Pending seek completion cannot restart a replaced session.
         spin(0.3);
         assert(!video.player && !video.playing);
-        ateliet_video_destroy(handle);
-        puts("PASS: native playback, seek, pause, pin, close, release, reopen and stale callback lifecycle");
+        ateliet_video_destroy(handle); [host close];
+        puts("PASS: playback, seek, pause, media identity, occlusion, close and stale callbacks");
     }
 }

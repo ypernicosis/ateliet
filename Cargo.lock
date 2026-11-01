@@ -279,6 +279,7 @@ dependencies = [
  "once_cell",
  "open",
  "pulldown-cmark",
+ "raw-window-handle",
  "regex",
  "rfd",
  "rodio",

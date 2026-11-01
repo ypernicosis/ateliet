@@ -180,6 +180,9 @@ impl App {
         egui::SidePanel::right(id).resizable(true).show_separator_line(false).default_width(default).width_range(range).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show(ctx, |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
+            if self.video.docked() {
+                egui::Frame::new().inner_margin(10).show(ui, |ui| self.video.dock(ui, p));
+            }
             if let Some(mut cx) = self.reader_cx() {
                 cx.notes_beside = !self.journal_mode;
                 outs = r.ui(ui, &cx);

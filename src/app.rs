@@ -1187,7 +1187,7 @@ impl eframe::App for App {
         });
     }
 
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
@@ -1198,8 +1198,10 @@ impl eframe::App for App {
         }
         if self.vault.is_none() {
             self.video.tick(ctx);
-            self.video.ui(ctx, self.palette);
+            self.video.compact_bar(ctx, self.palette);
+            self.video.rail(ctx, self.palette);
             panels::vault_picker(self, ctx);
+            self.video.sync(ctx, frame);
             return;
         }
         // changes on disk
@@ -1252,15 +1254,17 @@ impl eframe::App for App {
         self.music_tick(ctx);
         commands::shortcuts(self, ctx);
         self.video.tick(ctx);
-        self.video.ui(ctx, self.palette);
+        self.video.compact_bar(ctx, self.palette);
 
         self.sprint_tick();
         if self.focus.is_some() && !self.images_mode && !self.journal_mode {
+            self.video.rail(ctx, self.palette);
             self.central(ctx);
             self.focus_hud(ctx);
             commands::show_palette(self, ctx);
             self.form_ui(ctx);
             panels::toasts(self, ctx);
+            self.video.sync(ctx, frame);
             return;
         }
         let reading = !self.journal_mode && !self.images_mode && self.tabs.get(self.active).and_then(|t| t.reader.as_ref()).is_some_and(|r| r.immersive);
@@ -1272,12 +1276,15 @@ impl eframe::App for App {
         } else if self.images_mode {
             self.image_mode(ctx);
         } else if reading {
+            self.video.rail(ctx, self.palette);
             self.central(ctx);
         } else {
-            if self.left_open {
+            // Preserve a writing column on small windows without changing the
+            // user's sidebar preference; it returns when video is collapsed.
+            if self.left_open && !(self.video.docked() && ctx.screen_rect().width() < 960.0) {
                 panels::left(self, ctx);
             }
-            if self.right_open {
+            if self.right_open || (self.video.docked() && self.side_reader.is_none()) {
                 panels::right(self, ctx);
             }
             // the reader beside the notes, as beside the Journal
@@ -1315,6 +1322,7 @@ impl eframe::App for App {
         panels::settings_window(self, ctx);
         self.templater.show_prompt(ctx, self.palette);
         panels::toasts(self, ctx);
+        self.video.sync(ctx, frame);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -1356,7 +1364,7 @@ impl App {
             let root = v.root.clone();
             self.images.open(&root, ctx);
         }
-        egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show_animated(ctx, self.images.panels[0], |ui| {
+        egui::SidePanel::left("collections").resizable(true).show_separator_line(false).default_width(248.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 12, bottom: 10 })).show_animated(ctx, self.images.panels[0] && !(self.video.docked() && ctx.screen_rect().width() < 960.0), |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.right() - 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
             if let Some(crate::images_ui::ImageAction::MoveTo(keys, folder)) = self.images.collections_ui(ui, p) {
@@ -1366,9 +1374,12 @@ impl App {
         if let Some((keys, folder)) = moves {
             self.move_pictures(keys, &folder);
         }
-        egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=900.0).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show_animated(ctx, self.images.panels[1], |ui| {
+        let notes_max = if self.video.docked() { (ctx.available_rect().width() - 320.0).clamp(260.0, 900.0) } else { 900.0 };
+        egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=notes_max).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show_animated(ctx, self.images.panels[1] || self.video.docked(), |ui| {
             let clip = ui.clip_rect();
             ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
+            if self.video.docked() { egui::Frame::new().inner_margin(10).show(ui, |ui| self.video.dock(ui, p)); }
+            if !self.images.panels[1] { return; }
             if self.tabs.is_empty() {
                 panels::empty_state(self, ui);
             } else {
