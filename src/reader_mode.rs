@@ -27,7 +27,7 @@ impl App {
         if path != SHELF {
             reader.request(path, at);
         }
-        let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: Some(Box::new(reader)), back: Vec::new(), fwd: Vec::new() };
+        let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: Some(Box::new(reader)), back: Vec::new(), fwd: Vec::new() };
         if new_tab || self.tabs.is_empty() || self.tabs.get(self.active).is_some_and(|t| t.dirty()) {
             self.tabs.push(tab);
             self.active = self.tabs.len() - 1;

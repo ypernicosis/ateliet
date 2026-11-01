@@ -33,6 +33,7 @@ pub struct Tab {
     /// Cursor (char index) last seen in the editor.
     pub cursor: usize,
     pub highlight: editor::HighlightCache,
+    pub find: crate::find::Find,
     /// A heading line to scroll to on the next frame.
     pub scroll_to: Option<usize>,
     pub live: crate::live::LiveState,
@@ -376,7 +377,7 @@ impl App {
                 self.focus_tab(i);
                 return;
             }
-            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
+            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
             if new_tab || self.tabs.is_empty() {
                 self.tabs.push(tab);
                 self.active = self.tabs.len() - 1;
@@ -447,7 +448,7 @@ impl App {
                 _ => None,
             };
             if let Some(view) = view {
-                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
+                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
@@ -461,7 +462,7 @@ impl App {
             }
         }
         let text = if is_board || is_quadro { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
+        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
         tab.board = board;
         tab.quadro = quadro;
         if new_tab || self.tabs.is_empty() {
@@ -1924,6 +1925,8 @@ impl App {
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
+            tab.find.bar(ui, &tab.path, &tab.text);
+            crate::find::set_highlight(&tab.find);
             tab.live.spots.clear();
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
             let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
@@ -1960,7 +1963,7 @@ impl App {
                                 actions.append(&mut acts);
                             }
                             // the source, with Dataview results shown in place
-                            Mode::Edit if !crate::live::query_blocks(&tab.text).is_empty() => {
+                            Mode::Edit if !tab.find.open && !crate::live::query_blocks(&tab.text).is_empty() => {
                                 let st = editor::Styles::source(size, p);
                                 let blocks = crate::live::query_blocks(&tab.text);
                                 let path = tab.path.clone();
@@ -1989,6 +1992,9 @@ impl App {
                                     state.store(ui.ctx(), id);
                                     ui.ctx().memory_mut(|m| m.request_focus(id));
                                 }
+                                if let Some(range) = tab.find.pending.take() {
+                                    crate::find::request_scroll(ui.ctx(), id, range);
+                                }
                                 let before = tab.text.len();
                                 let before_hash = {
                                     let mut h = DefaultHasher::new();
@@ -2010,6 +2016,36 @@ impl App {
                                     tab.last_edit = Some(Instant::now());
                                 }
                             }
+                            Mode::Read if tab.find.open => {
+                                // Source line ranges let a match in any paragraph (not only a
+                                // heading) navigate without leaving the reading view.
+                                tab.live.refresh(&tab.text);
+                                let target = tab.find.pending.take();
+                                let line = target.as_ref().map(|r| tab.text[..r.start].bytes().filter(|b| *b == b'\n').count());
+                                let mut host = RenderHost { vault, palette: p, size, source: &tab.path, caches: &mut self.caches, settings: &self.dv_settings };
+                                for (i, seg) in tab.live.segs.iter().enumerate() {
+                                    if i > 0 { ui.add_space(size * crate::typo::get().gap); }
+                                    let top = ui.cursor().min;
+                                    let is_target = line.is_some_and(|l| seg.start <= l && l <= seg.end);
+                                    if is_target {
+                                        let offset: usize = tab.text.split_inclusive('\n').take(seg.start).map(str::len).sum();
+                                        if let Some(range) = &target {
+                                            crate::find::begin_target(&seg.text, range.start.saturating_sub(offset).min(seg.text.len()));
+                                        }
+                                    }
+                                    let mut r = Renderer::new(&mut host);
+                                    if seg.frontmatter {
+                                        crate::find::plain(ui, &seg.text, egui::FontId::monospace(size), p.muted);
+                                    } else {
+                                        r.blocks(ui, &seg.doc.blocks);
+                                    }
+                                    actions.append(&mut r.actions);
+                                    if is_target && !crate::find::end_target() {
+                                        let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
+                                        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+                                    }
+                                }
+                            }
                             Mode::Read => {
                                 let doc = tab.doc();
                                 let mut host = RenderHost { vault, palette: p, size, source: &tab.path, caches: &mut self.caches, settings: &self.dv_settings };
@@ -2023,6 +2059,7 @@ impl App {
                     });
                 });
             });
+            crate::find::clear_highlight();
             crate::align::set_current(crate::align::TextAlign::Left);
         }
     }

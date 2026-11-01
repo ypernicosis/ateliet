@@ -695,6 +695,7 @@ impl Runs {
             let frame = ui.ctx().cumulative_pass_nr();
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("md-hover-link"), (t.clone(), pos, frame)));
         }
+        crate::find::paint(ui, &galley, rect.min);
         ui.painter().galley(rect.min, galley, ui.visuals().text_color());
         if resp.clicked() {
             if let Some(a) = hover_link {
@@ -1297,7 +1298,10 @@ impl<'h> Renderer<'h> {
                 egui::Frame::new().fill(p.code_bg).stroke(Stroke::new(1.0_f32, p.border)).corner_radius(egui::CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(16, 12)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     egui::ScrollArea::horizontal().id_salt(("code", text.len(), lang)).show(ui, |ui| {
-                        ui.add(egui::Label::new(egui::RichText::new(text).family(FontFamily::Name("theme-mono".into())).size(size * 0.85).color(p.text)).extend());
+                        let galley = ui.fonts(|f| f.layout_no_wrap(text.clone(), FontId::new(size * 0.85, FontFamily::Name("theme-mono".into())), p.text));
+                        let (rect, _) = ui.allocate_exact_size(galley.size(), Sense::hover());
+                        crate::find::paint(ui, &galley, rect.min);
+                        ui.painter().galley(rect.min, galley, p.text);
                     });
                 });
             }

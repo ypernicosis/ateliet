@@ -3,6 +3,7 @@
 
 mod align;
 mod app;
+mod find;
 mod board_ui;
 mod commands;
 mod config;

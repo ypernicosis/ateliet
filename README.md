@@ -11,6 +11,8 @@ Um clone minimalista do Obsidian, escrito em **Rust**, que abre **o mesmo vault*
 - **Nativo**: a interface principal é desenhada com egui, sem GTK e sem Chromium embutido. O player auxiliar de vídeo usa AVKit no macOS e cria uma WKWebView do sistema somente para vídeos do YouTube. A fonte Inter e os ícones Lucide vêm embutidos, para que a aparência seja a mesma em qualquer sistema. O visual é claro e minimalista, com tema escuro opcional; a cor de destaque vem do vault, escurecida automaticamente quando é clara demais para texto.
 - **Compatível**: lê e grava `.obsidian/` (preferências, atalhos, favoritos, notas diárias, templates, temas e snippets) nos mesmos arquivos do Obsidian, e traz embutidos o Dataview, o Templater e o Calendar.
 
+Nas notas, **Ctrl/Cmd+F** abre a busca por palavra ou trecho, sem distinguir maiúsculas de minúsculas. **Enter** avança, **Shift+Enter** volta e **Esc** fecha; o contador e os destaques acompanham a edição. **Ctrl/Cmd+Shift+F** continua buscando em todo o cofre.
+
 ## Rodando
 
 Requisitos: Rust (stable). Na primeira compilação, o crate `ort` baixa o ONNX Runtime (usado pela busca de imagens por descrição) e o liga estaticamente ao binário. Sem acesso a esses binários, compile com `--no-default-features --features vision-dynamic,audio` e aponte `ORT_DYLIB_PATH` para uma `libonnxruntime` instalada no sistema; com `--no-default-features --features audio`, a busca de imagens fica só por nome. No Linux, o áudio precisa dos cabeçalhos da ALSA (`libasound2-dev`); sem eles, deixe `audio` de fora.

@@ -414,6 +414,8 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
         tab.live.cursor_at = Some(tab.text.chars().count());
     }
+    let find_target = tab.find.pending.take();
+    let find_line = find_target.as_ref().map(|r| tab.text[..r.start].bytes().filter(|b| *b == b'\n').count());
     let active = tab.live.active;
     let buf_end = tab.live.buf_end;
     let mut drawn_editor = false;
@@ -431,6 +433,12 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
                     drawn_editor = true;
                     if i > 0 {
                         ui.add_space(gap_before(seg));
+                    }
+                    if find_line.is_some_and(|l| a <= l && l <= buf_end) {
+                        let offset: usize = tab.text.split_inclusive('\n').take(a).map(str::len).sum();
+                        if let Some(range) = &find_target {
+                            crate::find::request_scroll(ui.ctx(), id, range.start.saturating_sub(offset)..range.end.saturating_sub(offset));
+                        }
                     }
                     if let Some(nav) = editor_block(ui, tab, id, st) {
                         match nav {
@@ -466,9 +474,18 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         }
         let top = ui.cursor().min;
         let before = actions.len();
+        let is_target = find_line.is_some_and(|l| seg.start <= l && l <= seg.end);
+        if is_target {
+            let offset: usize = tab.text.split_inclusive('\n').take(seg.start).map(str::len).sum();
+            if let Some(range) = &find_target {
+                crate::find::begin_target(&seg.text, range.start.saturating_sub(offset).min(seg.text.len()));
+            }
+        }
         let dim = active.is_some() && crate::sc::focus::DIM.with(|d| d.get());
         if seg.frontmatter {
-            if !crate::sc::focus::ON.with(|f| f.get()) {
+            if tab.find.open {
+                crate::find::plain(ui, &seg.text, egui::FontId::monospace(size), st.p.muted);
+            } else if !crate::sc::focus::ON.with(|f| f.get()) {
                 prop_edit = properties(ui, &seg.text, host);
             }
         } else {
@@ -490,6 +507,9 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
         }
         let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
         tab.live.spots.push((rect.top(), rect.bottom(), seg.start, seg.end));
+        if is_target && !crate::find::end_target() {
+            ui.scroll_to_rect(rect, Some(egui::Align::Center));
+        }
         let clicked = ui.input(|inp| inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
         // the properties are edited with their own widgets, not as YAML
         if clicked && actions.len() == before && !seg.frontmatter {

@@ -912,6 +912,8 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let cursor_stroke = ui.visuals().text_cursor.stroke;
         ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
+        crate::find::paint(ui, &out.galley, out.galley_pos);
+        crate::find::scroll_editor(ui, id, &out);
         ui.visuals_mut().text_cursor.stroke = cursor_stroke;
         paint_caret(ui, id, &out, cursor_stroke);
         let resp = out.response.clone();
