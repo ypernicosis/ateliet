@@ -179,6 +179,26 @@ impl App {
                     t.mode = Mode::Edit;
                 }
             }
+            Action::CharacterModel(b) => {
+                let made = {
+                    let Some(v) = self.vault.as_ref() else { return };
+                    let author = self.sc.as_ref().map(|s| s.author()).unwrap_or_default();
+                    let ix = v.index.read().unwrap();
+                    match book::book_by_path(&ix, &b, &author) {
+                        Some(bk) => book::ensure_character_model(&v.root, &ix, &bk),
+                        None => Err("livro não encontrado".into()),
+                    }
+                };
+                match made {
+                    Ok((path, created)) => {
+                        if created {
+                            self.written(std::slice::from_ref(&path));
+                        }
+                        self.open(&path, true);
+                    }
+                    Err(e) => self.toast(format!("Não foi possível abrir o modelo de ficha: {e}")),
+                }
+            }
             Action::CreateSheetFor { sheet, list, idx, name } => {
                 let made = {
                     let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_ref()) else { return };

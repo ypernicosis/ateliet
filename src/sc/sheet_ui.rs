@@ -504,7 +504,7 @@ impl SheetView {
         while i < n {
             let wide = |t: &str| {
                 let l = t.to_lowercase();
-                l.contains("arco") || l.contains("hist") || l.contains("notas")
+                l.contains("arco") || l.contains("hist") || l.contains("notas") || l.contains("origem") || l == "ars"
             };
             let pair = two && !wide(&self.sheet.sections[i].0) && i + 1 < n && !wide(&self.sheet.sections[i + 1].0);
             ui.horizontal_top(|ui| {

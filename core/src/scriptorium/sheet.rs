@@ -147,7 +147,7 @@ impl Sheet {
     }
 }
 
-const LABELS: [(&str, &str); 12] = [("vortice", "vórtice"), ("inspiracao", "inspiração"), ("genero", "gênero"), ("pecado", "pecado"), ("iga", "nº IGA"), ("orientacao", "orientação"), ("descricao", "descrição"), ("ocupacao", "ocupação"), ("origem", "origem"), ("nacao", "nação"), ("religiao", "religião"), ("familia", "família")];
+const LABELS: [(&str, &str); 19] = [("nome_completo", "nome completo"), ("filiacao", "clã / filiação"), ("nivel_ars", "nível do Ars"), ("estilo_luta", "estilo de luta"), ("simbolo", "aura / símbolo"), ("cor_aura", "cor da aura"), ("ars", "Ars"), ("vortice", "vórtice"), ("inspiracao", "inspiração"), ("genero", "gênero"), ("pecado", "pecado"), ("iga", "nº IGA"), ("orientacao", "orientação"), ("descricao", "descrição"), ("ocupacao", "ocupação"), ("origem", "origem"), ("nacao", "nação"), ("religiao", "religião"), ("familia", "família")];
 
 pub fn attr_label(k: &str) -> String {
     LABELS.iter().find(|l| l.0 == k).map(|l| l.1.to_string()).unwrap_or_else(|| k.replace('_', " "))
@@ -171,12 +171,14 @@ pub fn section_icon(title: &str) -> &'static str {
         "sparkles"
     } else if has(&["rela", "víncul", "vincul", "famíl", "famil"]) {
         "users"
-    } else if has(&["segredo", "medo"]) {
+    } else if has(&["segredo", "medo", "fobia", "fraquez", "restri", "custo"]) {
         "lock"
     } else if has(&["fala", "voz", "bordão", "bordao"]) {
         "message-square-quote"
-    } else if has(&["objetiv", "desejo", "motiva"]) {
+    } else if has(&["objetiv", "desejo", "motiva", "sonho", "ambi"]) {
         "target"
+    } else if t == "ars" || has(&["ars vortices", "vórtice", "vortice"]) {
+        "sparkles"
     } else {
         "align-left"
     }

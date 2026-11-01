@@ -50,6 +50,9 @@ impl CastView {
                             if kit::primary_icon(ui, icons::USER_PLUS, "Personagem", p).clicked() {
                                 acts.push(Action::NewCharacter(b.path.clone()));
                             }
+                            if kit::button(ui, Some(icons::LAYOUT_TEMPLATE), "Modelo de ficha", p).on_hover_text("As fichas novas copiam as propriedades e as seções deste modelo").clicked() {
+                                acts.push(Action::CharacterModel(b.path.clone()));
+                            }
                             ui.allocate_ui(egui::vec2(220.0, 30.0), |ui| {
                                 kit::search_field(ui, &mut self.query, "Buscar", p);
                             });
