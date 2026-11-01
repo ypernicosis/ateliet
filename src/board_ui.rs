@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod export;
+pub mod home;
 mod focus;
 mod pages;
 mod refs;

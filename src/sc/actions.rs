@@ -204,6 +204,16 @@ impl App {
                 }
             }
             Action::Toast(t) => self.toast(t),
+            Action::NewStoryboard(kind) => {
+                self.images_mode = false;
+                if kind == "canvas" {
+                    self.new_board("canvas");
+                } else {
+                    let mut d = crate::board_ui::NewBoard::new();
+                    d.o = ateliet_core::board::pages::KindOptions::defaults(&kind);
+                    self.new_board_dlg = Some(d);
+                }
+            }
             Action::Music(cmd) => {
                 let (Some(v), Some(sc)) = (&self.vault, &self.sc) else { return };
                 let ix = v.index.read().unwrap();

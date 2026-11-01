@@ -572,6 +572,34 @@ impl BoardDoc {
     }
 }
 
+/// What a list of storyboards shows of one file, read without its tiles.
+#[derive(Clone, Debug, Default)]
+pub struct Summary {
+    pub kind: String,
+    pub frames: usize,
+    pub width: u32,
+    pub height: u32,
+    /// The first frame as a PNG, when the file keeps one.
+    pub preview: Option<Vec<u8>>,
+}
+
+/// Kind, size, frame count and the preview of a storyboard file; only
+/// `board.json` and the thumbnails are decompressed.
+pub fn summary(bytes: &[u8]) -> Result<Summary, String> {
+    let entries = zip::read_some(bytes, |n| n == "board.json" || n == "preview.png" || n.starts_with("thumbs/"))?;
+    let json = entries.iter().find(|(n, _)| n == "board.json").ok_or("board.json missing")?;
+    let board: Value = serde_json::from_slice(&json.1).map_err(|e| format!("board.json: {e}"))?;
+    let first = board["frames"][0]["id"].as_str().map(|id| format!("thumbs/{id}.png"));
+    let preview = entries.iter().find(|(n, _)| n == "preview.png").or_else(|| entries.iter().find(|(n, _)| Some(n) == first.as_ref())).map(|(_, d)| d.clone());
+    Ok(Summary {
+        kind: board["kind"].as_str().unwrap_or("animatic").to_string(),
+        frames: board["frames"].as_array().map(|a| a.len()).unwrap_or(0),
+        width: board["width"].as_u64().unwrap_or(1920) as u32,
+        height: board["height"].as_u64().unwrap_or(1080) as u32,
+        preview,
+    })
+}
+
 /// Tile coordinates covering a canvas rectangle.
 pub fn tiles_in(x0: f32, y0: f32, x1: f32, y1: f32) -> impl Iterator<Item = (i32, i32)> {
     let t = TILE as f32;
@@ -595,6 +623,9 @@ mod tests {
         d.duplicate_frame(0);
         assert_eq!(d.frame_count(), 3);
         let bytes = d.to_bytes(|_, _| Some(vec![1, 2, 3]));
+        let s = summary(&bytes).unwrap();
+        assert_eq!((s.kind.as_str(), s.frames, s.width, s.height), ("animatic", 3, 1280, 720));
+        assert_eq!(s.preview, Some(vec![1, 2, 3]));
         let mut back = BoardDoc::from_bytes(&bytes).unwrap();
         assert_eq!(back.frame_count(), 3);
         assert_eq!(back.board["custom"]["kept"], true);

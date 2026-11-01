@@ -243,43 +243,13 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
     });
 }
 
-/// Storyboards: a new one, an infinite canvas, or one of the vault's, most
-/// recently changed first.
+/// Storyboards: the screen to make one or open one of the vault's.
 fn storyboards_button(app: &mut App, ui: &mut egui::Ui, p: Palette) {
-    let on_board = !app.images_mode && app.active_tab().is_some_and(|t| t.board.is_some());
-    let r = icon_button(ui, icons::CLAPPERBOARD, "Storyboards", on_board, p);
-    let id = ui.make_persistent_id("ribbon-storyboards");
-    if r.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
-    }
-    let mut boards: Vec<(String, u64)> = app.vault.as_ref().map(|v| v.files.iter().filter(|e| !e.folder && e.path.to_lowercase().ends_with(".storyboard")).map(|e| (e.path.clone(), e.mtime)).collect()).unwrap_or_default();
-    boards.sort_by_key(|b| std::cmp::Reverse(b.1));
-    let mut open: Option<String> = None;
-    egui::popup::popup_above_or_below_widget(ui, id, &r, egui::AboveOrBelow::Below, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-        ui.set_min_width(250.0);
-        if kit::menu_item(ui, icons::PLUS, "Novo storyboard…", p) {
-            app.new_board_dlg = Some(crate::board_ui::NewBoard::new());
-        }
-        if kit::menu_item(ui, icons::PEN_TOOL, "Nova tela infinita", p) {
-            app.images_mode = false;
-            app.new_board("canvas");
-        }
-        if !boards.is_empty() {
-            kit::menu_sep(ui, p);
-            for (path, _) in boards.iter().take(14) {
-                let name = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".storyboard");
-                if kit::menu_item(ui, icons::CLAPPERBOARD, name, p) {
-                    open = Some(path.clone());
-                }
-            }
-            if boards.len() > 14 {
-                ui.label(RichText::new(format!("e mais {} no explorador de arquivos", boards.len() - 14)).size(11.5).color(p.faint));
-            }
-        }
-    });
-    if let Some(path) = open {
+    let on_board = !app.images_mode && !app.journal_mode && app.active_tab().is_some_and(|t| t.board.is_some() || t.path == crate::board_ui::home::PATH);
+    if icon_button(ui, icons::CLAPPERBOARD, "Storyboards", on_board, p).clicked() {
         app.images_mode = false;
-        app.open(&path, false);
+        app.journal_mode = false;
+        app.open(crate::board_ui::home::PATH, true);
     }
 }
 
@@ -1141,6 +1111,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             Some(crate::sc::View::Diagramacao(_)) => icons::LAYOUT_TEMPLATE,
                             Some(crate::sc::View::Capa(_)) => icons::BOOK_OPEN,
                             Some(crate::sc::View::Pagina(_)) => icons::LAYERS,
+                            Some(crate::sc::View::Storyboards(_)) => icons::CLAPPERBOARD,
                             Some(_) => icons::LIBRARY_BIG,
                             None if t.board.is_some() => icons::CLAPPERBOARD,
                             None if t.quadro.as_ref().is_some_and(|q| q.is_kanban()) => icons::SQUARE_KANBAN,

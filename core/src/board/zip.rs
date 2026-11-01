@@ -38,6 +38,12 @@ fn u32le(b: &[u8], at: usize) -> Option<u32> {
 
 /// All entries of a zip, in directory order.
 pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    read_some(bytes, |_| true)
+}
+
+/// The entries whose names `keep` accepts, in directory order; the others
+/// are skipped without being decompressed.
+pub fn read_some(bytes: &[u8], keep: impl Fn(&str) -> bool) -> Result<Vec<(String, Vec<u8>)>, String> {
     let start = bytes.len().saturating_sub(22 + 65535);
     let eocd = (start..=bytes.len().saturating_sub(22)).rev().find(|&i| u32le(bytes, i) == Some(0x0605_4b50)).ok_or("not a storyboard file (no zip directory)")?;
     let count = u16le(bytes, eocd + 10).ok_or("damaged zip")? as usize;
@@ -56,6 +62,9 @@ pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         let local = u32le(bytes, at + 42).ok_or("damaged zip")? as usize;
         let name = String::from_utf8_lossy(bytes.get(at + 46..at + 46 + name_len).ok_or("damaged zip")?).into_owned();
         at += 46 + name_len + extra_len + comment_len;
+        if name.ends_with('/') || !keep(&name) {
+            continue;
+        }
         let l_name = u16le(bytes, local + 26).ok_or("damaged zip")? as usize;
         let l_extra = u16le(bytes, local + 28).ok_or("damaged zip")? as usize;
         let data_at = local + 30 + l_name + l_extra;
@@ -69,9 +78,7 @@ pub fn read(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
             }
             m => return Err(format!("{name}: unsupported compression {m}")),
         };
-        if !name.ends_with('/') {
-            out.push((name, data));
-        }
+        out.push((name, data));
     }
     Ok(out)
 }

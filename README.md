@@ -126,7 +126,7 @@ Com o Pictogrep instalado, o modo imagens usa **a mesma pasta** que ele (Setting
 
 ## Storyboard
 
-O storyboard do Pictogrep, refeito como ferramenta de storyboard. Cada storyboard é um arquivo `.storyboard` no vault (pasta `Storyboards/` por padrão), aberto numa aba própria, listado em **Storyboards** (ícone da claquete na faixa lateral, nos dois modos), e embutido em notas com `![[nome.storyboard]]`, que mostra a sequência de quadros.
+O storyboard do Pictogrep, refeito como ferramenta de storyboard. Cada storyboard é um arquivo `.storyboard` no vault (pasta `Storyboards/` por padrão), aberto numa aba própria, listado na tela **Storyboards** (ícone da claquete na faixa lateral, nos dois modos), e embutido em notas com `![[nome.storyboard]]`, que mostra a sequência de quadros. A tela Storyboards abre numa aba: em cima, um bloco para cada tipo (o clique abre as opções do tipo; a tela infinita é criada direto); embaixo, os storyboards do cofre como cartões com o primeiro quadro, o tipo, o número de quadros, a data e a pasta, do mais recente ao mais antigo, com filtro por nome ou pasta. Clicar num cartão abre o storyboard; o botão direito tem "Abrir em nova aba".
 
 - **Tipos.** Ao criar, escolhe-se o que se está planejando, e cada tipo tem sua área de trabalho:
   - **Animatic**: quadros com duração numa linha do tempo, reprodução, onion skin e notas de plano.
