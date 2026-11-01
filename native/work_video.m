@@ -25,7 +25,10 @@
 @property(nonatomic) BOOL pinned;
 @property(nonatomic) BOOL ready;
 @property(nonatomic) BOOL wantsPlayback;
-@property(nonatomic) BOOL resumeWhenVisible;
+@property(nonatomic) BOOL suspended;
+@property(nonatomic) BOOL buffering;
+@property(nonatomic) BOOL stateChanged;
+@property(nonatomic) NSUInteger commandSerial;
 @property(nonatomic, copy) NSString *presentationRequested;
 @property(nonatomic, copy) NSString *page;
 @property(nonatomic, copy) NSString *title;
@@ -61,7 +64,7 @@
     _surface.wantsLayer = YES;
     _surface.layer.backgroundColor = NSColor.blackColor.CGColor;
     _surface.layer.masksToBounds = YES;
-    _surface.hidden = YES;
+    _surface.hidden = YES; _suspended = YES;
     return self;
 }
 - (BOOL)presented {
@@ -71,7 +74,7 @@
 - (void)playWhenVisible {
     if (!self.wantsPlayback || !self.ready || !self.presented) return;
     [self.player play];
-    [self.web evaluateJavaScript:@"window.atelietPlay && window.atelietPlay()" completionHandler:nil];
+
 }
 - (void)makePanel {
     if (self.panel) return;
@@ -110,6 +113,7 @@
     [self togglePin:nil];
 }
 - (void)setNotice:(NSString *)message {
+    if (![self.error isEqualToString:message ?: @""]) self.stateChanged = YES;
     self.error = message ?: @"";
     self.panel.subtitle = self.error;
 }
@@ -122,19 +126,23 @@
     // Rust reserves the space on the next layout pass before moving the view.
     [self.host.window makeKeyAndOrderFront:nil];
 }
+- (void)syncWebState {
+    if (!self.web) return;
+    NSString *js = [NSString stringWithFormat:@"window.atelietSetState && window.atelietSetState(%lu, %@, %@)",
+        (unsigned long)self.commandSerial, self.wantsPlayback ? @"true" : @"false", self.presented ? @"true" : @"false"];
+    [self.web evaluateJavaScript:js completionHandler:nil];
+}
 - (void)setSurfaceHidden:(BOOL)hidden {
     if (hidden == self.surface.isHidden) return;
-    if (hidden) {
-        [self capturePosition];
-        BOOL resume = self.playing || (!self.ready && self.wantsPlayback);
-        [self pause];
-        self.resumeWhenVisible = resume;
-    }
+    // Capture the user's intent before suspending. A waiting player has rate
+    // zero too, but still intends to play; it must not become a manual pause.
+    if (hidden) [self capturePosition];
+    self.suspended = hidden;
     self.surface.hidden = hidden;
-    if (!hidden && self.resumeWhenVisible) {
-        self.resumeWhenVisible = NO; self.wantsPlayback = YES;
-    }
-    if (!hidden) [self playWhenVisible];
+    self.commandSerial++; self.stateChanged = YES;
+    if (hidden) { [self.player pause]; self.playing = NO; }
+    else [self playWhenVisible];
+    [self syncWebState];
 }
 - (void)placeIn:(NSView *)host frame:(NSRect)frame mode:(NSInteger)mode {
     self.host = host;
@@ -143,6 +151,7 @@
     if (mode == 2) {
         [self makePanel];
         if (self.surface.superview != self.panel.contentView) {
+            [self setSurfaceHidden:YES];
             [self.surface removeFromSuperview];
             self.surface.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
             NSRect bounds = self.panel.contentView.bounds;
@@ -152,7 +161,12 @@
         if (self.mode != 2) { [self.panel deminiaturize:nil]; [self.panel orderFront:nil]; }
         [self setSurfaceHidden:self.panel.isMiniaturized];
     } else {
+        if (self.surface.superview != host) [self setSurfaceHidden:YES];
         if (self.panel.isVisible) [self.panel orderOut:nil];
+        if (mode != 1) {
+            [self setSurfaceHidden:YES]; self.mode = mode;
+            return; // Never resize a suspended WebKit/AVKit view to zero.
+        }
         if (host && self.surface.superview != host) {
             [self.surface removeFromSuperview];
             self.surface.autoresizingMask = NSViewNotSizable;
@@ -177,7 +191,12 @@
         if (isfinite(t)) self.position = MAX(0, t);
         double duration = CMTimeGetSeconds(self.player.currentItem.duration);
         if (isfinite(duration) && duration > 0 && self.position >= duration - 0.25) self.position = 0;
-        self.playing = self.player.rate != 0;
+        self.playing = self.player.timeControlStatus == AVPlayerTimeControlStatusPlaying;
+        self.buffering = self.player.timeControlStatus == AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate;
+        if (self.ready && !self.suspended && self.presented) {
+            if (self.playing) self.wantsPlayback = YES;
+            else if (!self.buffering) self.wantsPlayback = NO;
+        }
         if (self.player.currentItem.status == AVPlayerItemStatusFailed) {
             [self setNotice:@"Não foi possível ler este vídeo. Tente outro formato ou abra no app padrão."];
         }
@@ -185,13 +204,18 @@
 }
 - (void)pause {
     [self capturePosition];
-    [self.player pause];
-    [self.web evaluateJavaScript:@"window.atelietPause && window.atelietPause()" completionHandler:nil];
-    self.playing = NO; self.wantsPlayback = NO; self.resumeWhenVisible = NO;
+    self.wantsPlayback = NO; self.playing = NO;
+    self.commandSerial++; self.stateChanged = YES;
+    [self.player pause]; [self syncWebState];
+}
+- (void)requestPlay {
+    self.wantsPlayback = YES;
+    self.commandSerial++; self.stateChanged = YES;
+    [self playWhenVisible]; [self syncWebState];
 }
 - (void)stop {
     [self pause];
-    self.generation++; self.ready = NO;
+    self.generation++; self.ready = NO; self.buffering = NO;
     [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"video"];
     self.web.navigationDelegate = nil; self.web.UIDelegate = nil;
     [self.web stopLoading]; [self.web removeFromSuperview]; self.web = nil;
@@ -206,7 +230,14 @@
 - (void)windowWillMiniaturize:(NSNotification *)note { [self pause]; }
 - (void)windowDidDeminiaturize:(NSNotification *)note { [self setSurfaceHidden:NO]; }
 - (void)receive:(NSDictionary *)data {
-    if ([data[@"ready"] boolValue]) { self.ready = YES; [self playWhenVisible]; }
+    if ([data[@"ready"] boolValue]) {
+        self.ready = YES; self.stateChanged = YES;
+        // Commands issued before the wrapper or the iframe existed converge
+        // here. The wrapper starts invisible and never autoplays on its own.
+        [self syncWebState];
+    }
+    if ([data[@"error"] isKindOfClass:NSString.class]) [self setNotice:data[@"error"]];
+    if ([data[@"serial"] unsignedIntegerValue] != self.commandSerial) return;
     if ([data[@"id"] isKindOfClass:NSString.class]) {
         NSString *id = data[@"id"];
         NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"];
@@ -220,15 +251,18 @@
         if (isfinite(t)) self.position = MAX(0, t);
     }
     if ([data[@"playing"] isKindOfClass:NSNumber.class]) {
-        self.playing = [data[@"playing"] boolValue];
+        BOOL playing = [data[@"playing"] boolValue];
+        if (self.playing != playing) self.stateChanged = YES;
+        self.playing = playing;
+        self.buffering = [data[@"buffering"] boolValue];
+        if ([data[@"intent"] isKindOfClass:NSNumber.class]) self.wantsPlayback = [data[@"intent"] boolValue];
         if (self.playing) [self setNotice:@""];
-        if (!self.presented && self.playing) {
-            BOOL resume = self.resumeWhenVisible;
-            [self pause]; self.resumeWhenVisible = resume;
-        }
+        if (!self.presented && self.playing) [self syncWebState];
     }
     if ([data[@"title"] isKindOfClass:NSString.class]) {
-        self.title = [data[@"title"] substringToIndex:MIN(200, [data[@"title"] length])];
+        NSString *title = data[@"title"];
+        NSRange range = [title rangeOfComposedCharacterSequencesForRange:NSMakeRange(0, MIN(200, title.length))];
+        self.title = [title substringWithRange:range];
         self.panel.title = [self.title stringByAppendingString:@" — Ateliet"];
     }
     if ([data[@"error"] isKindOfClass:NSString.class]) [self setNotice:data[@"error"]];
@@ -246,7 +280,8 @@
     self.panel.title = [self.title stringByAppendingString:@" — Ateliet"];
     self.pinned = [source[@"pinned"] boolValue];
     if (self.pin) { self.pin.state = self.pinned ? NSControlStateValueOn : NSControlStateValueOff; [self togglePin:nil]; }
-    self.wantsPlayback = YES;
+    self.wantsPlayback = YES; self.commandSerial++;
+    self.stateChanged = YES;
     NSDictionary *media = source[@"source"];
     if ([media[@"kind"] isEqual:@"local"]) {
         self.videoID = @"";
@@ -305,12 +340,15 @@
     if ([@[@"https", @"http"] containsObject:url.scheme]) { [self pause]; [NSWorkspace.sharedWorkspace openURL:url]; }
     return nil;
 }
+- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+    [self syncWebState];
+}
 - (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (error.code != NSURLErrorCancelled) [self setNotice:@"Sem conexão com o YouTube. Verifique a rede ou abra no navegador."];
 }
 - (void)webViewWebContentProcessDidTerminate:(WKWebView *)webView {
-    self.playing = NO;
-    [self setNotice:@"O player foi interrompido. Reabra o vídeo pelos recentes."];
+    self.playing = NO; self.ready = NO;
+    [self setNotice:@"A conexão do player foi interrompida. Tente novamente para retomar daqui."];
 }
 @end
 
@@ -330,14 +368,11 @@ void ateliet_video_open(void *handle, const char *json) {
 void ateliet_video_toggle(void *handle) {
     ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
     [video capturePosition];
-    if (video.playing) [video pause];
-    else { video.wantsPlayback = YES; [video playWhenVisible]; }
+    if (video.wantsPlayback || video.playing) [video pause];
+    else [video requestPlay];
 }
 void ateliet_video_pause(void *handle) { [(__bridge ATWorkVideo *)handle pause]; }
-void ateliet_video_play(void *handle) {
-    ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
-    video.wantsPlayback = YES; [video playWhenVisible];
-}
+void ateliet_video_play(void *handle) { [(__bridge ATWorkVideo *)handle requestPlay]; }
 // Coordinates arrive in egui points, relative to its root viewport. Scaling
 // against the actual host bounds handles Retina and egui zoom independently.
 void ateliet_video_place(void *handle, void *view, double sw, double sh,
@@ -352,15 +387,18 @@ void ateliet_video_place(void *handle, void *view, double sw, double sh,
     [video placeIn:host frame:frame mode:mode];
 }
 bool ateliet_video_has_event(void *handle) {
-    return [(__bridge ATWorkVideo *)handle presentationRequested].length != 0;
+    ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
+    return video.presentationRequested.length != 0 || video.stateChanged;
 }
 char *ateliet_video_snapshot(void *handle) {
     ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
     [video capturePosition];
     NSDictionary *snapshot = @{@"position":@(video.position), @"playing":@(video.playing),
         @"visible":@(video.presented), @"pinned":@(video.pinned),
+        @"ready":@(video.ready), @"buffering":@(video.buffering), @"suspended":@(video.suspended),
+        @"intent":@(video.wantsPlayback),
         @"title":video.title, @"error":video.error, @"id":video.videoID, @"presentation":video.presentationRequested};
-    video.presentationRequested = @"";
+    video.presentationRequested = @""; video.stateChanged = NO;
     NSData *data = [NSJSONSerialization dataWithJSONObject:snapshot options:0 error:nil];
     if (!data) return NULL;
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];

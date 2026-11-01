@@ -87,10 +87,12 @@ pub struct Recent {
 pub struct History {
     pub recent: Vec<Recent>,
     pub pinned: bool,
+    /// Zero follows the aspect ratio; a dragged divider keeps its height.
+    pub height: f32,
 }
 
 impl Default for History {
-    fn default() -> Self { Self { recent: Vec::new(), pinned: true } }
+    fn default() -> Self { Self { recent: Vec::new(), pinned: true, height: 0.0 } }
 }
 
 impl History {
@@ -102,6 +104,8 @@ impl History {
     }
 
     pub fn sanitize(&mut self) {
+        if !self.height.is_finite() || self.height < 0.0 { self.height = 0.0; }
+        self.height = self.height.min(720.0);
         let recent = std::mem::take(&mut self.recent);
         for r in recent.into_iter().rev() { self.remember(r.source, r.title, r.position); }
     }
@@ -147,5 +151,20 @@ mod tests {
         let mut loaded: History = serde_json::from_str(&json).unwrap();
         loaded.sanitize();
         assert_eq!(loaded.recent[0].title, "Resumed");
+    }
+}
+
+#[cfg(test)]
+mod layout_preferences_tests {
+    use super::*;
+    #[test]
+    fn old_history_migrates_and_height_is_bounded() {
+        let mut old: History = serde_json::from_str(r#"{"recent":[],"pinned":false}"#).unwrap();
+        assert_eq!(old.height, 0.0);
+        old.height = f32::NAN; old.sanitize(); assert_eq!(old.height, 0.0);
+        old.height = 2000.0; old.sanitize(); assert_eq!(old.height, 720.0);
+        old.height = 310.0;
+        let saved = serde_json::to_string(&old).unwrap();
+        assert_eq!(serde_json::from_str::<History>(&saved).unwrap().height, 310.0);
     }
 }

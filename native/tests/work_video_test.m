@@ -7,6 +7,26 @@
 #import "../work_video.m"
 #include <assert.h>
 
+// Transport probe: the production controller still performs every transition,
+// but a waiting decoder can be exercised deterministically without a codec.
+@interface ATTransportProbe : NSObject
+@property(nonatomic) AVPlayerTimeControlStatus timeControlStatus;
+@property(nonatomic) float rate;
+@property(nonatomic) NSUInteger plays;
+- (CMTime)currentTime;
+- (AVPlayerItem *)currentItem;
+- (void)play;
+- (void)pause;
+- (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item;
+@end
+@implementation ATTransportProbe
+- (CMTime)currentTime { return CMTimeMakeWithSeconds(42, 600); }
+- (AVPlayerItem *)currentItem { return nil; }
+- (void)play { self.plays++; self.rate = 1; self.timeControlStatus = AVPlayerTimeControlStatusPlaying; }
+- (void)pause { self.rate = 0; self.timeControlStatus = AVPlayerTimeControlStatusPaused; }
+- (void)replaceCurrentItemWithPlayerItem:(AVPlayerItem *)item {}
+@end
+
 static void spin(double seconds) {
     NSDate *until = [NSDate dateWithTimeIntervalSinceNow:seconds];
     while (until.timeIntervalSinceNow > 0) {
@@ -85,6 +105,34 @@ static void layout(void *handle, NSWindow *host) {
     puts("PASS: native dock, coordinate scaling, detach and return preserve one surface");
 }
 
+static void transport(void *handle, NSWindow *host) {
+    ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
+    ATTransportProbe *probe = [ATTransportProbe new];
+    video.player = (AVPlayer *)(id)probe; video.ready = YES;
+    void *view = (__bridge void *)host.contentView;
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+    [video requestPlay];
+    assert(probe.rate == 1);
+    NSRect frame = video.surface.frame;
+    // A zero-rate decoder waiting for data must retain its playback intent.
+    probe.rate = 0; probe.timeControlStatus = AVPlayerTimeControlStatusWaitingToPlayAtSpecifiedRate;
+    ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 0);
+    assert(NSEqualRects(video.surface.frame, frame));
+    assert(video.wantsPlayback && video.suspended && probe.rate == 0);
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+    assert(probe.rate == 1 && video.ready);
+    // Pausing using AVKit's own controls is distinct from waiting.
+    [probe pause]; NSUInteger plays = probe.plays;
+    ateliet_video_place(handle, view, 1100, 800, 0, 0, 0, 0, 0);
+    ateliet_video_place(handle, view, 1100, 800, 750, 40, 320, 200, 1);
+    assert(!video.wantsPlayback && probe.rate == 0 && probe.plays == plays);
+    video.ready = NO; [video requestPlay]; [video pause];
+    video.ready = YES; [video playWhenVisible];
+    assert(probe.rate == 0 && probe.plays == plays);
+    video.player = nil; video.ready = NO;
+    puts("PASS: production controller: buffering resumes, manual pause wins, hidden geometry stays stable, late ready respects pause");
+}
+
 int main(int argc, const char **argv) {
     @autoreleasepool {
         assert(argc == 3 || argc == 4);
@@ -99,6 +147,7 @@ int main(int argc, const char **argv) {
         void *view = (__bridge void *)host.contentView;
         void *handle = ateliet_video_create(html.UTF8String);
         layout(handle, host);
+        transport(handle, host);
         if (argc == 4 && strcmp(argv[3], "--layout") == 0) {
             ateliet_video_destroy(handle); [host close]; return 0;
         }

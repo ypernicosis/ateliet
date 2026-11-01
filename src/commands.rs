@@ -217,7 +217,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.new_quadro(&folder, matches!(c, Cmd::NewDrawing));
         }
         Cmd::Library => app.open_view("library", None),
-        Cmd::Video => app.video.reveal(),
+        Cmd::Video => app.video.choose_source(),
         Cmd::ShowVideo => app.video.reveal(),
         Cmd::ToggleVideo => app.video.toggle(),
         Cmd::Focus => app.toggle_focus(),
