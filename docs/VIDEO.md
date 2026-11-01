@@ -1,101 +1,123 @@
-# Vídeo durante o trabalho
+# Vídeo integrado à área de trabalho
 
-## Decisão antes da implementação
+## Arquitetura e decisão de experiência — revisão de 31/10/2026
 
-O vídeo pertence à sessão do aplicativo, não à nota, ao livro ou ao modo de
-trabalho. Trocar de aba, cofre, Journal, Imagens, Leitor ou modo foco não
-recria o player. O espaço de escrita mantém suas dimensões.
+O vídeo pertence à sessão do Ateliet. A superfície principal é um bloco no
+painel de apoio, dentro da janela do app. Ele reserva espaço no layout e não
+encobre o texto. A janela destacada passa a ser uma escolha explícita.
 
-Uma janela auxiliar nativa, inicialmente de 480 × 270 pontos de vídeo, é a
-superfície principal. Pode ser movida, redimensionada e fixada acima das
-outras janelas. Controles conhecidos e proporção preservada permitem usá-la
-como referência visual ou companhia sem aprender outro ambiente.
+Esta revisão corrige a primeira entrega: uma janela auxiliar por padrão e
+um seletor em popup não integravam o vídeo ao trabalho.
 
-## Percurso
+### Distribuição do espaço
 
-- Botão Vídeo na barra de ferramentas e comandos pesquisáveis na paleta.
-- Um pequeno seletor oferece arquivo do computador, URL do YouTube e recentes.
-  Colar um link só inicia a reprodução depois de confirmar; a área de
-  transferência e o texto do editor não são interceptados.
-- Arquivos locais são referenciados, sem cópia para o cofre. Vídeos abertos
-  pela árvore de arquivos usam a mesma sessão. Soltar arquivos no seletor
-  abre o vídeo; soltar na nota conserva a inserção de anexos existente.
-- Reabrir um recente retoma sua posição. Iniciar o aplicativo nunca abre ou
-  reproduz vídeos automaticamente. Uma sessão nunca produz dois players.
-- Fechar ou minimizar pausa. Fechar libera decodificação e rede. Um comando
-  explícito traz a janela de volta; a posição permanece nos recentes.
-- A barra de estado oferece acesso à sessão. O atalho para abrir o seletor
-  funciona também nos modos imersivos, sem capturar Espaço no editor.
+| Área de trabalho | Lugar do vídeo |
+| --- | --- |
+| Notas, desenho e storyboard | Acima das ferramentas do painel direito; calendário, estrutura e referências continuam abaixo. |
+| Imagens e moodboard | Acima da nota lateral, usando a mesma coluna. |
+| Livro aberto ao lado | Acima do leitor, sem criar uma segunda coluna de apoio. |
+| Journal, leitura imersiva e foco | Painel direito aberto apenas por solicitação; recolher devolve o espaço ao trabalho. |
+| Vídeo recolhido | Faixa baixa no rodapé com título e ação de retomar, disponível em todos os modos. |
 
-## Camadas
+A largura usa o divisor já existente. Em janelas estreitas, a navegação à esquerda é temporariamente recolhida
+sem alterar sua preferência; as ferramentas da nota passam para um menu.
+O vídeo preserva a proporção, com
+letterbox quando necessário; o YouTube mantém pelo menos 200 × 200 pontos
+visíveis. Em janelas sem espaço suficiente, a mídia pausa e oferece
+recolher ou destacar, sem sobrepor a área de criação.
+
+### Percurso principal
+
+1. O botão Vídeo da barra ou ⌘⌥V revela o bloco no painel de apoio.
+2. O próprio bloco oferece arquivo local, link do YouTube e recentes.
+   Colar + Enter reproduz. Não há diálogo adicional para confirmar o link.
+3. Os controles do player permanecem junto do vídeo. Trocar fonte abre o
+   seletor no mesmo bloco; a fonte atual continua até a escolha seguinte.
+4. Recolher pausa, preserva a posição e devolve o espaço ao editor. A faixa
+   inferior permite continuar e revelar o vídeo num único gesto.
+5. Destacar move a mesma superfície para uma janela auxiliar. “Voltar ao
+   Ateliet” encaixa o mesmo player. Nenhuma troca de modo ou de posição
+   recarrega a mídia. Fechar a janela destacada recolhe e pausa.
+6. Encerrar a sessão libera player e rede, preservando os recentes.
+
+A reprodução nunca começa ao iniciar o app. Arquivos locais são usados na
+origem, sem importação. Arrastar para o bloco de vídeo abre a fonte; arrastar
+para a nota mantém o comportamento de anexos. Atalhos não capturam Espaço
+ou outros comandos de digitação. Abrir/recolher o vídeo não altera a
+preferência de visibilidade dos painéis de notas e imagens.
+
+## Separação de responsabilidades
 
 | Camada | Responsabilidade |
 | --- | --- |
-| `core/src/work_video.rs` | Fontes tipadas, validação estrita de URLs e timestamps, histórico limitado e atualização das posições; sem janela ou rede. |
-| `src/work_video.rs` | Seletor egui, comandos da sessão, ponte com backend, persistência global fora do cofre. |
-| `src/work_video/native.rs` | FFI com propriedade explícita e uso restrito à thread principal. |
-| `native/work_video.m` | NSPanel; AVPlayerView para arquivo, WKWebView para YouTube, callbacks de estado e descarte de recursos. |
+| `core/src/work_video.rs` | Fontes, URLs, timestamps e histórico limitado. |
+| `src/work_video.rs` | Estado de apresentação (fechado, encaixado, recolhido, destacado), seletor inline, faixa compacta, geometria, comandos e persistência. |
+| Painéis do app | Reservar um único retângulo no painel de apoio do modo atual. |
+| `src/work_video/native.rs` | Ponte proprietária, restrita à thread principal, usando o handle real da janela do eframe. |
+| `native/work_video.m` | Uma superfície nativa reaproveitada; AVPlayerView ou WKWebView; NSPanel criado somente ao destacar. |
 
-AVKit fornece áudio e vídeo sincronizados, seek, volume, tela cheia e PiP
-para formatos reconhecidos pelo macOS, sem ffmpeg ou tráfego externo.
-WKWebView só é criado ao abrir YouTube e mantém o player oficial visível,
-com controles e marca. Não há download, extração de áudio, API key nem
-substituição de anúncios. O referer usa o Bundle ID do Ateliet.
+O app calcula a geometria em pontos egui; a ponte converte para as coordenadas
+da view AppKit, inclusive escala e orientação. A view é filha da janela
+real do eframe, não uma janela escolhida por título ou ordem do sistema.
+O encaixe só muda frame/parent; não recria o decodificador. Nenhum quadro
+atravessa a FFI. O egui consulta pequenos snapshots uma vez por segundo.
 
-A camada nativa devolve snapshots pequenos, sem copiar quadros para a GPU
-do egui. Progresso não provoca renderização contínua do editor. A thread
-principal não percorre bibliotecas nem decodifica mídia. O estado
-é consultado em baixa frequência e gravado de forma atômica e espaçada,
-somente quando mudou, num arquivo próprio ao lado de `ateliet.json`.
+A sincronização acontece depois de desenhar os painéis e diálogos. Se um
+modal ou menu cobre o retângulo, a view nativa é temporariamente ocultada e
+pausada para não interceptar cliques nem encobrir o diálogo. Ao liberar o
+espaço, só retoma se estava tocando antes dessa interrupção. Recolher ou
+fechar é uma pausa explícita, sem retomada automática.
 
-## Contratos e falhas
+## Contratos
 
-- Aceitar apenas HTTP(S), hosts conhecidos do YouTube e IDs de 11 caracteres;
-  aceitar watch, youtu.be, shorts, live, embed e timestamps compartilhados.
-- Nenhuma string de URL arbitrária entra como JavaScript. Dados são JSON
-  serializado. A ponte de mensagens só aceita mensagens do documento principal.
-- Falha de codec/arquivo removido permanece visível e permite trocar a fonte.
-- Rede, bloqueio de autoplay e erros 100/101/150/153 do YouTube têm mensagem
-  acionável; o navegador é uma saída explícita.
-- Fechar, substituir e sair invalidam callbacks anteriores, pausam e liberam
-  o backend anterior. Posição e título só atualizam a fonte correspondente.
-- Builds fora do macOS continuam compilando, mas apresentam a limitação e
-  oferecem abertura externa. O backend incorporado desta entrega é macOS.
-- Música/Trilha conserva controles independentes; nenhuma aplicação externa
-  é pausada sem solicitação do usuário.
+- Um único backend por sessão; mudar nota, cofre ou modo não muda a fonte.
+- Trocar fonte, encerrar e sair invalidam callbacks atrasados.
+- IDs/hosts do YouTube são validados; conteúdo arbitrário não vira script.
+- Player oficial com controles e marca visíveis; sem extração de áudio,
+  downloads ou reprodução escondida. Referer identificado pelo Bundle ID.
+- Erros e recuperação ficam abaixo do vídeo, nunca por cima dos controles.
+- Arquivo ausente, codec não reconhecido, erro de rede ou incorporação
+  proibida oferecem troca de fonte e abertura externa.
+- Histórico global de oito fontes, posição gravada atomicamente e em baixa
+  frequência. Nenhuma mídia é carregada só para abrir o seletor.
+- O backend integrado é macOS; outras plataformas conservam abertura externa.
 
 ## Validação
 
-Testes unitários cobrem normalização e rejeição de URLs, timestamps,
-deduplicação e limite de recentes. Compilar o backend Objective-C com
-warnings e o app Rust; verificar manualmente arquivo com áudio, retomada,
-troca de fonte, fechar/minimizar, redimensionamento, fixação, navegação entre
-modos, teclado e YouTube online (incluindo vídeo com incorporação proibida).
-Testes de rede exigem acesso ao YouTube e não são substituídos por mocks.
+Os testes do executável passaram: 23 casos, incluindo seis regressões do
+vídeo. Cobrem os seis modos do app, retomada da apresentação, preservação
+das preferências de painéis, espaço de escrita em 640 × 400, seletor com
+títulos longos, sobreposição de diálogos e estabilidade da largura ao trocar
+a fonte, além da faixa recolhida no modo foco. A prévia egui por CPU foi executada separadamente e suas cinco
+imagens foram inspecionadas; o vídeo nessas imagens é um placeholder.
 
-`native/tests/work_video_test.m` é um teste de ciclo de vida independente
-(o comando de compilação está no próprio arquivo). Gera uma referência
-temporária, verifica avanço de posição, pausa, fixação, fechamento, liberação,
-reabertura e callbacks antigos. Retorna 77 se o macOS não disponibilizar o
-encoder para gerar a referência; isso significa teste não executado.
+O teste AppKit `native/tests/work_video_test.m --layout` passou, verificando
+parentesco da view, conversão de coordenadas/escala, ausência de NSPanel na
+abertura padrão e identidade da superfície ao destacar e voltar. O build
+de produção e a compilação Objective-C com `-Wall -Wextra -Werror` passaram.
 
-Na implementação inicial, a compilação de produção e a variante sem features
-padrão passaram, assim como os 197 testes do núcleo (um teste de rede já
-marcado como ignorado). O backend Objective-C compilou com `-Wall -Wextra
--Werror`. O teste de interface sem janela nativa também passou: o seletor,
-com oito títulos longos, cabe numa área de 640 × 400 e não inicia mídia ao
-abrir. A reprodução real não foi validada neste ambiente: LaunchServices
-e os serviços de mídia do macOS recusaram a sessão de teste, e o encoder
-retornou AVFoundation -11834 / OSStatus -12903. Continuam pendentes os
-percursos gráficos e a reprodução online descritos acima.
+A parte de reprodução do teste nativo retornou 77 (não executada): o serviço
+de encoder do macOS recusou gerar a referência, com AVFoundation -11800 /
+OSStatus -12903. A reprodução com áudio, o YouTube online e a composição
+AppKit sobre o OpenGL em uma sessão gráfica real ainda precisam de
+validação. Os testes de layout não demonstram esses comportamentos.
 
-## Referências consultadas
+Para repetir a inspeção sem iniciar mídia:
 
+```sh
+ATELIET_VIDEO_PREVIEW=target/video-layout cargo test -p ateliet --no-default-features --offline render_layout_preview -- --ignored
+```
+
+## Base de design consultada
+
+- Apple HIG, Layout: https://developer.apple.com/design/human-interface-guidelines/layout
+- Apple HIG, Split views: https://developer.apple.com/design/human-interface-guidelines/split-views
 - Apple HIG, Playing video: https://developer.apple.com/design/human-interface-guidelines/playing-video
-- Apple AVPlayerView: https://developer.apple.com/documentation/avkit/avplayerview
-- Apple NSPanel: https://developer.apple.com/documentation/appkit/nspanel
+- Apple, Inspectors in SwiftUI: https://developer.apple.com/videos/play/wwdc2023/10161/
+- Apple, View hierarchy: https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CocoaViewsGuide/WorkingWithAViewHierarchy/WorkingWithAViewHierarchy.html
 - YouTube, Required Minimum Functionality: https://developers.google.com/youtube/terms/required-minimum-functionality
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 
-As escolhas de superfície e fluxo são decisões de projeto para o Ateliet;
-não constituem resultados de testes com usuários.
+As escolhas acima são decisões de projeto para o fluxo do Ateliet, apoiadas
+nessas referências e na estrutura existente. Não são resultados de pesquisa
+com usuários.

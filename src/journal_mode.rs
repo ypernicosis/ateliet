@@ -14,6 +14,7 @@ impl App {
         self.images.open(&root, ctx);
         // the reader beside takes the right of the window
         self.journal.reading_beside = self.side_reader.is_some();
+        if self.side_reader.is_none() { self.video.rail(ctx, self.palette); }
         self.side_reader_ui(ctx);
         let Some(v) = self.vault.as_ref() else { return };
         let outs = {

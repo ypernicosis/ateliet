@@ -105,7 +105,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Mundo, "scriptorium-omena:abrir-mundo", "Scriptorium: Mundo (códice, tempo, genealogias, línguas)"),
     (Cmd::Trilha, "scriptorium-omena:abrir-trilha", "Scriptorium: Trilha sonora do livro"),
     (Cmd::Video, "ateliet:video", "Vídeo: Abrir arquivo ou YouTube…"),
-    (Cmd::ShowVideo, "ateliet:show-video", "Vídeo: Mostrar janela do vídeo"),
+    (Cmd::ShowVideo, "ateliet:show-video", "Vídeo: Mostrar no painel de apoio"),
     (Cmd::ToggleVideo, "ateliet:toggle-video", "Vídeo: Pausar ou continuar"),
     (Cmd::Layout, "scriptorium-omena:abrir-diagramacao", "Scriptorium: Diagramação e PDF"),
     (Cmd::Capa, "scriptorium-omena:capa", "Scriptorium: Capa do livro (3D e capa aberta)"),
@@ -217,7 +217,7 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             app.new_quadro(&folder, matches!(c, Cmd::NewDrawing));
         }
         Cmd::Library => app.open_view("library", None),
-        Cmd::Video => app.video.open_dialog(),
+        Cmd::Video => app.video.reveal(),
         Cmd::ShowVideo => app.video.reveal(),
         Cmd::ToggleVideo => app.video.toggle(),
         Cmd::Focus => app.toggle_focus(),

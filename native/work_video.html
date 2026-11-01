@@ -13,11 +13,12 @@ window.atelietToggle = () => {
   if (!ready) return;
   player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
 };
+window.atelietPlay = () => { if (ready) player.playVideo(); };
 window.atelietPause = () => { if (ready) player.pauseVideo(); };
 window.onYouTubeIframeAPIReady = () => {
   player = new YT.Player('player', {
     width:'100%', height:'100%', videoId:config.id,
-    playerVars:{autoplay:1, playsinline:1, controls:1, start:Math.floor(config.position), origin:config.origin},
+    playerVars:{autoplay:0, playsinline:1, controls:1, start:Math.floor(config.position), origin:config.origin},
     events:{
       onReady:() => { ready = true; report({ready:true}); },
       onStateChange:() => report({playing:player.getPlayerState() === 1}),

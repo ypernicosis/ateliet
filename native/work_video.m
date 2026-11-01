@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <stdbool.h>
 
 @class ATWorkVideo;
 @interface ATVideoMessages : NSObject <WKScriptMessageHandler>
@@ -19,6 +20,13 @@
 @property(nonatomic, strong) AVPlayer *player;
 @property(nonatomic, strong) WKWebView *web;
 @property(nonatomic, strong) NSButton *pin;
+@property(nonatomic, weak) NSView *host;
+@property(nonatomic) NSInteger mode; // 0 hidden, 1 in the app, 2 explicitly detached
+@property(nonatomic) BOOL pinned;
+@property(nonatomic) BOOL ready;
+@property(nonatomic) BOOL wantsPlayback;
+@property(nonatomic) BOOL resumeWhenVisible;
+@property(nonatomic, copy) NSString *presentationRequested;
 @property(nonatomic, copy) NSString *page;
 @property(nonatomic, copy) NSString *title;
 @property(nonatomic, copy) NSString *error;
@@ -27,7 +35,7 @@
 @property(nonatomic, copy) NSString *videoID;
 @property(nonatomic) double position;
 @property(nonatomic) BOOL playing;
-@property(nonatomic) BOOL changeRequested;
+
 @property(nonatomic) NSUInteger generation;
 - (void)receive:(NSDictionary *)data;
 - (void)stop;
@@ -47,66 +55,114 @@
 - (instancetype)init {
     if (!(self = [super init])) return nil;
     _title = @"Vídeo"; _error = @""; _external = @""; _videoID = @"";
-    _panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 302)
+    _presentationRequested = @""; _pinned = YES;
+    // No window is created until the user explicitly detaches the video.
+    _surface = [[NSView alloc] initWithFrame:NSZeroRect];
+    _surface.wantsLayer = YES;
+    _surface.layer.backgroundColor = NSColor.blackColor.CGColor;
+    _surface.layer.masksToBounds = YES;
+    _surface.hidden = YES;
+    return self;
+}
+- (BOOL)presented {
+    NSWindow *window = self.surface.window;
+    return !self.surface.isHiddenOrHasHiddenAncestor && window.isVisible && !window.isMiniaturized;
+}
+- (void)playWhenVisible {
+    if (!self.wantsPlayback || !self.ready || !self.presented) return;
+    [self.player play];
+    [self.web evaluateJavaScript:@"window.atelietPlay && window.atelietPlay()" completionHandler:nil];
+}
+- (void)makePanel {
+    if (self.panel) return;
+    self.panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 302)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
         backing:NSBackingStoreBuffered defer:NO];
-    _panel.title = @"Vídeo — Ateliet";
-    _panel.releasedWhenClosed = NO;
-    _panel.hidesOnDeactivate = NO;
-    _panel.becomesKeyOnlyIfNeeded = YES;
-    _panel.delegate = self;
-    _panel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
-    _panel.contentMinSize = NSMakeSize(360, 232); // YouTube viewport >= 200 × 200.
-    [_panel setFrameAutosaveName:@"AtelietWorkVideo"];
-    NSRect screen = (NSApp.mainWindow.screen ?: NSScreen.mainScreen).visibleFrame;
-    NSRect frame = _panel.frame;
+    self.panel.title = [self.title stringByAppendingString:@" — Ateliet"];
+    self.panel.releasedWhenClosed = NO;
+    self.panel.hidesOnDeactivate = NO;
+    self.panel.becomesKeyOnlyIfNeeded = YES;
+    self.panel.delegate = self;
+    self.panel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
+    self.panel.contentMinSize = NSMakeSize(360, 232);
+    [self.panel setFrameAutosaveName:@"AtelietWorkVideo"];
+    NSRect screen = (self.host.window.screen ?: NSScreen.mainScreen).visibleFrame;
+    NSRect frame = self.panel.frame;
     frame.origin = NSMakePoint(NSMaxX(screen) - frame.size.width - 24, NSMinY(screen) + 40);
-    if (![_panel setFrameUsingName:@"AtelietWorkVideo"]) [_panel setFrame:frame display:NO];
-
-    NSView *content = _panel.contentView;
-    _surface = [[NSView alloc] initWithFrame:NSZeroRect];
-    _surface.translatesAutoresizingMaskIntoConstraints = NO;
-    _surface.wantsLayer = YES; _surface.layer.backgroundColor = NSColor.blackColor.CGColor;
-    [content addSubview:_surface];
+    if (![self.panel setFrameUsingName:@"AtelietWorkVideo"]) [self.panel setFrame:frame display:NO];
     NSStackView *tools = [[NSStackView alloc] initWithFrame:NSZeroRect];
     tools.translatesAutoresizingMaskIntoConstraints = NO;
     tools.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     tools.spacing = 8; tools.edgeInsets = NSEdgeInsetsMake(2, 8, 2, 8);
-    _pin = [NSButton checkboxWithTitle:@"Sempre por cima" target:self action:@selector(togglePin:)];
-    _pin.toolTip = @"Manter o vídeo acima das outras janelas";
-    NSButton *change = [NSButton buttonWithTitle:@"Trocar vídeo…" target:self action:@selector(changeVideo:)];
-    NSButton *external = [NSButton buttonWithTitle:@"Abrir fora" target:self action:@selector(openExternal:)];
-    external.toolTip = @"Abrir no navegador ou aplicativo padrão";
-    [tools addArrangedSubview:_pin]; [tools addArrangedSubview:change]; [tools addArrangedSubview:external];
+    self.pin = [NSButton checkboxWithTitle:@"Sempre por cima" target:self action:@selector(togglePin:)];
+    self.pin.state = self.pinned ? NSControlStateValueOn : NSControlStateValueOff;
+    [tools addArrangedSubview:[NSButton buttonWithTitle:@"Voltar ao Ateliet" target:self action:@selector(returnToApp:)]];
+    [tools addArrangedSubview:self.pin];
+    [tools addArrangedSubview:[NSButton buttonWithTitle:@"Abrir fora" target:self action:@selector(openExternal:)]];
+    NSView *content = self.panel.contentView;
     [content addSubview:tools];
-    // Errors use the native subtitle, never an overlay on the YouTube player.
     [NSLayoutConstraint activateConstraints:@[
         [tools.topAnchor constraintEqualToAnchor:content.topAnchor],
         [tools.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
         [tools.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
-        [tools.heightAnchor constraintEqualToConstant:32],
-        [_surface.topAnchor constraintEqualToAnchor:tools.bottomAnchor],
-        [_surface.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
-        [_surface.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
-        [_surface.bottomAnchor constraintEqualToAnchor:content.bottomAnchor]
+        [tools.heightAnchor constraintEqualToConstant:32]
     ]];
-    return self;
+    [self togglePin:nil];
 }
 - (void)setNotice:(NSString *)message {
     self.error = message ?: @"";
-    // Native subtitle keeps the video unobscured and the recovery action visible.
     self.panel.subtitle = self.error;
 }
 - (void)togglePin:(id)sender {
-    self.panel.level = self.pin.state == NSControlStateValueOn ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    self.pinned = self.pin.state == NSControlStateValueOn;
+    self.panel.level = self.pinned ? NSFloatingWindowLevel : NSNormalWindowLevel;
 }
-- (void)changeVideo:(id)sender {
-    self.changeRequested = YES;
-    for (NSWindow *window in NSApp.windows) {
-        if (window != self.panel && window.isVisible && ![window isKindOfClass:NSPanel.class]) {
-            [window makeKeyAndOrderFront:nil]; break;
-        }
+- (void)returnToApp:(id)sender {
+    self.presentationRequested = @"docked";
+    // Rust reserves the space on the next layout pass before moving the view.
+    [self.host.window makeKeyAndOrderFront:nil];
+}
+- (void)setSurfaceHidden:(BOOL)hidden {
+    if (hidden == self.surface.isHidden) return;
+    if (hidden) {
+        [self capturePosition];
+        BOOL resume = self.playing || (!self.ready && self.wantsPlayback);
+        [self pause];
+        self.resumeWhenVisible = resume;
     }
+    self.surface.hidden = hidden;
+    if (!hidden && self.resumeWhenVisible) {
+        self.resumeWhenVisible = NO; self.wantsPlayback = YES;
+    }
+    if (!hidden) [self playWhenVisible];
+}
+- (void)placeIn:(NSView *)host frame:(NSRect)frame mode:(NSInteger)mode {
+    self.host = host;
+    // Do not reopen a panel closed by the user while Rust awaits the event.
+    if (self.presentationRequested.length) return;
+    if (mode == 2) {
+        [self makePanel];
+        if (self.surface.superview != self.panel.contentView) {
+            [self.surface removeFromSuperview];
+            self.surface.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            NSRect bounds = self.panel.contentView.bounds;
+            self.surface.frame = NSMakeRect(0, 0, bounds.size.width, MAX(0, bounds.size.height - 32));
+            [self.panel.contentView addSubview:self.surface positioned:NSWindowBelow relativeTo:nil];
+        }
+        if (self.mode != 2) { [self.panel deminiaturize:nil]; [self.panel orderFront:nil]; }
+        [self setSurfaceHidden:self.panel.isMiniaturized];
+    } else {
+        if (self.panel.isVisible) [self.panel orderOut:nil];
+        if (host && self.surface.superview != host) {
+            [self.surface removeFromSuperview];
+            self.surface.autoresizingMask = NSViewNotSizable;
+            [host addSubview:self.surface positioned:NSWindowAbove relativeTo:nil];
+        }
+        if (!NSEqualRects(frame, self.surface.frame)) self.surface.frame = frame;
+        BOOL fits = frame.size.width >= 199.5 && frame.size.height >= 199.5 && NSContainsRect(host.bounds, frame);
+        [self setSurfaceHidden:mode != 1 || !host || !fits || !host.window.isVisible || host.window.isMiniaturized];
+    }
+    self.mode = mode;
 }
 - (void)openExternal:(id)sender {
     NSURL *url = [NSURL URLWithString:self.external];
@@ -131,20 +187,26 @@
     [self capturePosition];
     [self.player pause];
     [self.web evaluateJavaScript:@"window.atelietPause && window.atelietPause()" completionHandler:nil];
-    self.playing = NO;
+    self.playing = NO; self.wantsPlayback = NO; self.resumeWhenVisible = NO;
 }
 - (void)stop {
     [self pause];
-    self.generation++;
+    self.generation++; self.ready = NO;
     [self.web.configuration.userContentController removeScriptMessageHandlerForName:@"video"];
     self.web.navigationDelegate = nil; self.web.UIDelegate = nil;
     [self.web stopLoading]; [self.web removeFromSuperview]; self.web = nil;
     self.localView.player = nil; [self.localView removeFromSuperview]; self.localView = nil;
     [self.player replaceCurrentItemWithPlayerItem:nil]; self.player = nil;
 }
-- (BOOL)windowShouldClose:(NSWindow *)sender { [self stop]; return YES; }
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    [self pause]; [self setSurfaceHidden:YES];
+    self.presentationRequested = @"collapsed";
+    return YES;
+}
 - (void)windowWillMiniaturize:(NSNotification *)note { [self pause]; }
+- (void)windowDidDeminiaturize:(NSNotification *)note { [self setSurfaceHidden:NO]; }
 - (void)receive:(NSDictionary *)data {
+    if ([data[@"ready"] boolValue]) { self.ready = YES; [self playWhenVisible]; }
     if ([data[@"id"] isKindOfClass:NSString.class]) {
         NSString *id = data[@"id"];
         NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"];
@@ -160,7 +222,10 @@
     if ([data[@"playing"] isKindOfClass:NSNumber.class]) {
         self.playing = [data[@"playing"] boolValue];
         if (self.playing) [self setNotice:@""];
-        if (self.panel.isMiniaturized && self.playing) [self pause];
+        if (!self.presented && self.playing) {
+            BOOL resume = self.resumeWhenVisible;
+            [self pause]; self.resumeWhenVisible = resume;
+        }
     }
     if ([data[@"title"] isKindOfClass:NSString.class]) {
         self.title = [data[@"title"] substringToIndex:MIN(200, [data[@"title"] length])];
@@ -179,10 +244,9 @@
     [self setNotice:@""];
     self.title = source[@"title"] ?: @"Vídeo";
     self.panel.title = [self.title stringByAppendingString:@" — Ateliet"];
-    self.pin.state = [source[@"pinned"] boolValue] ? NSControlStateValueOn : NSControlStateValueOff;
-    [self togglePin:nil];
-    [self.panel deminiaturize:nil];
-    [self.panel orderFront:nil]; // Opening media does not take typing focus.
+    self.pinned = [source[@"pinned"] boolValue];
+    if (self.pin) { self.pin.state = self.pinned ? NSControlStateValueOn : NSControlStateValueOff; [self togglePin:nil]; }
+    self.wantsPlayback = YES;
     NSDictionary *media = source[@"source"];
     if ([media[@"kind"] isEqual:@"local"]) {
         self.videoID = @"";
@@ -200,7 +264,7 @@
         [self.player seekToTime:CMTimeMakeWithSeconds(self.position, 600) completionHandler:^(BOOL finished) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 ATWorkVideo *owner = weak;
-                if (finished && owner.generation == generation && owner.panel.isVisible && !owner.panel.isMiniaturized) [owner.player play];
+                if (finished && owner.generation == generation) { owner.ready = YES; [owner playWhenVisible]; }
             });
         }];
     } else {
@@ -265,20 +329,38 @@ void ateliet_video_open(void *handle, const char *json) {
 }
 void ateliet_video_toggle(void *handle) {
     ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
-    if (video.player) { if (video.player.rate != 0) [video.player pause]; else [video.player play]; }
-    else [video.web evaluateJavaScript:@"window.atelietToggle && window.atelietToggle()" completionHandler:nil];
+    [video capturePosition];
+    if (video.playing) [video pause];
+    else { video.wantsPlayback = YES; [video playWhenVisible]; }
 }
-void ateliet_video_reveal(void *handle) {
+void ateliet_video_pause(void *handle) { [(__bridge ATWorkVideo *)handle pause]; }
+void ateliet_video_play(void *handle) {
     ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
-    [video.panel deminiaturize:nil]; [video.panel orderFront:nil];
+    video.wantsPlayback = YES; [video playWhenVisible];
+}
+// Coordinates arrive in egui points, relative to its root viewport. Scaling
+// against the actual host bounds handles Retina and egui zoom independently.
+void ateliet_video_place(void *handle, void *view, double sw, double sh,
+                         double x, double y, double w, double h, int mode) {
+    ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
+    NSView *host = (__bridge NSView *)view;
+    if (!host || sw <= 0 || sh <= 0) { [video setSurfaceHidden:YES]; return; }
+    NSRect bounds = host.bounds;
+    double sx = bounds.size.width / sw, sy = bounds.size.height / sh;
+    double top = host.isFlipped ? NSMinY(bounds) + y * sy : NSMaxY(bounds) - (y + h) * sy;
+    NSRect frame = NSMakeRect(NSMinX(bounds) + x * sx, top, w * sx, h * sy);
+    [video placeIn:host frame:frame mode:mode];
+}
+bool ateliet_video_has_event(void *handle) {
+    return [(__bridge ATWorkVideo *)handle presentationRequested].length != 0;
 }
 char *ateliet_video_snapshot(void *handle) {
     ATWorkVideo *video = (__bridge ATWorkVideo *)handle;
     [video capturePosition];
     NSDictionary *snapshot = @{@"position":@(video.position), @"playing":@(video.playing),
-        @"visible":@(video.panel.isVisible), @"pinned":@(video.pin.state == NSControlStateValueOn),
-        @"title":video.title, @"error":video.error, @"id":video.videoID, @"change":@(video.changeRequested)};
-    video.changeRequested = NO;
+        @"visible":@(video.presented), @"pinned":@(video.pinned),
+        @"title":video.title, @"error":video.error, @"id":video.videoID, @"presentation":video.presentationRequested};
+    video.presentationRequested = @"";
     NSData *data = [NSJSONSerialization dataWithJSONObject:snapshot options:0 error:nil];
     if (!data) return NULL;
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
@@ -287,5 +369,6 @@ char *ateliet_video_snapshot(void *handle) {
 void ateliet_video_free_string(char *value) { free(value); }
 void ateliet_video_destroy(void *handle) {
     ATWorkVideo *video = (__bridge_transfer ATWorkVideo *)handle;
-    [video stop]; video.panel.delegate = nil; [video.panel close];
+    [video stop]; [video.surface removeFromSuperview];
+    video.panel.delegate = nil; [video.panel close];
 }

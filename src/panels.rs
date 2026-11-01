@@ -199,7 +199,7 @@ pub fn ribbon(app: &mut App, ctx: &egui::Context) {
             storyboards_button(app, ui, p);
             let video_tip = if cfg!(target_os = "macos") { "Vídeo: computador ou YouTube (⌘⌥V)" } else { "Vídeo: computador ou YouTube (Ctrl+Alt+V)" };
             if icon_button(ui, icons::FILM, video_tip, app.video.active(), p).clicked() {
-                app.video.open_dialog();
+                app.video.toggle_dock();
             }
             if icon_button(ui, icons::CALENDAR_DAYS, "Nota de hoje", false, p).clicked() {
                 app.open_daily(ateliet_core::datefmt::today().date());
@@ -824,9 +824,14 @@ fn bookmarks(app: &mut App, ui: &mut egui::Ui) {
 
 pub fn right(app: &mut App, ctx: &egui::Context) {
     let p = app.palette;
-    egui::SidePanel::right("right").resizable(true).show_separator_line(false).default_width(290.0).width_range(220.0..=520.0).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 8 })).show(ctx, |ui| {
+    let video_here = app.video.docked() && app.side_reader.is_none();
+    let min = if video_here { 260.0 } else { 220.0 };
+    let max = (ctx.available_rect().width() - 320.0).clamp(min, 520.0);
+    egui::SidePanel::right("right").resizable(true).show_separator_line(false).default_width(if video_here { 340.0 } else { 290.0 }).width_range(min..=max).frame(egui::Frame::new().fill(p.bg_secondary).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 8 })).show(ctx, |ui| {
         let clip = ui.clip_rect();
         ui.painter().vline(clip.left() + 0.5, clip.y_range(), egui::Stroke::new(1.0_f32, p.border));
+        if video_here { app.video.dock(ui, p); }
+        if !app.right_open { return; }
         let mut tab = app.right_tab;
         header_tabs(ui, &mut tab, &[(RightTab::Calendar, icons::CALENDAR, "Calendário"), (RightTab::Backlinks, icons::LINK, "Backlinks"), (RightTab::Outline, icons::LIST, "Estrutura"), (RightTab::Tags, icons::HASH, "Tags"), (RightTab::Manuscript, icons::BOOK_TEXT, "Manuscrito"), (RightTab::Pictures, icons::IMAGES, "Imagens")], p);
         app.right_tab = tab;
@@ -834,7 +839,7 @@ pub fn right(app: &mut App, ctx: &egui::Context) {
             RightTab::Backlinks => backlinks(app, ui),
             RightTab::Outline => outline(app, ui),
             RightTab::Tags => tags(app, ui),
-            RightTab::Calendar => calendar_panel(app, ui),
+            RightTab::Calendar => { egui::ScrollArea::vertical().id_salt("calendar-support").show(ui, |ui| calendar_panel(app, ui)); }
             RightTab::Pictures => {
                 if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
                     app.images.open(&root, ui.ctx());
@@ -1087,6 +1092,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         let mut drag: Option<(usize, f32, bool)> = None;
         let mut first_x = 0.0;
         let mut tab_step = 0.0;
+        let compact_tools = app.video.docked() && ui.available_width() < 430.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let (g, tip) = if app.left_open { (icons::PANEL_LEFT_CLOSE, "Esconder barra lateral") } else { (icons::PANEL_LEFT_OPEN, "Mostrar barra lateral") };
@@ -1094,7 +1100,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 app.left_open = !app.left_open;
             }
             ui.add_space(4.0);
-            let right_w = 176.0;
+            let right_w = if compact_tools { 34.0 } else { 176.0 };
             let avail = (ui.available_width() - right_w).max(100.0);
             let n = app.tabs.len().max(1) as f32;
             let tab_w = (avail / n - 2.0).clamp(110.0, 220.0);
@@ -1227,7 +1233,7 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                     }
                 });
             });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut tools = |ui: &mut egui::Ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let (g, tip) = if app.right_open { (icons::PANEL_RIGHT_CLOSE, "Esconder painel direito") } else { (icons::PANEL_RIGHT_OPEN, "Mostrar painel direito") };
                 if icon_button(ui, g, tip, false, p).clicked() {
@@ -1272,7 +1278,14 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         }
                     }
                 }
-            });
+            };
+            if compact_tools {
+                ui.menu_button(kit::icon(icons::ELLIPSIS, 16.0), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), &mut tools);
+                }).response.on_hover_text("Ferramentas da nota");
+            } else {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), &mut tools);
+            }
         });
         if let Some(i) = select {
             app.focus_tab(i);
@@ -1327,7 +1340,6 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
                 ui.label(small("Executando modelo…".into()));
             }
             mini_player(app, ui);
-            app.video.status(ui, p);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 if let Some(s) = app.sprint.as_ref() {
