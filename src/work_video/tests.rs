@@ -7,6 +7,7 @@ fn seeded() -> Video {
     video.current = Some(Recent { source: Source::Youtube { id: "dQw4w9WgXcQ".into() }, title: "Referência de composição e movimento".into(), position: 92.0 });
     video.presentation = Presentation::Docked;
     video.switcher = false;
+    video.snapshot.ready = true;
     video
 }
 
@@ -47,7 +48,7 @@ fn one_session_follows_every_workspace_without_covering_the_editor() {
         assert!(rect.width() >= 200.0 && rect.height() >= 200.0, "{mode}: {rect:?}");
         assert!(ctx.screen_rect().contains_rect(rect), "{mode}: {rect:?}");
         assert!(!ctx.available_rect().intersects(rect), "video must reserve layout space in {mode}");
-        assert_eq!(app.video.unobscured_rect(&ctx), Some(rect), "{mode}: unexpected occlusion");
+        assert_eq!(app.video.presentation_rect(&ctx), Some(rect), "{mode}: unexpected occlusion");
         assert_eq!(app.video.current.as_ref().unwrap().source, source);
         assert_eq!(app.video.current.as_ref().unwrap().position, 92.0);
         assert!(app.video.backend.is_none(), "layout must not load a decoder");
@@ -117,7 +118,7 @@ fn overlapping_dialog_hides_native_surface_and_nonoverlapping_dialog_does_not() 
                 egui::Window::new("Test dialog").fixed_pos([x, 70.0]).fixed_size([210.0, 220.0]).show(ctx, |ui| { ui.label("Configurações"); });
             });
         }
-        assert_eq!(video.unobscured_rect(&ctx).is_none(), x > 700.0);
+        assert_eq!(video.presentation_rect(&ctx).is_none(), x > 700.0);
     }
 }
 
@@ -133,11 +134,13 @@ fn render_layout_preview() {
     let (mut app, ctx, root) = workspace("preview");
     app.vault.as_mut().unwrap().name = "ocean".into();
     let mut textures: HashMap<egui::TextureId, egui::ColorImage> = HashMap::new();
-    for name in ["encaixado", "trocar-video", "recolhido", "imagens", "pequeno"] {
+    for name in ["encaixado", "trocar-video", "recolhido", "imagens", "pequeno", "falha", "atualizacao"] {
         if name == "trocar-video" { app.video.switcher = true; }
         if name == "recolhido" { app.video.collapse(); }
         if name == "imagens" { app.images_mode = true; app.video.reveal(); }
         if name == "pequeno" { app.images_mode = false; }
+        if name == "falha" { app.video.snapshot.error = "Sem conexão com o YouTube. Tente novamente para retomar daqui.".into(); }
+        if name == "atualizacao" { app.video.snapshot.error.clear(); app.updater.open = true; app.updater.state = crate::update::State::Ready; }
         let size = if name == "pequeno" { [640.0, 400.0] } else { [1280.0, 820.0] };
         let outputs = frames(&mut app, &ctx, size);
         let mut shapes = Vec::new();
@@ -219,4 +222,122 @@ fn focus_controls_stay_above_the_collapsed_video_strip() {
     assert!(hud.bottom() <= ctx.available_rect().bottom(), "{hud:?}");
     assert!(hud.bottom() < 820.0 - 36.0);
     drop(app); let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn a_tooltip_never_suspends_a_ready_video() {
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    let mut video = seeded();
+    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+    for _ in 0..4 {
+        let _ = ctx.run(egui::RawInput { screen_rect: Some(bounds), ..Default::default() }, |ctx| {
+            video.rail(ctx, Palette::new(&Default::default()));
+            egui::CentralPanel::default().show(ctx, |_| {});
+            let rect = video.player_rect.unwrap();
+            let tip = egui::Area::new(egui::Id::new("video-test-tip")).order(egui::Order::Tooltip)
+                .fixed_pos(rect.min + egui::vec2(8.0, 16.0)).show(ctx, |ui| { ui.label("Reproduzir / pausar"); }).response.rect;
+            let outside = tooltip_position(bounds, rect, tip);
+            assert!(!outside.intersects(rect), "{tip:?} -> {outside:?}");
+            assert!(bounds.contains_rect(outside));
+            assert_eq!(video.presentation_rect(ctx), Some(rect));
+        });
+    }
+    assert!(video.snapshot.ready);
+}
+
+#[test]
+fn tooltip_placement_stays_clear_at_small_window_edges() {
+    let screen = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(640.0, 400.0));
+    let video = egui::Rect::from_min_max(egui::pos2(378.0, 40.0), egui::pos2(630.0, 240.0));
+    for size in [egui::vec2(180.0, 26.0), egui::vec2(360.0, 60.0)] {
+        let tip = egui::Rect::from_min_size(egui::pos2(440.0, 220.0), size);
+        let result = tooltip_position(screen, video, tip);
+        assert!(screen.contains_rect(result));
+        assert!(!video.intersects(result));
+    }
+}
+
+#[test]
+fn custom_video_height_survives_source_drawer_without_consuming_the_editor() {
+    let (mut app, ctx, root) = workspace("custom-height");
+    app.video.history.height = 310.0;
+    frames(&mut app, &ctx, [1280.0, 820.0]);
+    let initial = app.video.player_rect.unwrap();
+    assert!((initial.height() - 310.0).abs() < 1.0);
+    app.video.switcher = true;
+    frames(&mut app, &ctx, [1280.0, 820.0]);
+    assert_eq!(app.video.player_rect.unwrap(), initial);
+    assert!(ctx.available_rect().width() > 500.0);
+    frames(&mut app, &ctx, [640.0, 400.0]);
+    assert!(ctx.screen_rect().contains_rect(app.video.player_rect.unwrap()));
+    drop(app); let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn video_options_open_beside_the_player_and_keep_it_visible() {
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    let mut video = seeded();
+    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+    let mut menu = egui::Pos2::ZERO;
+    let mut select = egui::Pos2::ZERO;
+    for n in 0..7 {
+        let pos = if n == 5 { select } else { menu };
+        let events = if n == 2 || n == 5 { vec![
+            egui::Event::PointerMoved(pos),
+            egui::Event::PointerButton { pos, button:egui::PointerButton::Primary, pressed:true, modifiers:Default::default() },
+            egui::Event::PointerButton { pos, button:egui::PointerButton::Primary, pressed:false, modifiers:Default::default() },
+        ] } else { vec![] };
+        let _ = ctx.run(egui::RawInput { screen_rect: Some(bounds), events, ..Default::default() }, |ctx| {
+            video.rail(ctx, Palette::new(&Default::default()));
+            egui::CentralPanel::default().show(ctx, |_| {});
+            let rect = video.player_rect.unwrap();
+            menu = egui::pos2(rect.right() - 46.0, rect.top() - 24.0);
+            if n == 3 || n == 4 {
+                assert!(ctx.memory(|m| m.any_popup_open()), "options menu should open");
+                assert_eq!(video.presentation_rect(ctx), Some(rect));
+                let menu_rect = ctx.memory(|m| m.areas().visible_layer_ids().iter().find_map(|l| (l.order == egui::Order::Foreground).then(|| m.area_rect(l.id)).flatten())).unwrap();
+                select = menu_rect.min + egui::vec2(40.0, 18.0);
+            }
+            if n == 6 {
+                assert!(!ctx.memory(|m| m.any_popup_open()), "selection must dismiss the options menu");
+                assert!(video.switcher, "the selected source drawer should open");
+                assert_eq!(video.presentation_rect(ctx), Some(rect));
+            }
+        });
+    }
+}
+
+#[test]
+fn revealing_video_in_images_does_not_wait_for_sidebar_animation() {
+    let (mut app, ctx, root) = workspace("image-animation");
+    app.images_mode = true; app.images.panels[1] = false; app.video.collapse();
+    frames(&mut app, &ctx, [1280.0, 820.0]);
+    app.video.reveal();
+    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 820.0));
+    let _ = ctx.run(egui::RawInput { screen_rect:Some(bounds), time:Some(5.0), ..Default::default() }, |ctx| app.update(ctx, &mut eframe::Frame::_new_kittest()));
+    assert!(app.video.player_rect.is_some(), "a live media view must appear on the first displayed frame");
+    assert!(!app.images.panels[1], "opening video must preserve the notes-panel preference");
+    drop(app); let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn opening_source_picker_selects_the_previous_link_for_immediate_paste() {
+    let ctx = egui::Context::default();
+    crate::fonts::install(&ctx);
+    let mut video = seeded();
+    video.url = "https://youtu.be/dQw4w9WgXcQ".into();
+    video.choose_source();
+    let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0));
+    for n in 0..4 {
+        let events = if n == 3 { vec![egui::Event::Paste("https://youtu.be/aqz-KE-bpKQ".into())] } else { vec![] };
+        let _ = ctx.run(egui::RawInput { screen_rect:Some(bounds), events, ..Default::default() }, |ctx| {
+            video.rail(ctx, Palette::new(&Default::default()));
+            egui::CentralPanel::default().show(ctx, |_| {});
+        });
+    }
+    assert_eq!(video.url, "https://youtu.be/aqz-KE-bpKQ", "paste must replace the old link, not append to it");
+    assert_eq!(video.current.as_ref().unwrap().position, 92.0);
+    assert!(!video.snapshot.intent, "choosing another source must not resume a paused one");
 }

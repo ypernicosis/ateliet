@@ -6,6 +6,10 @@ use serde::Deserialize;
 pub struct Snapshot {
     pub position: f64,
     pub playing: bool,
+    pub ready: bool,
+    pub buffering: bool,
+    pub suspended: bool,
+    pub intent: bool,
     pub visible: bool,
     pub pinned: bool,
     pub title: String,
@@ -56,13 +60,13 @@ mod platform {
             Ok(())
         }
         pub fn has_event(&self) -> bool { unsafe { ateliet_video_has_event(self.handle.as_ptr()) } }
-        pub fn snapshot(&self) -> Snapshot {
+        pub fn snapshot(&self) -> Option<Snapshot> {
             // SAFETY: returned buffer is either null or a malloc-owned UTF-8
             // JSON string; always released by its matching allocator.
             unsafe {
                 let value = ateliet_video_snapshot(self.handle.as_ptr());
-                if value.is_null() { return Snapshot::default(); }
-                let result = serde_json::from_slice(CStr::from_ptr(value).to_bytes()).unwrap_or_default();
+                if value.is_null() { return None; }
+                let result = serde_json::from_slice(CStr::from_ptr(value).to_bytes()).ok();
                 ateliet_video_free_string(value);
                 result
             }
@@ -99,7 +103,7 @@ mod platform {
         pub fn new() -> Result<Self, String> { Err("O player integrado está disponível no macOS. Use Abrir fora neste sistema.".into()) }
         pub fn open(&mut self, _: &str) -> Result<(), String> { Ok(()) }
         pub fn has_event(&self) -> bool { false }
-        pub fn snapshot(&self) -> Snapshot { Snapshot::default() }
+        pub fn snapshot(&self) -> Option<Snapshot> { None }
         pub fn toggle(&mut self) {}
         pub fn pause(&mut self) {}
         pub fn play(&mut self) {}

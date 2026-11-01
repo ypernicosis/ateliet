@@ -70,6 +70,12 @@ fn source_dir() -> Result<PathBuf, String> {
 }
 
 fn command(dir: &Path, prog: &str, args: &[&str]) -> Command {
+    // Background compilation must yield to writing, AVKit and WebKit.
+    #[cfg(unix)]
+    let mut c = if prog == "cargo" {
+        let mut c = Command::new("/usr/bin/nice"); c.args(["-n", "10", prog]); c
+    } else { Command::new(prog) };
+    #[cfg(not(unix))]
     let mut c = Command::new(prog);
     // no terminal to answer a prompt: fail instead of waiting for a password
     c.args(args).current_dir(dir).env("GIT_TERMINAL_PROMPT", "0").env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes").env("NO_COLOR", "1").env("CARGO_TERM_COLOR", "never").stdin(Stdio::null());
@@ -184,7 +190,7 @@ fn apply(tx: &Sender<Msg>, dir: &Path) -> Result<(), String> {
     let in_checkout = exe.parent().is_some_and(|p| p == target.join("debug") || p == target.join("release"));
     let release = !in_checkout || exe.parent() == Some(target.join("release").as_path());
     run(tx, dir, "Baixando as mudanças", "git", &["pull", "--ff-only"])?;
-    let mut args = vec!["build", "-p", "ateliet", "--no-default-features"];
+    let mut args = vec!["build", "-p", "ateliet", "--no-default-features", "--jobs", "2"];
     if !FEATURES.is_empty() {
         args.extend(["--features", FEATURES]);
     }
@@ -279,7 +285,7 @@ impl Updater {
                     self.error = None;
                     if s.available && self.auto && self.tried != s.latest && !self.open {
                         self.tried = s.latest.clone();
-                        self.notice = Some(format!("Atualizando o Ateliet em segundo plano ({} {}).", s.behind, if s.behind == 1 { "commit novo" } else { "commits novos" }));
+                        self.notice = Some("Preparando uma atualização em segundo plano.".into());
                         self.status = Some(s);
                         self.update();
                     } else {
@@ -307,7 +313,7 @@ impl Updater {
                 }
                 Msg::Done(Err(e)) => {
                     self.state = State::Failed;
-                    self.notice = Some(format!("A atualização automática falhou: {}", e.lines().next().unwrap_or("")));
+                    self.notice = Some("Não foi possível preparar a atualização. Seu trabalho pode continuar.".into());
                     self.error = Some(e);
                 }
             }

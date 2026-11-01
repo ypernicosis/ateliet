@@ -1374,6 +1374,9 @@ impl App {
         if let Some((keys, folder)) = moves {
             self.move_pictures(keys, &folder);
         }
+        if self.video.docked() {
+            ctx.animate_bool_with_time(egui::Id::new("image-notes").with("animation"), true, 0.0);
+        }
         let notes_max = if self.video.docked() { (ctx.available_rect().width() - 320.0).clamp(260.0, 900.0) } else { 900.0 };
         egui::SidePanel::right("image-notes").resizable(true).show_separator_line(false).default_width(420.0).width_range(260.0..=notes_max).frame(egui::Frame::new().fill(p.bg).inner_margin(egui::Margin::ZERO)).show_animated(ctx, self.images.panels[1] || self.video.docked(), |ui| {
             let clip = ui.clip_rect();

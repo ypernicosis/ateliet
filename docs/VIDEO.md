@@ -1,5 +1,9 @@
 # Vídeo integrado à área de trabalho
 
+A revisão de continuidade e acabamento está em [VIDEO_FLUIDEZ.md](VIDEO_FLUIDEZ.md).
+Ela substitui as decisões de dicas, suspensão e controles descritas na
+primeira integração abaixo.
+
 ## Arquitetura e decisão de experiência — revisão de 31/10/2026
 
 O vídeo pertence à sessão do Ateliet. A superfície principal é um bloco no
@@ -63,7 +67,7 @@ O encaixe só muda frame/parent; não recria o decodificador. Nenhum quadro
 atravessa a FFI. O egui consulta pequenos snapshots uma vez por segundo.
 
 A sincronização acontece depois de desenhar os painéis e diálogos. Se um
-modal ou menu cobre o retângulo, a view nativa é temporariamente ocultada e
+janela cobre o retângulo, a view nativa é temporariamente ocultada e
 pausada para não interceptar cliques nem encobrir o diálogo. Ao liberar o
 espaço, só retoma se estava tocando antes dessa interrupção. Recolher ou
 fechar é uma pausa explícita, sem retomada automática.
