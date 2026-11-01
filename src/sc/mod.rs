@@ -84,6 +84,8 @@ pub enum Action {
     OpenLink(String, String, bool),
     Toast(String),
     Music(crate::music::Cmd),
+    /// A new storyboard of a kind: its options first, or the canvas at once.
+    NewStoryboard(String),
 }
 
 impl Sc {
@@ -182,6 +184,8 @@ pub enum View {
     Diagramacao(Box<diagramacao_ui::DiagramacaoView>),
     Capa(Box<capa_ui::CapaView>),
     Pagina(Box<pagina_ui::PaginaView>),
+    /// The storyboards screen: make one or open one of the vault's.
+    Storyboards(Box<crate::board_ui::home::Home>),
 }
 
 impl View {
@@ -197,12 +201,14 @@ impl View {
             View::Diagramacao(d) => d.title(),
             View::Capa(c) => c.title(),
             View::Pagina(c) => c.title(),
+            View::Storyboards(_) => "Storyboards".into(),
         }
     }
 
     pub fn from_path(path: &str) -> Option<View> {
         match path {
             "scriptorium:library" => Some(View::Library(library::Library::default())),
+            crate::board_ui::home::PATH => Some(View::Storyboards(Box::default())),
             _ => {
                 if let Some(b) = path.strip_prefix("scriptorium:mundo:") {
                     return Some(View::Mundo(Box::new(mundo_ui::MundoView::new(b))));

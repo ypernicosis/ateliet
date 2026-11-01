@@ -1583,11 +1583,24 @@ impl App {
             self.new_note("");
             self.ask = None;
         }
+        // a storyboard takes them as references
+        if self.tabs.get(self.active).is_some_and(|t| t.board.is_some()) {
+            let Some(v) = &self.vault else { return };
+            let paths: Vec<std::path::PathBuf> = keys.iter().map(|k| if std::path::Path::new(k).is_absolute() { std::path::PathBuf::from(k) } else { v.abs(k) }).collect();
+            if let Some(b) = self.tabs[self.active].board.as_mut() {
+                b.add_reference_paths(&paths);
+            }
+            return;
+        }
+        if self.tabs.get(self.active).is_none_or(|t| t.view.is_some() || t.quadro.is_some() || t.reader.is_some()) {
+            self.toast("Abra uma nota (ou um storyboard) para pôr a imagem nela");
+            return;
+        }
         // pictures from outside the vault (shared library, external folders) are copied in first
         let keys: Vec<String> = keys.iter().map(|k| self.picture_into_vault(k)).collect();
         let embeds: String = keys.iter().map(|k| format!("![[{}]]\n", k.rsplit('/').next().unwrap_or(k))).collect();
         let Some(note) = self.embed_at_cursor(&embeds) else { return };
-        self.toast(format!("{} picture(s) added to {note}", keys.len()));
+        self.toast(if keys.len() == 1 { format!("Imagem posta em {note}") } else { format!("{} imagens postas em {note}", keys.len()) });
     }
 
     /// Embed lines at the cursor of the note in use, as a block of their own
@@ -1641,6 +1654,7 @@ impl App {
                     crate::sc::View::Diagramacao(d) => d.ui(ui, &mut cx),
                     crate::sc::View::Capa(c) => c.ui(ui, &mut cx),
                     crate::sc::View::Pagina(c) => c.ui(ui, &mut cx),
+                    crate::sc::View::Storyboards(h) => h.ui(ui, &mut cx),
                 }
             };
             // a map can walk into its submaps: the tab follows
