@@ -1939,11 +1939,11 @@ pub fn update_window(app: &mut App, ctx: &egui::Context) {
     kit::scrim(ctx, p);
     egui::Window::new("update").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, -20.0]).show(ctx, |ui| {
         let u = &mut app.updater;
-        ui.set_width(520.0);
-        ui.label(RichText::new("Atualizar o Ateliet").font(kit::medium(17.0)).color(p.text));
+        ui.set_width(440.0);
+        ui.label(RichText::new("Atualizações").font(kit::medium(17.0)).color(p.text));
         ui.add_space(8.0);
         let mut auto = u.auto;
-        if kit::setting(ui, "Atualizar automaticamente", "A cada meia hora o Ateliet olha o código de onde foi compilado; havendo commits novos, baixa e recompila em segundo plano, e a versão nova começa com o app.", p, |ui| kit::toggle(ui, &mut auto, p).changed()) {
+        if kit::setting(ui, "Atualizar automaticamente", "Prepara novas versões em segundo plano. Você escolhe quando reiniciar.", p, |ui| kit::toggle(ui, &mut auto, p).changed()) {
             u.set_auto(auto);
         }
         ui.add_space(6.0);
@@ -1957,41 +1957,31 @@ pub fn update_window(app: &mut App, ctx: &egui::Context) {
             State::Building => {
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(RichText::new(format!("{}…", if u.step.is_empty() { "Começando" } else { &u.step })).color(p.muted));
+                    ui.label(RichText::new("Preparando a nova versão…").color(p.muted));
                 });
             }
             State::Ready => {
-                ui.label(RichText::new("A versão nova está pronta. Reinicie o Ateliet para usá-la.").color(p.text));
+                ui.label(RichText::new("Atualização pronta. Reinicie quando terminar seu trabalho.").color(p.text));
             }
             State::Failed => {
-                ui.label(RichText::new("A atualização falhou:").color(p.error));
+                ui.label(RichText::new("Não foi possível preparar a atualização. Tente novamente.").color(p.error));
             }
             State::Idle => match &u.status {
-                Some(s) if s.available => {
-                    ui.label(RichText::new(format!("{} {} em {}:", s.behind, if s.behind == 1 { "commit novo" } else { "commits novos" }, s.upstream)).color(p.text));
-                    egui::ScrollArea::vertical().max_height(160.0).id_salt("upd-commits").show(ui, |ui| {
-                        for c in &s.commits {
-                            ui.label(RichText::new(c).size(12.0).monospace().color(p.muted));
-                        }
-                    });
-                }
-                Some(s) => {
-                    ui.label(RichText::new(format!("O Ateliet está em dia ({}).", &s.current[..s.current.len().min(8)])).color(p.muted));
-                }
+                Some(s) if s.available => { ui.label(RichText::new("Uma nova versão está disponível.").color(p.text)); }
+                Some(_) => { ui.label(RichText::new("O Ateliet está atualizado.").color(p.muted)); }
                 None => {}
             },
         }
-        if let Some(e) = &u.error {
-            ui.label(RichText::new(e).size(12.0).color(p.error));
-        }
-        if !u.log.is_empty() {
-            ui.add_space(6.0);
-            egui::Frame::new().fill(p.code_bg).corner_radius(6.0).inner_margin(8.0).show(ui, |ui| {
-                egui::ScrollArea::vertical().max_height(180.0).stick_to_bottom(true).id_salt("upd-log").show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    for l in &u.log {
-                        ui.label(RichText::new(l).size(11.0).monospace().color(p.muted));
+        if u.error.is_some() || !u.log.is_empty() || u.status.is_some() {
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new("Detalhes da atualização").default_open(false).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(170.0).id_salt("update-details").show(ui, |ui| {
+                    if let Some(s) = &u.status {
+                        ui.label(RichText::new(format!("{} · {} → {}", s.upstream, &s.current[..s.current.len().min(8)], &s.latest[..s.latest.len().min(8)])).size(11.0).monospace().color(p.faint));
+                        for commit in &s.commits { ui.label(RichText::new(commit).size(11.0).color(p.muted)); }
                     }
+                    if let Some(error) = &u.error { ui.label(RichText::new(error).size(11.0).color(p.error)); }
+                    for line in &u.log { ui.label(RichText::new(line).size(11.0).monospace().color(p.muted)); }
                 });
             });
         }

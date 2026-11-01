@@ -2,27 +2,49 @@
 <html lang="pt-BR"><meta charset="utf-8">
 <meta name="referrer" content="strict-origin-when-cross-origin">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>html,body,#player{margin:0;width:100%;height:100%;background:#111;overflow:hidden}</style>
-<div id="player"></div>
+<style>html,body,#player{margin:0;width:100%;height:100%;background:#111;overflow:hidden}#player{display:grid;place-items:center;color:#888;font:12px -apple-system,system-ui}</style>
+<div id="player">Conectando ao YouTube…</div>
 <script>
 'use strict';
 const config = __ATELIET_CONFIG__;
-let player, ready = false;
-const report = data => window.webkit.messageHandlers.video.postMessage(data);
-window.atelietToggle = () => {
+let player, ready = false, visible = false, intent = false, serial = -1;
+let pausePending = false, playPending = false;
+const report = data => window.webkit.messageHandlers.video.postMessage({serial, ...data});
+const state = () => ready ? player.getPlayerState() : -1;
+function reconcile() {
   if (!ready) return;
-  player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
+  const current = state();
+  if (visible && intent) {
+    if (current !== 1 && current !== 3 && !playPending) { playPending = true; player.playVideo(); }
+  } else if ((current === 1 || current === 3) && !pausePending) {
+    pausePending = true; player.pauseVideo();
+  }
+}
+window.atelietSetState = (version, shouldPlay, isVisible) => {
+  if (version < serial) return;
+  serial = version; intent = shouldPlay; visible = isVisible;
+  reconcile();
 };
-window.atelietPlay = () => { if (ready) player.playVideo(); };
-window.atelietPause = () => { if (ready) player.pauseVideo(); };
+function changed(event) {
+  const current = event.data;
+  if (current === 1) {
+    if (!visible || (!intent && playPending)) { reconcile(); return; }
+    playPending = false; intent = true;
+  } else if (current === 2) {
+    if (pausePending) { pausePending = false; playPending = false; }
+    else if (visible) { intent = false; playPending = false; }
+  } else if (current === 0) { intent = false; playPending = false; }
+  report({playing:current === 1, buffering:current === 3, intent});
+  if ((current === 2 && visible && intent) || (current === 3 && (!visible || !intent))) reconcile();
+}
 window.onYouTubeIframeAPIReady = () => {
   player = new YT.Player('player', {
     width:'100%', height:'100%', videoId:config.id,
     playerVars:{autoplay:0, playsinline:1, controls:1, start:Math.floor(config.position), origin:config.origin},
     events:{
       onReady:() => { ready = true; report({ready:true}); },
-      onStateChange:() => report({playing:player.getPlayerState() === 1}),
-      onAutoplayBlocked:() => report({error:'Clique em reproduzir no vídeo para começar.'}),
+      onStateChange:changed,
+      onAutoplayBlocked:() => { playPending = false; intent = false; report({playing:false, buffering:false, intent, error:'Toque em reproduzir no vídeo para começar.'}); },
       onError:event => {
         const messages = {
           2:'O endereço deste vídeo é inválido.',
@@ -32,20 +54,22 @@ window.onYouTubeIframeAPIReady = () => {
           150:'O autor não permite reprodução fora do YouTube.',
           153:'O YouTube recusou a identificação do aplicativo.'
         };
-        report({error:messages[event.data] || 'Não foi possível reproduzir. Tente abrir no YouTube.'});
+        playPending = false; intent = false;
+        report({playing:false, buffering:false, intent, error:messages[event.data] || 'Não foi possível reproduzir. Tente abrir no YouTube.'});
       }
     }
   });
 };
 const script = document.createElement('script');
 script.src = 'https://www.youtube.com/iframe_api';
-script.onerror = () => report({error:'Sem conexão com o YouTube. Verifique a rede ou abra no navegador.'});
+script.onerror = () => report({error:'Sem conexão com o YouTube. Verifique a rede ou tente novamente.'});
 document.head.appendChild(script);
 setInterval(() => {
   if (!ready) return;
   const data = player.getVideoData();
-  const state = player.getPlayerState();
-  report({position:state === 0 ? 0 : player.getCurrentTime(), playing:state === 1, title:data.title || 'YouTube', id:data.video_id || config.id});
+  const current = state();
+  report({position:current === 0 ? 0 : player.getCurrentTime(), playing:current === 1,
+    buffering:current === 3, intent, title:data.title || 'YouTube', id:data.video_id || config.id});
 }, 1000);
-setTimeout(() => { if (!ready) report({error:'O YouTube demorou a responder. Verifique a rede ou abra no navegador.'}); }, 20000);
+setTimeout(() => { if (!ready) report({error:'O YouTube demorou a responder. Tente novamente.'}); }, 20000);
 </script></html>
