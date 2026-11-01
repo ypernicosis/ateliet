@@ -818,6 +818,59 @@ fn editing_extras(text: &mut String, resp: &egui::Response, ui: &egui::Ui, id: e
     });
 }
 
+/// "--" typed becomes "—"; a third "-" right after turns it back into
+/// "---" (rules and frontmatter). Code (fenced or between backticks) and
+/// "<!--" are left alone. Pure: returns the new text's cursor and the dash
+/// made, or `None` when nothing changes.
+pub fn dash_rule(text: &mut String, cursor: usize, made: Option<usize>) -> Option<(usize, Option<usize>)> {
+    let b = char_to_byte(text, cursor);
+    let head = &text[..b];
+    if let Some(at) = made {
+        if head.ends_with("—-") && byte_to_char(text, b - "—-".len()) == at {
+            text.replace_range(b - "—-".len()..b, "---");
+            return Some((cursor + 1, None));
+        }
+    }
+    if !head.ends_with("--") {
+        return None;
+    }
+    let rest = &head[..head.len() - 2];
+    if rest.ends_with('-') || rest.ends_with("<!") || rest.ends_with('—') {
+        return None;
+    }
+    let line_start = rest.rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let fences = rest[..line_start].lines().filter(|l| { let t = l.trim_start(); t.starts_with("```") || t.starts_with("~~~") }).count();
+    if fences % 2 == 1 || rest[line_start..].matches('`').count() % 2 == 1 {
+        return None;
+    }
+    text.replace_range(b - 2..b, "—");
+    Some((cursor - 1, Some(cursor - 2)))
+}
+
+/// Apply [`dash_rule`] to an egui editor when a "-" was just typed in it;
+/// true when the text changed.
+pub fn auto_dash(ui: &egui::Ui, id: egui::Id, text: &mut String) -> bool {
+    let ctx = ui.ctx();
+    let slot = id.with("dash-made");
+    let typed: Option<bool> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::Text(t) = e { Some(t.as_str() == "-") } else { None }).last());
+    let Some(dash) = typed else { return false };
+    let made: Option<usize> = ctx.data(|d| d.get_temp(slot));
+    ctx.data_mut(|d| d.remove::<usize>(slot));
+    if !dash || !ctx.memory(|m| m.has_focus(id)) {
+        return false;
+    }
+    let Some((a, b)) = selection(ctx, id) else { return false };
+    if a != b {
+        return false;
+    }
+    let Some((cur, mark)) = dash_rule(text, b, made) else { return false };
+    set_selection(ctx, id, cur, cur);
+    if let Some(m) = mark {
+        ctx.data_mut(|d| d.insert_temp(slot, m));
+    }
+    true
+}
+
 /// The cursor or selection of an editor as a byte range of `text`.
 fn reveal_of(ctx: &egui::Context, id: egui::Id, text: &str) -> Reveal {
     if !ctx.memory(|m| m.has_focus(id)) {
@@ -923,6 +976,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
                 set_selection(ui.ctx(), id, a, b);
             }
         }
+        let dashed = auto_dash(ui, id, text);
         let before = text.len();
         editing_extras(text, &resp, ui, id, &st.p);
         // the cursor moved into or out of a span: show its marks next frame
@@ -930,7 +984,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
             ui.ctx().request_repaint();
         }
         let mut resp = resp;
-        if text.len() != before || wrote {
+        if text.len() != before || wrote || dashed {
             resp.mark_changed();
         }
         resp
@@ -943,6 +997,27 @@ mod tests {
 
     fn styles() -> Styles {
         Styles::live(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))
+    }
+
+    #[test]
+    fn dashes() {
+        let mut t = String::from("Ele disse --");
+        assert_eq!(dash_rule(&mut t, 12, None), Some((11, Some(10))));
+        assert_eq!(t, "Ele disse —");
+        // a third "-" right after: a rule
+        let mut t = String::from("—-");
+        assert_eq!(dash_rule(&mut t, 2, Some(0)), Some((3, None)));
+        assert_eq!(t, "---");
+        let mut t = String::from("----");
+        assert_eq!(dash_rule(&mut t, 4, None), None);
+        for s in ["`a --", "<!--", "```\nx --"] {
+            let mut t = String::from(s);
+            assert_eq!(dash_rule(&mut t, s.chars().count(), None), None, "{s}");
+        }
+        let mut t = String::from("```\nx\n```\nfim --");
+        let n = t.chars().count();
+        assert!(dash_rule(&mut t, n, None).is_some());
+        assert!(t.ends_with("fim —"));
     }
 
     #[test]

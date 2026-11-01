@@ -315,7 +315,8 @@ impl SheetView {
         card(ui, p, |ui| {
             card_head(ui, p, icons::QUOTE, "Frase marcante");
             let mut frase = self.sheet.str("frase");
-            if ui.add(egui::TextEdit::multiline(&mut frase).frame(false).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Uma fala que é a cara dele…").color(p.faint)).font(egui::FontId::new(14.0, egui::FontFamily::Name("italic".into())))).changed() {
+            let fid = egui::Id::new(("sheet-frase", &self.path));
+            if ui.add(egui::TextEdit::multiline(&mut frase).id(fid).frame(false).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Uma fala que é a cara dele…").color(p.faint)).font(egui::FontId::new(14.0, egui::FontFamily::Name("italic".into())))).changed() | crate::editor::auto_dash(ui, fid, &mut frase) {
                 self.sheet.fm.insert("frase".into(), json!(frase));
                 self.changed();
             }
@@ -713,7 +714,7 @@ impl SheetView {
                 if self.editing == Some(j) && !r.has_focus() && r.ctx.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
-                if r.changed() {
+                if crate::editor::auto_dash(ui, id, &mut t) || r.changed() {
                     self.sheet.sections[j].1 = t;
                     self.changed();
                 }
