@@ -89,7 +89,7 @@ impl Sheet {
     }
 
     pub fn reserved(&self, k: &str) -> bool {
-        RESERVED.contains(&k) || ["listas", "vinculos", "modelo", "modelo_sobre"].contains(&k) || self.lists().iter().any(|l| l == k) || k.starts_with("__")
+        RESERVED.contains(&k) || ["listas", "vinculos", "modelo", "modelo_sobre", "caixas"].contains(&k) || self.lists().iter().any(|l| l == k) || k.starts_with("__")
     }
 
     pub fn attr_keys(&self) -> Vec<String> {
@@ -125,6 +125,92 @@ impl Sheet {
             out.insert(if k == from { to.to_string() } else { k.clone() }, v.clone());
         }
         self.fm = out;
+    }
+
+    /// The size the author gave a section's box (`caixas`): its height in
+    /// points (`None`: as tall as its text) and its width ("inteira",
+    /// "meia" or "" for the default).
+    pub fn box_size(&self, title: &str) -> (Option<f32>, String) {
+        let b = self.fm.get("caixas").and_then(|c| c.get(title));
+        let h = b.and_then(|b| b.get("altura")).and_then(|v| v.as_f64()).map(|v| v as f32);
+        let w = b.and_then(|b| b.get("largura")).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        (h, w)
+    }
+
+    pub fn set_box_size(&mut self, title: &str, height: Option<f32>, width: &str) {
+        let mut m = self.fm.get("caixas").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        let mut b = Map::new();
+        if let Some(h) = height {
+            b.insert("altura".into(), Json::from(h.round() as i64));
+        }
+        if !width.is_empty() {
+            b.insert("largura".into(), Json::String(width.into()));
+        }
+        if b.is_empty() {
+            m.shift_remove(title);
+        } else {
+            m.insert(title.into(), Json::Object(b));
+        }
+        if m.is_empty() {
+            self.fm.shift_remove("caixas");
+        } else {
+            self.fm.insert("caixas".into(), Json::Object(m));
+        }
+    }
+
+    /// Bring a sheet up to a model: the model's attributes, lists and
+    /// sections the sheet lacks are added (empty attributes, the model's
+    /// text in sections, the model's box sizes); nothing the sheet has is
+    /// changed or removed. Sections follow the model's order, the sheet's
+    /// own ones after. True when something was added.
+    pub fn apply_model(&mut self, model: &Sheet) -> bool {
+        let before = self.to_text();
+        let skip = ["scriptorium", "livro", "livros", "modelo", "modelo_sobre", "listas", "caixas", "vinculos"];
+        let model_lists = model.lists();
+        let mut lists = self.lists();
+        for l in &model_lists {
+            if !lists.contains(l) {
+                lists.push(l.clone());
+            }
+        }
+        for (k, v) in &model.fm {
+            if skip.contains(&k.as_str()) || self.fm.contains_key(k) {
+                continue;
+            }
+            let empty = match v {
+                Json::Array(_) => Json::Array(vec![]),
+                _ if model_lists.contains(k) => Json::Array(vec![]),
+                _ => Json::String(String::new()),
+            };
+            self.fm.insert(k.clone(), empty);
+        }
+        for l in &lists {
+            if !self.fm.contains_key(l) {
+                self.fm.insert(l.clone(), Json::Array(vec![]));
+            }
+        }
+        self.set_lists(lists);
+        let key = |t: &str| t.trim().to_lowercase();
+        let mut mine = std::mem::take(&mut self.sections);
+        let mut out = Vec::new();
+        for (t, body) in &model.sections {
+            match mine.iter().position(|(m, _)| key(m) == key(t)) {
+                Some(i) => out.push(mine.remove(i)),
+                None => out.push((t.clone(), body.clone())),
+            }
+        }
+        out.extend(mine);
+        self.sections = out;
+        let titles: Vec<String> = self.sections.iter().map(|s| s.0.clone()).collect();
+        for t in titles {
+            let (h, w) = self.box_size(&t);
+            if h.is_none() && w.is_empty() {
+                if let Some((_, (mh, mw))) = model.sections.iter().find(|(m, _)| key(m) == key(&t)).map(|(m, _)| (m, model.box_size(m))) {
+                    self.set_box_size(&t, mh, &mw);
+                }
+            }
+        }
+        self.to_text() != before
     }
 
     /// The note people wrote about someone in a list (`vinculos`).
@@ -221,5 +307,23 @@ mod tests {
         assert!(out.contains("## Personalidade\n\nTeimosa.\n\n## Notas"));
         assert_eq!(attr_label("vortice"), "vórtice");
         assert_eq!(initials("Ana Clara"), "AC");
+    }
+
+    #[test]
+    fn model_and_boxes() {
+        let mut s = Sheet::parse("---\nscriptorium: personagem\nidade: 15\n---\n\n## Personalidade\n\nCarente.\n\n## Segredos\n\nX\n");
+        let mut m = Sheet::parse("---\nscriptorium: modelo-ficha\nidade: ''\netnia: ''\nfamilia: []\nlistas: [familia]\n---\n\n## Aparência\n\n## Personalidade\n\nTrês adjetivos.\n");
+        m.set_box_size("Aparência", Some(180.0), "meia");
+        assert!(s.apply_model(&m));
+        assert_eq!(s.str("idade"), "15");
+        assert_eq!(s.attr_keys(), vec!["idade", "etnia"]);
+        assert_eq!(s.lists(), vec!["aliados", "inimigos", "familia"]);
+        let t: Vec<&str> = s.sections.iter().map(|x| x.0.as_str()).collect();
+        assert_eq!(t, vec!["Aparência", "Personalidade", "Segredos"]);
+        assert_eq!(s.sections[1].1, "Carente.");
+        assert_eq!(s.box_size("Aparência"), (Some(180.0), "meia".to_string()));
+        assert!(!s.apply_model(&m), "applying twice changes nothing");
+        s.set_box_size("Aparência", None, "");
+        assert!(!s.fm.contains_key("caixas"));
     }
 }

@@ -50,6 +50,7 @@ pub enum Purpose {
     RenameChapter { path: String },
     ChapterPart { path: String },
     ConfirmTrash { path: String },
+    ApplyCharacterModel { book: String },
 }
 
 pub struct Form {

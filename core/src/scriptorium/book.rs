@@ -538,13 +538,37 @@ pub fn ensure_character_model(root: &Path, ix: &Index, book: &Book) -> Result<(S
     Ok((path, true))
 }
 
-pub fn create_character(root: &Path, ix: &Index, book: &Book, name: &str) -> Result<String, String> {
-    let path = unique(root, &join(&join(&book.folder, "Personagens"), &format!("{}.md", safe_name(name))));
-    let model = character_model(ix, book)
+/// The model new characters copy, read from the vault (or the default).
+pub fn read_character_model(root: &Path, ix: &Index, book: &Book) -> super::sheet::Sheet {
+    character_model(ix, book)
         .and_then(|m| std::fs::read_to_string(root.join(m)).ok())
         .map(|t| super::sheet::Sheet::parse(&t))
         .filter(|s| s.invalid.is_none())
-        .unwrap_or_else(default_character_model);
+        .unwrap_or_else(default_character_model)
+}
+
+/// Bring existing sheets up to the book's model (see `Sheet::apply_model`);
+/// returns the notes that changed.
+pub fn apply_character_model(root: &Path, ix: &Index, book: &Book, paths: &[String]) -> Result<Vec<String>, String> {
+    let model = read_character_model(root, ix, book);
+    let mut out = Vec::new();
+    for p in paths {
+        let text = std::fs::read_to_string(root.join(p)).map_err(|e| format!("{p}: {e}"))?;
+        let mut s = super::sheet::Sheet::parse(&text);
+        if s.invalid.is_some() {
+            return Err(format!("{p}: as propriedades da nota não puderam ser lidas"));
+        }
+        if s.apply_model(&model) {
+            write(root, p, &s.to_text())?;
+            out.push(p.clone());
+        }
+    }
+    Ok(out)
+}
+
+pub fn create_character(root: &Path, ix: &Index, book: &Book, name: &str) -> Result<String, String> {
+    let path = unique(root, &join(&join(&book.folder, "Personagens"), &format!("{}.md", safe_name(name))));
+    let model = read_character_model(root, ix, book);
     let mut fm = serde_json::Map::new();
     fm.insert("scriptorium".into(), json!("personagem"));
     fm.insert("livro".into(), json!(note_link(ix, &book.path, &path)));
