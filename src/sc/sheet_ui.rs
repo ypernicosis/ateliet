@@ -475,6 +475,21 @@ impl SheetView {
                 if kit::icon_button(ui, icons::FILE_TEXT, "Abrir como Markdown", false, p).clicked() {
                     acts.push(Action::AsMarkdown(self.path.clone()));
                 }
+                if self.sheet.str("scriptorium") != "modelo-ficha" && kit::icon_button(ui, icons::LAYOUT_TEMPLATE, "Aplicar o modelo de ficha (acrescenta o que falta, sem apagar nada)", false, p).clicked() {
+                    let model = {
+                        let ix = cx.vault.index.read().unwrap();
+                        ateliet_core::scriptorium::book::book_for(&ix, &self.path, &cx.sc.author()).map(|b| ateliet_core::scriptorium::book::read_character_model(&cx.vault.root, &ix, &b))
+                    };
+                    match model {
+                        Some(m) if self.sheet.apply_model(&m) => {
+                            self.editing = None;
+                            self.changed();
+                            acts.push(Action::Toast("Modelo de ficha aplicado.".into()));
+                        }
+                        Some(_) => acts.push(Action::Toast("A ficha já tem tudo o que o modelo pede.".into())),
+                        None => acts.push(Action::Toast("Esta ficha não pertence a um livro.".into())),
+                    }
+                }
                 let mut c = accent.unwrap_or(Color32::from_rgb(0x8a, 0x5a, 0x2b));
                 if ui.color_edit_button_srgba(&mut c).on_hover_text("Cor do personagem").changed() {
                     self.sheet.fm.insert("cor".into(), json!(format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b())));
@@ -503,16 +518,25 @@ impl SheetView {
         let mut i = 0;
         let mut op: Option<(usize, &str)> = None;
         while i < n {
-            let wide = |t: &str| {
-                let l = t.to_lowercase();
-                l.contains("arco") || l.contains("hist") || l.contains("notas") || l.contains("origem") || l == "ars"
+            let sheet = &self.sheet;
+            let wide = |j: usize| {
+                let t = &sheet.sections[j].0;
+                match sheet.box_size(t).1.as_str() {
+                    "inteira" => true,
+                    "meia" => false,
+                    _ => {
+                        let l = t.to_lowercase();
+                        l.contains("arco") || l.contains("hist") || l.contains("notas") || l.contains("origem") || l == "ars"
+                    }
+                }
             };
-            let pair = two && !wide(&self.sheet.sections[i].0) && i + 1 < n && !wide(&self.sheet.sections[i + 1].0);
+            let pair = two && !wide(i) && i + 1 < n && !wide(i + 1);
+            let half_alone = two && !pair && sheet.box_size(&sheet.sections[i].0).1 == "meia";
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 14.0;
                 let take = if pair { 2 } else { 1 };
                 for j in i..i + take {
-                    let w = if pair { col_w } else { width };
+                    let w = if pair || half_alone { col_w } else { width };
                     ui.allocate_ui_with_layout(egui::vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                         ui.set_width(w);
                         if let Some(o) = self.section_card(ui, cx, j, acts) {
@@ -678,6 +702,8 @@ impl SheetView {
         let mut op = None;
         let (title, text) = self.sheet.sections[j].clone();
         let editing = self.editing == Some(j) || text.trim().is_empty();
+        let (height, width) = self.sheet.box_size(&title);
+        let mut size_op: Option<(Option<f32>, String)> = None;
         card(ui, p, |ui| {
             ui.horizontal(|ui| {
                 ui.label(kit::icon(icon_for(section_icon(&title)), 13.0).color(p.faint));
@@ -697,6 +723,16 @@ impl SheetView {
                         if kit::menu_item(ui, icons::ARROW_DOWN, "Mover para baixo", p) {
                             op = Some("down");
                         }
+                        kit::menu_sep(ui, p);
+                        for (w, label) in [("inteira", "Largura inteira"), ("meia", "Meia largura"), ("", "Largura automática")] {
+                            if width != w && kit::menu_item(ui, match w { "meia" => icons::MINIMIZE, "inteira" => icons::MAXIMIZE, _ => icons::RULER }, label, p) {
+                                size_op = Some((height, w.to_string()));
+                            }
+                        }
+                        if height.is_some() && kit::menu_item(ui, icons::ARROW_UP_DOWN, "Altura automática", p) {
+                            size_op = Some((None, width.clone()));
+                        }
+                        kit::menu_sep(ui, p);
                         if kit::menu_danger(ui, icons::TRASH_2, "Remover seção", p) {
                             op = Some("remove");
                         }
@@ -707,8 +743,49 @@ impl SheetView {
                 });
             });
             ui.add_space(4.0);
+            let mut body = |this: &mut Self, ui: &mut egui::Ui, acts: &mut Vec<Action>| this.section_body(ui, cx, j, &text, editing, acts);
+            let top = ui.cursor().min.y;
+            match height {
+                Some(h) => {
+                    egui::ScrollArea::vertical().id_salt(("sec-scroll", &self.path, j)).max_height(h).min_scrolled_height(h).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.set_min_height(h);
+                        body(self, ui, acts);
+                    });
+                }
+                None => body(self, ui, acts),
+            }
+            let shown = ui.cursor().min.y - top;
+            // the grip: drag to set the box's height, double-click for automatic
+            let (strip, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), Sense::click_and_drag());
+            let hot = r.hovered() || r.dragged();
+            if hot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            }
+            let c = if hot { p.muted } else { p.border_strong };
+            let (x, y) = (strip.right() - 2.0, strip.bottom());
+            for d in [5.0, 9.0] {
+                ui.painter().line_segment([egui::pos2(x - d, y), egui::pos2(x, y - d)], egui::Stroke::new(1.0_f32, c));
+            }
+            let r = r.on_hover_text("Arraste para mudar a altura · clique duplo: automática");
+            if r.double_clicked() {
+                size_op = Some((None, width.clone()));
+            } else if r.dragged() {
+                let start = height.unwrap_or(shown.max(40.0));
+                size_op = Some((Some((start + r.drag_delta().y).clamp(48.0, 2400.0)), width.clone()));
+            }
+        });
+        if let Some((h, w)) = size_op {
+            self.sheet.set_box_size(&title, h, &w);
+            self.changed();
+        }
+        op
+    }
+
+    fn section_body(&mut self, ui: &mut egui::Ui, cx: &mut Cx, j: usize, text: &str, editing: bool, acts: &mut Vec<Action>) {
+        let p = cx.palette;
+        {
             if editing {
-                let mut t = text.clone();
+                let mut t = text.to_string();
                 let id = egui::Id::new(("sec-edit", &self.path, j));
                 let r = ui.add(egui::TextEdit::multiline(&mut t).id(id).frame(false).desired_rows(3).desired_width(f32::INFINITY).font(egui::FontId::proportional(14.0)).hint_text(RichText::new("Escreva…").color(p.faint)));
                 if self.editing == Some(j) && !r.has_focus() && r.ctx.memory(|m| m.focused().is_none()) {
@@ -722,7 +799,7 @@ impl SheetView {
                     self.editing = None;
                 }
             } else {
-                let doc = markdown::parse(&text);
+                let doc = markdown::parse(text);
                 let resp = ui.scope(|ui| {
                     let size = 14.0;
                     let mut h = RenderHost { vault: cx.vault, palette: p, size, source: &self.path, caches: cx.caches, settings: cx.dv };
@@ -744,8 +821,7 @@ impl SheetView {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                 }
             }
-        });
-        op
+        }
     }
 }
 

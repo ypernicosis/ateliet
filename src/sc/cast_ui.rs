@@ -53,6 +53,9 @@ impl CastView {
                             if kit::button(ui, Some(icons::LAYOUT_TEMPLATE), "Modelo de ficha", p).on_hover_text("As fichas novas copiam as propriedades e as seções deste modelo").clicked() {
                                 acts.push(Action::CharacterModel(b.path.clone()));
                             }
+                            if !chars.is_empty() && kit::button(ui, Some(icons::REFRESH_CW), "Aplicar às fichas", p).on_hover_text("Acrescenta às fichas do livro as propriedades, listas e seções do modelo que faltam, sem apagar nada").clicked() {
+                                acts.push(Action::ApplyCharacterModel(b.path.clone()));
+                            }
                             ui.allocate_ui(egui::vec2(220.0, 30.0), |ui| {
                                 kit::search_field(ui, &mut self.query, "Buscar", p);
                             });

@@ -66,6 +66,8 @@ pub enum Action {
     NewCharacter(String),
     /// Open (or create) the model note new characters copy.
     CharacterModel(String),
+    /// Bring every sheet of a book up to the model (asks first).
+    ApplyCharacterModel(String),
     /// Open a Scriptorium view (`library`, …) for a book.
     View(String, Option<String>),
     SelectBook(String),

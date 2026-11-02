@@ -199,6 +199,15 @@ impl App {
                     Err(e) => self.toast(format!("Não foi possível abrir o modelo de ficha: {e}")),
                 }
             }
+            Action::ApplyCharacterModel(b) => {
+                let n = self.vault.as_ref().and_then(|v| {
+                    let ix = v.index.read().unwrap();
+                    let author = self.sc.as_ref().map(|s| s.author()).unwrap_or_default();
+                    book::book_by_path(&ix, &b, &author).map(|bk| book::characters(&ix, &bk).len())
+                });
+                let n = n.unwrap_or(0);
+                self.form = Some(Form::new("Aplicar o modelo às fichas?", Purpose::ApplyCharacterModel { book: b }, "Aplicar", vec![]).with_note(&format!("{n} {} recebe{} as propriedades, listas e seções do modelo que faltarem. Nada do que já está escrito é apagado ou mudado.", if n == 1 { "ficha" } else { "fichas" }, if n == 1 { "" } else { "m" })));
+            }
             Action::CreateSheetFor { sheet, list, idx, name } => {
                 let made = {
                     let (Some(v), Some(sc)) = (self.vault.as_ref(), self.sc.as_ref()) else { return };
@@ -578,6 +587,40 @@ impl App {
                 self.set_fm(&path, "parte", if p.is_empty() { None } else { Some(json!(p)) });
             }
             Purpose::ConfirmTrash { path } => self.delete(&path),
+            Purpose::ApplyCharacterModel { book: b } => {
+                let res = {
+                    let Some(vt) = &self.vault else { return };
+                    let ix = vt.index.read().unwrap();
+                    match book::book_by_path(&ix, &b, &author) {
+                        Some(bk) => {
+                            let model = book::read_character_model(&root, &ix, &bk);
+                            let all = book::characters(&ix, &bk);
+                            // sheets open here change in place, so nothing unsaved is lost
+                            let mut open = Vec::new();
+                            for t in self.tabs.iter_mut() {
+                                if let Some(crate::sc::View::Sheet(s)) = t.view.as_mut() {
+                                    if all.contains(&s.path) {
+                                        if s.sheet.apply_model(&model) {
+                                            s.changed();
+                                        }
+                                        open.push(s.path.clone());
+                                    }
+                                }
+                            }
+                            let rest: Vec<String> = all.iter().filter(|p| !open.contains(p)).cloned().collect();
+                            book::apply_character_model(&root, &ix, &bk, &rest).map(|w| (w, open.len()))
+                        }
+                        None => Err("livro não encontrado".into()),
+                    }
+                };
+                match res {
+                    Ok((written, open)) => {
+                        self.written(&written);
+                        self.toast(format!("Modelo aplicado: {} {} no disco{}.", written.len(), if written.len() == 1 { "ficha atualizada" } else { "fichas atualizadas" }, if open > 0 { format!(", {open} aberta(s) atualizada(s) na tela") } else { String::new() }));
+                    }
+                    Err(e) => self.toast(format!("Não foi possível aplicar o modelo: {e}")),
+                }
+            }
         }
     }
 }
