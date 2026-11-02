@@ -112,7 +112,7 @@ impl Tab {
 }
 
 /// The height of the strip on top of each pane when the centre is divided.
-const PANE_HEAD: f32 = 26.0;
+const PANE_HEAD: f32 = 30.0;
 
 /// A new tab's `uid`.
 pub fn next_uid() -> u64 {
@@ -2137,7 +2137,7 @@ impl App {
                     }
                     self.save_session();
                 }
-                let line = if hr.hovered() || hr.dragged() { egui::Stroke::new(2.0_f32, p.accent_strong) } else { egui::Stroke::new(1.0_f32, p.border) };
+                let line = if hr.hovered() || hr.dragged() { egui::Stroke::new(2.0_f32, p.accent_strong) } else { egui::Stroke::new(1.0_f32, crate::theme::mix(p.bg, p.border, 0.65)) };
                 if h.down {
                     ui.painter().hline(h.span.x_range(), h.at, line);
                 } else {
@@ -2188,13 +2188,10 @@ impl App {
         let t = &self.tabs[i];
         let uid = t.uid;
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, if focused { p.bg } else { p.bg_hover });
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, p.border));
-        // the pane in use is marked at the top
-        if focused {
-            painter.hline(rect.x_range(), rect.top() + 1.0, egui::Stroke::new(2.0_f32, p.accent_strong));
-        }
-        let xr = egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), egui::vec2(20.0, 20.0));
+        // One continuous page: focus lives in the title, not in a coloured
+        // rule or a second shaded toolbar above the note.
+        painter.rect_filled(rect, 0.0, p.bg);
+        let xr = egui::Rect::from_center_size(egui::pos2(rect.right() - 18.0, rect.center().y), egui::vec2(24.0, 24.0));
         let drag_rect = egui::Rect::from_min_max(rect.min, egui::pos2(xr.left() - 2.0, rect.max.y));
         let r = ui.interact(drag_rect, ui.id().with(("pane-head", uid)), egui::Sense::click_and_drag());
         if r.drag_started() {
@@ -2204,15 +2201,15 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         }
         let cy = rect.center().y;
-        let ink = if focused { p.muted } else { p.faint };
-        painter.text(egui::pos2(rect.left() + 12.0, cy), egui::Align2::CENTER_CENTER, crate::icons::GRIP_VERTICAL, crate::kit::icon_font(12.0), if r.hovered() { p.muted } else { p.faint });
+        let ink = if focused { p.text } else { p.muted };
         let copies = if t.is_note() { self.tabs.iter().filter(|o| o.path == t.path && o.is_note()).count() } else { 1 };
         let twin = copies > 1;
         let title = format!("{}{}{}", t.title(), if twin { format!("  ×{copies}") } else { String::new() }, if t.dirty() { " •" } else { "" });
         let mut job = egui::text::LayoutJob::single_section(title, egui::TextFormat { font_id: if focused { crate::kit::medium(12.0) } else { egui::FontId::proportional(12.0) }, color: if focused { p.text } else { p.muted }, ..Default::default() });
-        job.wrap = egui::text::TextWrapping::truncate_at_width((xr.left() - rect.left() - 30.0).max(10.0));
+        // Reserve the close target even while hidden so titles never jump.
+        job.wrap = egui::text::TextWrapping::truncate_at_width((xr.left() - rect.left() - 22.0).max(0.0));
         let galley = ui.fonts(|f| f.layout_job(job));
-        painter.galley(egui::pos2(rect.left() + 24.0, cy - galley.size().y / 2.0), galley, ink);
+        painter.galley(egui::pos2(rect.left() + 16.0, cy - galley.size().y / 2.0), galley, ink);
         if twin {
             r.clone().on_hover_text("A mesma nota em outro painel: o que escrever num aparece no outro. Arraste para mudar de lugar.");
         } else {
@@ -2222,7 +2219,9 @@ impl App {
         if xresp.hovered() {
             painter.rect_filled(xr, 5.0, p.bg_active);
         }
-        painter.text(xr.center(), egui::Align2::CENTER_CENTER, crate::icons::X, crate::kit::icon_font(11.0), p.muted);
+        if ui.rect_contains_pointer(rect) || xresp.has_focus() {
+            painter.text(xr.center(), egui::Align2::CENTER_CENTER, crate::icons::X, crate::kit::icon_font(12.0), p.muted);
+        }
         xresp.clicked()
     }
 
