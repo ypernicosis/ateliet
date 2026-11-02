@@ -306,6 +306,10 @@ impl EnredoView {
         if self.dirty {
             ui.ctx().request_repaint_after(Duration::from_millis(400));
         }
+        // a planned chapter and the written one with its number are one chapter
+        if en::auto_link(&mut self.data, &en::numbered(&ix, &b)) {
+            self.changed();
+        }
         let cols = en::chapters(&ix, &b, &self.data);
         let chars: Vec<String> = book::characters(&ix, &b);
         let words: Vec<usize> = {
