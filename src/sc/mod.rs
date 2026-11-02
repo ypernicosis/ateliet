@@ -9,6 +9,7 @@ pub mod cast_ui;
 pub mod compositor;
 pub mod diagramacao_ui;
 pub mod enredo_board;
+pub mod enredo_esc;
 pub mod enredo_more;
 pub mod enredo_saga;
 pub mod enredo_st;

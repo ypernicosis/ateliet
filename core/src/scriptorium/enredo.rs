@@ -224,6 +224,33 @@ pub fn cap_of(s: &Json) -> Option<&str> {
     s["cap"].as_str().filter(|c| !c.is_empty())
 }
 
+/// A scene without a chapter that happens somewhere between two chapters
+/// (paths, or `plan:<id>`), kept in `entre: [de, ate]`.
+pub fn range_of(s: &Json) -> Option<(&str, &str)> {
+    if cap_of(s).is_some() {
+        return None;
+    }
+    let a = s["entre"].as_array()?;
+    let de = a.first()?.as_str().filter(|x| !x.is_empty())?;
+    let ate = a.get(1).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).unwrap_or(de);
+    Some((de, ate))
+}
+
+/// Place a scene somewhere between two chapters (None = no range).
+pub fn set_range(data: &mut Json, id: &str, range: Option<(&str, &str)>) {
+    let Some(i) = scene_index(data, id) else { return };
+    let Some(o) = data["cenas"][i].as_object_mut() else { return };
+    match range {
+        Some((de, ate)) => {
+            o.insert("cap".into(), Json::Null);
+            o.insert("entre".into(), json!([de, ate]));
+        }
+        None => {
+            o.remove("entre");
+        }
+    }
+}
+
 pub fn tramas_of(s: &Json) -> Vec<&str> {
     s["tramas"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect()).unwrap_or_default()
 }
@@ -277,6 +304,11 @@ pub fn new_trama(data: &mut Json, nome: &str) -> String {
 pub fn move_scene(data: &mut Json, id: &str, cap: Option<&str>, before: Option<&str>, trama: Option<(Option<&str>, &str)>) {
     let Some(i) = scene_index(data, id) else { return };
     data["cenas"][i]["cap"] = json!(cap);
+    if cap.is_some() {
+        if let Some(o) = data["cenas"][i].as_object_mut() {
+            o.remove("entre");
+        }
+    }
     if let Some((from, to)) = trama {
         let mut tr: Vec<String> = tramas_of(&data["cenas"][i]).into_iter().filter(|t| Some(*t) != from).map(String::from).collect();
         if to != "__none" && !tr.iter().any(|t| t == to) {
@@ -338,6 +370,9 @@ pub fn delete_planned(data: &mut Json, id: &str) {
         if s["cap"] == key.as_str() {
             s["cap"] = Json::Null;
         }
+        if s["entre"].as_array().is_some_and(|a| a.iter().any(|x| x == key.as_str())) {
+            s.as_object_mut().map(|o| o.remove("entre"));
+        }
     }
     if let Some(a) = data["planejados"].as_array_mut() {
         a.retain(|p| p["id"] != id);
@@ -350,6 +385,11 @@ pub fn link_planned(data: &mut Json, id: &str, file: &str) {
     for s in data["cenas"].as_array_mut().into_iter().flatten() {
         if s["cap"] == key.as_str() {
             s["cap"] = json!(file);
+        }
+        for x in s["entre"].as_array_mut().into_iter().flatten() {
+            if x == key.as_str() {
+                *x = json!(file);
+            }
         }
     }
     if let Some(p) = data["planejados"].as_array_mut().and_then(|a| a.iter_mut().find(|p| p["id"] == id)) {
@@ -379,6 +419,9 @@ pub fn relink(data: &mut Json, moves: &[(String, String)]) -> bool {
     let mut ch = false;
     for s in data["cenas"].as_array_mut().into_iter().flatten() {
         ch |= fix(&mut s["cap"], moves);
+        for x in s["entre"].as_array_mut().into_iter().flatten() {
+            ch |= fix(x, moves);
+        }
     }
     for p in data["planejados"].as_array_mut().into_iter().flatten() {
         if p.get("arquivo").is_some() {
@@ -446,6 +489,11 @@ pub fn auto_link(data: &mut Json, written: &[(String, usize)]) -> bool {
             if s["cap"] == key.as_str() || s["cap"].as_str().is_some_and(|c| stale.iter().any(|f| f == c)) {
                 s["cap"] = json!(path);
             }
+            for x in s["entre"].as_array_mut().into_iter().flatten() {
+                if x == key.as_str() || x.as_str().is_some_and(|c| stale.iter().any(|f| f == c)) {
+                    *x = json!(path);
+                }
+            }
         }
         if let Some(p) = data["planejados"].as_array_mut().and_then(|a| a.iter_mut().find(|p| p["id"] == id.as_str())) {
             p["arquivo"] = json!(path);
@@ -491,6 +539,136 @@ pub fn saga_books(ix: &Index, book: &Book, author: &str) -> Vec<Book> {
         let vb = b.volume.parse::<f64>().unwrap_or(0.0);
         va.partial_cmp(&vb).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.title.cmp(&b.title))
     });
+    out
+}
+
+// ── quick capture ─────────────────────────────────────────────────────────
+
+/// A scene as typed in the outline's quick entry, before it is placed:
+/// `@pov`, `#trama` and `^cap` (`^3`, `^3-6`) are read off the title.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Draft {
+    pub titulo: String,
+    pub resumo: String,
+    pub pov: Option<String>,
+    pub tramas: Vec<String>,
+    /// Chapter labels: one chapter, or a range.
+    pub cap: Option<(String, Option<String>)>,
+}
+
+/// The longest first line still taken as a title; longer text is all summary.
+const TITLE_MAX: usize = 100;
+
+/// `- `, `* `, `+ `, `• `, `– `, `1. `, `1) `, `## `, with an optional `[ ]`.
+fn list_item(line: &str) -> Option<(usize, &str)> {
+    static RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"^([ \t]*)(?:[-*+•–]|\d{1,3}[.)]|#{1,6})[ \t]+(?:\[[ xX]\][ \t]+)?(.*)$").unwrap());
+    let c = RE.captures(line)?;
+    let indent = c[1].chars().map(|ch| if ch == '\t' { 4 } else { 1 }).sum();
+    Some((indent, c.get(2).map(|m| m.as_str()).unwrap_or("")))
+}
+
+fn indent_of(line: &str) -> usize {
+    line.chars().take_while(|c| c.is_whitespace()).map(|ch| if ch == '\t' { 4 } else { 1 }).sum()
+}
+
+/// Lines under a title: dedented, blank runs collapsed, trimmed.
+fn body(lines: &[&str]) -> String {
+    let min = lines.iter().filter(|l| !l.trim().is_empty()).map(|l| indent_of(l)).min().unwrap_or(0);
+    let mut out: Vec<String> = Vec::new();
+    for l in lines {
+        if l.trim().is_empty() {
+            if out.last().is_some_and(|x| !x.is_empty()) {
+                out.push(String::new());
+            }
+            continue;
+        }
+        let mut cut = 0;
+        let mut w = 0;
+        for (k, ch) in l.char_indices() {
+            if w >= min || !ch.is_whitespace() {
+                break;
+            }
+            w += if ch == '\t' { 4 } else { 1 };
+            cut = k + ch.len_utf8();
+        }
+        out.push(l[cut..].trim_end().to_string());
+    }
+    out.join("\n").trim().to_string()
+}
+
+/// A title without its marks, then the point of view, the plot lines and the chapter(s).
+pub type Tokens = (String, Option<String>, Vec<String>, Option<(String, Option<String>)>);
+
+/// Read `@pov`, `#trama` and `^cap` off a title; `_` stands for a space.
+pub fn take_tokens(title: &str) -> Tokens {
+    let mut words = Vec::new();
+    let mut pov = None;
+    let mut tramas = Vec::new();
+    let mut cap = None;
+    for w in title.split_whitespace() {
+        let clean = |t: &str| t.trim_end_matches([',', '.', ';', ':', '!', '?']).replace('_', " ");
+        let mut ch = w.chars();
+        let first = ch.next();
+        let rest = ch.as_str();
+        match first {
+            Some('@') if !rest.is_empty() => pov = Some(clean(rest)),
+            Some('#') if !rest.is_empty() && !rest.starts_with('#') => tramas.push(clean(rest)),
+            Some('^') if !rest.is_empty() => {
+                let r = clean(rest);
+                let mut it = r.splitn(2, ['-', '–']);
+                let a = it.next().unwrap_or("").trim().to_string();
+                let b = it.next().map(|x| x.trim().to_string()).filter(|x| !x.is_empty());
+                if !a.is_empty() {
+                    cap = Some((a, b));
+                }
+            }
+            _ => words.push(w),
+        }
+    }
+    (words.join(" "), pov, tramas, cap)
+}
+
+fn draft(title_line: &str, rest: &[&str]) -> Draft {
+    let t = title_line.trim();
+    if t.chars().count() > TITLE_MAX {
+        let mut all = vec![title_line];
+        all.extend_from_slice(rest);
+        return Draft { resumo: body(&all), ..Default::default() };
+    }
+    let (titulo, pov, tramas, cap) = take_tokens(t);
+    Draft { titulo, resumo: body(rest), pov, tramas, cap }
+}
+
+/// What was typed or pasted in the quick entry, as scenes: a list (`-`,
+/// `*`, `1.`…) gives a scene per item, with the lines under an item (and
+/// deeper items) as its summary; plain text gives one scene, the first
+/// line as title and the rest as summary.
+pub fn parse_capture(text: &str) -> Vec<Draft> {
+    let lines: Vec<&str> = text.lines().collect();
+    let items: Vec<(usize, usize)> = lines.iter().enumerate().filter_map(|(k, l)| list_item(l).map(|(ind, _)| (k, ind))).collect();
+    let mut out = Vec::new();
+    let one = |ls: &[&str], out: &mut Vec<Draft>| {
+        let Some(first) = ls.iter().position(|l| !l.trim().is_empty()) else { return };
+        let d = draft(ls[first], &ls[first + 1..]);
+        if !d.titulo.is_empty() || !d.resumo.is_empty() || d.pov.is_some() || !d.tramas.is_empty() {
+            out.push(d);
+        }
+    };
+    if items.is_empty() {
+        one(&lines, &mut out);
+        return out;
+    }
+    let base = items.iter().map(|x| x.1).min().unwrap_or(0);
+    let heads: Vec<usize> = items.iter().filter(|x| x.1 == base).map(|x| x.0).collect();
+    one(&lines[..heads[0]], &mut out);
+    for (n, &h) in heads.iter().enumerate() {
+        let end = heads.get(n + 1).copied().unwrap_or(lines.len());
+        let (_, rest) = list_item(lines[h]).unwrap_or((0, lines[h]));
+        let d = draft(rest, &lines[h + 1..end]);
+        if !d.titulo.is_empty() || !d.resumo.is_empty() {
+            out.push(d);
+        }
+    }
     out
 }
 
@@ -607,5 +785,49 @@ mod tests {
         assert_eq!(d["cenas"][0]["cap"], json!("M/04 — Dois.md"));
         assert_eq!(d["cenas"][1]["cap"], json!("M/05 — Tres.md"));
         assert!(!auto_link(&mut d, &written));
+    }
+
+    #[test]
+    fn capture_lists_and_text() {
+        let d = parse_capture("Ana acha a carta @ana #mistério ^3");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].titulo, "Ana acha a carta");
+        assert_eq!(d[0].pov.as_deref(), Some("ana"));
+        assert_eq!(d[0].tramas, vec!["mistério".to_string()]);
+        assert_eq!(d[0].cap, Some(("3".into(), None)));
+        let d = parse_capture("- Um ^3-6\n  detalhe do um\n  - sub\n\n- Dois #Casa_Velha\n* Três");
+        assert_eq!(d.len(), 3);
+        assert_eq!(d[0].titulo, "Um");
+        assert_eq!(d[0].cap, Some(("3".into(), Some("6".into()))));
+        assert_eq!(d[0].resumo, "detalhe do um\n- sub");
+        assert_eq!(d[1].tramas, vec!["Casa Velha".to_string()]);
+        assert_eq!(d[2].titulo, "Três");
+        let d = parse_capture("A fuga\nEles saem à noite.\n\nNa estrada, chove.");
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].titulo, "A fuga");
+        assert_eq!(d[0].resumo, "Eles saem à noite.\n\nNa estrada, chove.");
+        let long = "x".repeat(120);
+        let d = parse_capture(&long);
+        assert_eq!(d[0].titulo, "");
+        assert_eq!(d[0].resumo, long);
+        assert!(parse_capture("  \n ").is_empty());
+        let d = parse_capture("1. a\n2) b\n- [ ] c");
+        assert_eq!(d.iter().map(|x| x.titulo.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn ranges() {
+        let mut d = blank();
+        d["cenas"] = json!([{ "id": "a", "cap": null, "ord": 1 }]);
+        set_range(&mut d, "a", Some(("c1", "plan:p")));
+        assert_eq!(range_of(&d["cenas"][0]), Some(("c1", "plan:p")));
+        d["planejados"] = json!([{ "id": "p", "num": 2 }]);
+        link_planned(&mut d, "p", "c2");
+        assert_eq!(range_of(&d["cenas"][0]), Some(("c1", "c2")));
+        assert!(relink(&mut d, &[("c1".into(), "c0".into())]));
+        assert_eq!(range_of(&d["cenas"][0]), Some(("c0", "c2")));
+        move_scene(&mut d, "a", Some("c2"), None, None);
+        assert!(d["cenas"][0].get("entre").is_none());
+        assert_eq!(range_of(&d["cenas"][0]), None);
     }
 }

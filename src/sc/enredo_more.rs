@@ -207,7 +207,7 @@ impl EnredoView {
         let tramas: Vec<(String, String, String)> = self.data["tramas"].as_array().into_iter().flatten().map(|t| (en::str_of(t, "id").to_string(), en::str_of(t, "nome").to_string(), en::str_of(t, "cor").to_string())).collect();
         let s = &mut self.data["cenas"][i];
         ch |= title_edit(ui, p, s, "titulo", "Título da cena", &mut focus);
-        ch |= plain_area(ui, p, s, "resumo", "O que acontece? (uma ou duas frases)", 2);
+        ch |= plain_area(ui, p, s, "resumo", "O que acontece? De uma frase à cena inteira", 3);
         ui.add_space(6.0);
         // chapter and point of view
         let cap = en::cap_of(s).map(String::from);
@@ -215,11 +215,51 @@ impl EnredoView {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             let cur = cols.iter().find(|c| Some(&c.path) == cap.as_ref());
-            let text = cur.map(|c| format!("{} · {}", c.label, c.title)).unwrap_or_else(|| "Ideias".into());
-            let mut items = vec![("Ideias (sem capítulo)".to_string(), cap.is_none())];
+            let pos = |path: &str| cols.iter().position(|c| c.path == path);
+            let range = en::range_of(s).and_then(|(a, b)| Some((pos(a)?, pos(b)?))).map(|(a, b)| (a.min(b), a.max(b)));
+            let short = |c: &Col| if c.label == "·" { c.title.clone() } else { c.label.clone() };
+            let text = match (cur, range) {
+                (Some(c), _) => format!("{} · {}", c.label, c.title),
+                (None, Some((a, b))) => format!("≈ entre {} e {}", short(&cols[a]), short(&cols[b])),
+                _ => "Ideias".into(),
+            };
+            let parts = en::parts(cols);
+            let mut items = vec![("Ideias (sem capítulo)".to_string(), cap.is_none() && range.is_none()), ("Em algum ponto entre capítulos…".to_string(), range.is_some())];
+            items.extend(parts.iter().map(|pt| (format!("Em algum ponto de {pt}"), false)));
             items.extend(cols.iter().map(|c| (format!("{} · {}", c.label, c.title), Some(&c.path) == cap.as_ref())));
             if let Some(k) = pick(ui, p, "cap", icons::BOOK_OPEN, &text, false, &items) {
-                s["cap"] = if k == 0 { Json::Null } else { json!(cols[k - 1].path) };
+                let np = parts.len();
+                let here = cur.and_then(|c| pos(&c.path));
+                let set = |s: &mut Json, a: usize, b: usize| {
+                    s["cap"] = Json::Null;
+                    s["entre"] = json!([cols[a].path, cols[b].path]);
+                };
+                match k {
+                    0 => {
+                        s["cap"] = Json::Null;
+                        s.as_object_mut().map(|o| o.remove("entre"));
+                    }
+                    1 if !cols.is_empty() => {
+                        // from where it is now, or the first chapter, to the next one
+                        let (a, b) = range.unwrap_or_else(|| {
+                            let a = here.unwrap_or(0);
+                            (a, (a + 1).min(cols.len() - 1))
+                        });
+                        set(s, a, b);
+                    }
+                    1 => {}
+                    k if k < 2 + np => {
+                        let pt = &parts[k - 2];
+                        let idx: Vec<usize> = cols.iter().enumerate().filter(|(_, c)| &c.part == pt).map(|(i, _)| i).collect();
+                        if let (Some(&a), Some(&b)) = (idx.first(), idx.last()) {
+                            set(s, a, b);
+                        }
+                    }
+                    k => {
+                        s["cap"] = json!(cols[k - 2 - np].path);
+                        s.as_object_mut().map(|o| o.remove("entre"));
+                    }
+                }
                 s["ord"] = json!(9999);
                 ch = true;
             }
@@ -230,6 +270,21 @@ impl EnredoView {
             if let Some(k) = pick(ui, p, "pov", icons::EYE, if pov.is_empty() { "POV" } else { &pov }, false, &items) {
                 s["pov"] = json!(if k == 0 { String::new() } else { names[k - 1].clone() });
                 ch = true;
+            }
+            if let Some((a, b)) = range {
+                ui.end_row();
+                ui.label(RichText::new("entre").size(12.0).color(p.muted));
+                let items: Vec<(String, bool)> = cols.iter().enumerate().map(|(i, c)| (format!("{} · {}", c.label, c.title), i == a)).collect();
+                if let Some(k) = pick(ui, p, "entre-de", icons::CHEVRON_LEFT, &short(&cols[a]), false, &items) {
+                    s["entre"] = json!([cols[k.min(b)].path, cols[k.max(b)].path]);
+                    ch = true;
+                }
+                ui.label(RichText::new("e").size(12.0).color(p.muted));
+                let items: Vec<(String, bool)> = cols.iter().enumerate().map(|(i, c)| (format!("{} · {}", c.label, c.title), i == b)).collect();
+                if let Some(k) = pick(ui, p, "entre-ate", icons::CHEVRON_RIGHT, &short(&cols[b]), false, &items) {
+                    s["entre"] = json!([cols[k.min(a)].path, cols[k.max(a)].path]);
+                    ch = true;
+                }
             }
         });
         // plot lines
