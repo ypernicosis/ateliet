@@ -362,6 +362,62 @@ pub fn link_planned(data: &mut Json, id: &str, file: &str) {
     }
 }
 
+/// Notes were renamed or moved (`(old, new)` paths): the references the
+/// plot keeps by path follow them (scene chapters, planned chapters' files,
+/// structure ranges, chapter and character cards). True if anything changed.
+pub fn relink(data: &mut Json, moves: &[(String, String)]) -> bool {
+    fn fix(v: &mut Json, moves: &[(String, String)]) -> bool {
+        let Some(s) = v.as_str() else { return false };
+        match moves.iter().find(|(o, _)| o == s) {
+            Some((_, n)) => {
+                *v = json!(n);
+                true
+            }
+            None => false,
+        }
+    }
+    let mut ch = false;
+    for s in data["cenas"].as_array_mut().into_iter().flatten() {
+        ch |= fix(&mut s["cap"], moves);
+    }
+    for p in data["planejados"].as_array_mut().into_iter().flatten() {
+        if p.get("arquivo").is_some() {
+            ch |= fix(&mut p["arquivo"], moves);
+        }
+        for f in p["arquivos"].as_array_mut().into_iter().flatten() {
+            ch |= fix(f, moves);
+        }
+    }
+    for a in data["estruturas"].as_array_mut().into_iter().flatten() {
+        for k in ["de", "ate"] {
+            if a.get(k).is_some() {
+                ch |= fix(&mut a[k], moves);
+            }
+        }
+    }
+    for board in ["mural", "relacoes"] {
+        for c in data[board]["cards"].as_array_mut().into_iter().flatten() {
+            if c.get("link").is_some() {
+                ch |= fix(&mut c["link"], moves);
+            }
+        }
+    }
+    ch
+}
+
+/// `relink` on the Enredo note at `rel` (relative to `root`), written back
+/// only when something changed.
+pub fn relink_file(root: &Path, rel: &str, moves: &[(String, String)]) -> Result<bool, String> {
+    let full = root.join(rel);
+    let Ok(text) = std::fs::read_to_string(&full) else { return Ok(false) };
+    let Some(mut data) = read_json_block(&text, LANG) else { return Ok(false) };
+    if !relink(&mut data, moves) {
+        return Ok(false);
+    }
+    std::fs::write(&full, write_json_block(&text, LANG, &data)).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 /// Distinct parts (arcs) in chapter order.
 pub fn parts(cols: &[Col]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -462,5 +518,24 @@ mod tests {
         assert!(tramas_of(&d["cenas"][2]).is_empty());
         delete_scene(&mut d, "a");
         assert_eq!(d["cenas"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn relinks_paths() {
+        let mut d = blank();
+        d["cenas"] = json!([{ "id": "a", "cap": "L/M/01 — Um.md" }, { "id": "b", "cap": "L/M/02 — Dois.md" }, { "id": "c", "cap": null }]);
+        d["planejados"] = json!([{ "id": "p", "arquivo": "L/M/01 — Um.md", "arquivos": ["L/M/01 — Um.md"] }]);
+        d["estruturas"] = json!([{ "id": "e1", "escopo": "capitulos", "de": "L/M/01 — Um.md", "ate": "L/M/02 — Dois.md" }]);
+        d["mural"]["cards"] = json!([{ "t": "capitulo", "link": "L/M/01 — Um.md" }]);
+        let moves = vec![("L/M/01 — Um.md".to_string(), "L/M/01 — Primeiro.md".to_string())];
+        assert!(relink(&mut d, &moves));
+        assert_eq!(d["cenas"][0]["cap"], json!("L/M/01 — Primeiro.md"));
+        assert_eq!(d["cenas"][1]["cap"], json!("L/M/02 — Dois.md"));
+        assert!(d["cenas"][2]["cap"].is_null());
+        assert_eq!(d["planejados"][0]["arquivo"], json!("L/M/01 — Primeiro.md"));
+        assert_eq!(d["planejados"][0]["arquivos"], json!(["L/M/01 — Primeiro.md"]));
+        assert_eq!(d["estruturas"][0]["de"], json!("L/M/01 — Primeiro.md"));
+        assert_eq!(d["mural"]["cards"][0]["link"], json!("L/M/01 — Primeiro.md"));
+        assert!(!relink(&mut d, &moves));
     }
 }

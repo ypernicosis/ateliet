@@ -892,7 +892,31 @@ impl App {
                 }
             }
         }
+        // the Enredo keeps chapters (and cards) by path: follow the move there too
+        {
+            use ateliet_core::scriptorium::{book as scb, enredo};
+            let mut notes: Vec<String> = Vec::new();
+            if let Ok(ix) = v.index.read() {
+                for (old, _) in &moves {
+                    if let Some(b) = scb::book_for(&ix, old, "") {
+                        let p = enredo::path(&b);
+                        if !notes.contains(&p) {
+                            notes.push(p);
+                        }
+                    }
+                }
+            }
+            for p in notes {
+                let now = moves.iter().find(|(o, _)| *o == p).map(|(_, n)| n.clone()).unwrap_or(p);
+                if let Err(e) = enredo::relink_file(&v.root, &now, &moves) {
+                    eprintln!("enredo: {e}");
+                }
+            }
+        }
         for t in &mut self.tabs {
+            if let Some(crate::sc::View::Enredo(e)) = t.view.as_mut() {
+                e.moved(&moves);
+            }
             if t.path == from {
                 t.path = to.clone();
             } else if let Some(rest) = t.path.strip_prefix(&prefix) {
@@ -906,7 +930,21 @@ impl App {
         touched.push(from.to_string());
         touched.push(to.clone());
         v.index.write().unwrap().update(&touched);
+        // a chapter renamed by its file: the title it had from the old name follows
+        let retitle: Vec<(String, String)> = {
+            use ateliet_core::scriptorium::book as scb;
+            let ix = v.index.read().unwrap();
+            moves
+                .iter()
+                .filter(|(o, n)| scb::title_from_name(o) != scb::title_from_name(n) && scb::is_chapter(&ix, n))
+                .filter(|(o, n)| ix.page(n).and_then(|pg| pg.yaml.get("titulo")).and_then(|t| t.as_str()) == Some(scb::title_from_name(o).as_str()))
+                .map(|(_, n)| (n.clone(), scb::title_from_name(n)))
+                .collect()
+        };
         self.vault.as_mut().unwrap().rescan();
+        for (p, t) in retitle {
+            self.edit_file(&p, |text| ateliet_core::scriptorium::set_frontmatter(text, "titulo", Some(&serde_json::json!(t))));
+        }
         self.save_session();
         if relinked > 0 {
             self.toast(format!("Links atualizados em {relinked} {}.", if relinked == 1 { "nota" } else { "notas" }));

@@ -302,6 +302,35 @@ pub fn segmented(ui: &mut Ui, items: &[(&str, &str)], selected: usize, p: Palett
     out
 }
 
+/// The width `segmented` takes for these items.
+pub fn segmented_width(ui: &Ui, items: &[(&str, &str)]) -> f32 {
+    let mut w = 6.0 + 2.0 * items.len().saturating_sub(1) as f32;
+    for (glyph, label) in items {
+        w += 20.0 + ui.fonts(|f| {
+            let g = if glyph.is_empty() { 0.0 } else { f.layout_no_wrap(glyph.to_string(), icon_font(13.0), Color32::WHITE).size().x };
+            let l = if label.is_empty() { 0.0 } else { f.layout_no_wrap(label.to_string(), medium(12.5), Color32::WHITE).size().x };
+            g + l + if glyph.is_empty() || label.is_empty() { 0.0 } else { 6.0 }
+        });
+    }
+    w
+}
+
+/// The width `chip` takes.
+pub fn chip_width(ui: &Ui, glyph: Option<&str>, label: &str) -> f32 {
+    let inner = ui.fonts(|f| {
+        let g = glyph.map(|g| f.layout_no_wrap(g.to_string(), icon_font(12.5), Color32::WHITE).size().x).unwrap_or(0.0);
+        let l = if label.is_empty() { 0.0 } else { f.layout_no_wrap(label.to_string(), FontId::proportional(12.5), Color32::WHITE).size().x };
+        g + l + if glyph.is_some() && !label.is_empty() { 6.0 } else { 0.0 }
+    });
+    inner.min(260.0) + 20.0
+}
+
+/// The width `primary_icon` takes.
+pub fn primary_icon_width(ui: &Ui, glyph: &str, label: &str) -> f32 {
+    let inner = ui.fonts(|f| f.layout_no_wrap(glyph.to_string(), icon_font(14.0), Color32::WHITE).size().x + 8.0 + f.layout_no_wrap(label.to_string(), medium(UI), Color32::WHITE).size().x);
+    inner + 2.0 * ui.spacing().button_padding.x
+}
+
 /// A small outlined pill with an optional icon (pickers, filters).
 pub fn chip(ui: &mut Ui, glyph: Option<&str>, label: &str, active: bool, p: Palette) -> Response {
     let mut job = egui::text::LayoutJob::default();

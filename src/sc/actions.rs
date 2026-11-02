@@ -35,6 +35,22 @@ impl App {
         self.edit_file(path, |t| set_frontmatter(t, key, value.as_ref()));
     }
 
+    /// The chapter's title (`titulo`) and its file name, kept together; the
+    /// Enredo follows the rename.
+    fn retitle_chapter(&mut self, path: &str, title: &str) {
+        let t = title.trim();
+        if t.is_empty() {
+            return;
+        }
+        self.set_fm(path, "titulo", Some(json!(t)));
+        let name = crate::vault::basename(path).to_string();
+        let num: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let new = format!("{}{}", if num.is_empty() { String::new() } else { format!("{num} — ") }, safe_name(t));
+        if new != name {
+            self.rename(path, &new);
+        }
+    }
+
     fn written(&mut self, paths: &[String]) {
         if let Some(v) = &self.vault {
             v.index.write().unwrap().update(paths);
@@ -144,6 +160,7 @@ impl App {
                     }
                 }
             }
+            Action::RetitleChapter(p, title) => self.retitle_chapter(&p, &title),
             Action::RenameChapter(p, title) => self.form = Some(Form::new("Renomear capítulo", Purpose::RenameChapter { path: p }, "Salvar", vec![Field::text("t", "Título", &title)])),
             Action::ChapterPart(p, part) => self.form = Some(Form::new("Parte / arco", Purpose::ChapterPart { path: p }, "Salvar", vec![Field::text("p", "Nome da parte (vazio para nenhuma)", &part)])),
             Action::Trash(p) => {
@@ -560,19 +577,7 @@ impl App {
                     Err(e) => self.toast(format!("Não foi possível criar o personagem: {e}")),
                 }
             }
-            Purpose::RenameChapter { path } => {
-                let t = g("t");
-                if t.is_empty() {
-                    return;
-                }
-                self.set_fm(&path, "titulo", Some(json!(t)));
-                let name = crate::vault::basename(&path).to_string();
-                let num: String = name.chars().take_while(|c| c.is_ascii_digit()).collect();
-                let new = format!("{}{}", if num.is_empty() { String::new() } else { format!("{num} — ") }, safe_name(&t));
-                if new != name {
-                    self.rename(&path, &new);
-                }
-            }
+            Purpose::RenameChapter { path } => self.retitle_chapter(&path, &g("t")),
             Purpose::ChapterPart { path } => {
                 let p = g("p");
                 self.set_fm(&path, "parte", if p.is_empty() { None } else { Some(json!(p)) });

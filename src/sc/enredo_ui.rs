@@ -48,6 +48,8 @@ pub enum Sel {
     Cena(String),
     Trama(String),
     Plan(String),
+    /// A written chapter, by path.
+    Cap(String),
     Pista(String),
     Arco(String),
     Evento(String),
@@ -76,6 +78,16 @@ pub(super) struct Zone {
     cap: Option<String>,
     trama: Option<String>,
     cards: Vec<(Rect, String)>,
+}
+
+/// A written chapter's title and arc while they are typed in the drawer;
+/// `seen_*` is what the note said, so a change made elsewhere shows up.
+pub(super) struct CapEdit {
+    pub path: String,
+    pub title: String,
+    pub part: String,
+    pub seen_title: String,
+    pub seen_part: String,
 }
 
 pub struct EnredoView {
@@ -110,6 +122,8 @@ pub struct EnredoView {
     pub saga: bool,
     pub(super) saga_cache: std::collections::HashMap<String, (Option<SystemTime>, Json)>,
     pub(super) pending_book: Option<(String, Option<Sel>)>,
+    /// The selected chapter's title and arc as typed.
+    pub(super) cap_edit: Option<CapEdit>,
 }
 
 pub fn status_color(k: &str) -> Color32 {
@@ -168,7 +182,29 @@ impl EnredoView {
             saga: false,
             saga_cache: Default::default(),
             pending_book: None,
+            cap_edit: None,
         }
+    }
+
+    /// Notes were renamed or moved: follow them (the file on disk was
+    /// rewritten by the app; this keeps what is in memory in step).
+    pub fn moved(&mut self, moves: &[(String, String)]) {
+        let to = |p: &str| moves.iter().find(|(o, _)| o == p).map(|(_, n)| n.clone());
+        if let Some(n) = to(&self.book) {
+            self.book = n;
+        }
+        en::relink(&mut self.data, moves);
+        if let Some(Sel::Cap(p)) = &self.sel {
+            if let Some(n) = to(p) {
+                self.sel = Some(Sel::Cap(n));
+            }
+        }
+        if let Some(e) = self.cap_edit.as_mut() {
+            if let Some(n) = to(&e.path) {
+                e.path = n;
+            }
+        }
+        self.saga_cache.clear();
     }
 
     pub fn changed(&mut self) {
@@ -371,13 +407,63 @@ impl EnredoView {
                 ui.label(RichText::new(&b.title).size(11.5).color(p.faint));
             });
             ui.add_space(14.0);
-            // narrow tabs: icons only, so the chips on the right keep their room
-            let wide = ui.available_width() > 900.0;
-            let roomy = ui.available_width() > 1040.0;
+            // What the right side holds, to know how much room the tabs have:
+            // first the chips lose their labels, then the tabs.
+            let struct_lab = match self.apps.len() {
+                0 => "Sem estrutura".to_string(),
+                1 => self.apps[0].st.nome.clone(),
+                n => format!("{n} estruturas"),
+            };
+            let filter_lab = if self.filtered() { "Filtrado" } else { "Filtrar" };
+            let arc_lab = self.arco.clone().unwrap_or_else(|| "Todos os arcos".into());
+            let has_parts = !en::parts(cols).is_empty();
+            let new_lab = match self.mode {
+                Mode::Grade | Mode::Escaleta => "Cena",
+                Mode::Cronologia => "Evento",
+                Mode::Pistas => "Pista",
+                Mode::Arcos => "Arco",
+                Mode::Mural | Mode::Relacoes => "",
+            };
+            let right_w = |ui: &egui::Ui, labels: bool| {
+                let l = |t: &str| if labels { t.to_string() } else { String::new() };
+                let mut parts: Vec<f32> = Vec::new();
+                if !new_lab.is_empty() {
+                    parts.push(kit::primary_icon_width(ui, icons::PLUS, new_lab));
+                }
+                if self.mode.has_saga() {
+                    parts.push(112.0);
+                }
+                if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Arcos) {
+                    parts.push(kit::chip_width(ui, Some(icons::MILESTONE), &l(&struct_lab)));
+                }
+                if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Cronologia) {
+                    parts.push(kit::chip_width(ui, Some(icons::LIST_FILTER), &l(filter_lab)));
+                }
+                if matches!(self.mode, Mode::Grade | Mode::Escaleta) && has_parts {
+                    parts.push(kit::chip_width(ui, Some(icons::BOOKMARK), &l(&arc_lab)));
+                }
+                parts.iter().sum::<f32>() + 8.0 * parts.len() as f32
+            };
+            let full: Vec<(&str, &str)> = MODES.iter().map(|m| (m.1, m.2)).collect();
+            let bare: Vec<(&str, &str)> = MODES.iter().map(|m| (m.1, "")).collect();
+            let avail = ui.available_width() - 12.0;
+            let (wide, roomy) = if kit::segmented_width(ui, &full) + right_w(ui, true) <= avail {
+                (true, true)
+            } else if kit::segmented_width(ui, &full) + right_w(ui, false) <= avail {
+                (true, false)
+            } else {
+                (false, false)
+            };
             let short = |t: &str| if roomy { t.to_string() } else { String::new() };
-            let items: Vec<(&str, &str)> = MODES.iter().map(|m| (m.1, if wide { m.2 } else { "" })).collect();
+            let items = if wide { &full } else { &bare };
             let cur = MODES.iter().position(|m| m.0 == self.mode).unwrap_or(0);
-            if let Some(i) = kit::segmented(ui, &items, cur, p) {
+            // even icons alone may not fit: the tabs never run under the chips
+            let tabs_room = (avail - right_w(ui, false)).max(0.0);
+            let tabs = ui.allocate_ui_with_layout(vec2(tabs_room.min(kit::segmented_width(ui, items) + 1.0), 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_clip_rect(ui.max_rect().intersect(ui.clip_rect()));
+                kit::segmented(ui, items, cur, p)
+            });
+            if let Some(i) = tabs.inner {
                 self.mode = MODES[i].0;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -393,11 +479,7 @@ impl EnredoView {
                 }
                 self.scope_switch(ui, p, b, saga);
                 if matches!(self.mode, Mode::Grade | Mode::Escaleta | Mode::Arcos) {
-                    let lab = match self.apps.len() {
-                        0 => "Sem estrutura".to_string(),
-                        1 => self.apps[0].st.nome.clone(),
-                        n => format!("{n} estruturas"),
-                    };
+                    let lab = struct_lab.clone();
                     let tip = if self.apps.is_empty() { "Escolher estruturas narrativas".to_string() } else { self.apps.iter().map(|x| format!("{} — {}", x.st.nome, ateliet_core::scriptorium::estruturas::scope_label(&x.a, cols))).collect::<Vec<_>>().join("\n") };
                     if kit::chip(ui, Some(icons::MILESTONE), &short(&lab), !self.apps.is_empty(), p).on_hover_text(format!("{lab}\n{tip}")).clicked() {
                         self.st_dialog = Some(super::enredo_st::StDialog::default());
@@ -830,13 +912,15 @@ impl EnredoView {
                 let vr = visible_x(r);
                 let mut hov = false;
                 if vr.is_positive() {
-                    let resp = ui.interact(vr, ui.id().with(("ch", i)), Sense::click()).on_hover_text(if c.planned.is_some() { format!("{} — planejado no roteiro", c.title) } else { format!("{} — clique para abrir", c.title) });
+                    let resp = ui.interact(vr, ui.id().with(("ch", i)), Sense::click()).on_hover_text(if c.planned.is_some() { format!("{} — planejado no roteiro", c.title) } else { format!("{} — clique para editar, duplo clique para abrir", c.title) });
                     hov = resp.hovered();
-                    if resp.clicked() {
-                        match &c.planned {
-                            Some(pl) => select = Some(Sel::Plan(en::str_of(pl, "id").to_string())),
-                            None => open_ch = Some(c.path.clone()),
-                        }
+                    if resp.double_clicked() && c.planned.is_none() {
+                        open_ch = Some(c.path.clone());
+                    } else if resp.clicked() {
+                        select = Some(match &c.planned {
+                            Some(pl) => Sel::Plan(en::str_of(pl, "id").to_string()),
+                            None => Sel::Cap(c.path.clone()),
+                        });
                     }
                 }
                 if hov {
@@ -1042,11 +1126,14 @@ impl EnredoView {
                                     if t.hovered() {
                                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                                     }
-                                    if t.clicked() {
-                                        match &c.planned {
-                                            Some(pl) => select = Some(Sel::Plan(en::str_of(pl, "id").to_string())),
-                                            None => open_ch = Some(c.path.clone()),
-                                        }
+                                    let t = if c.planned.is_none() { t.on_hover_text("Clique para editar, duplo clique para abrir") } else { t };
+                                    if t.double_clicked() && c.planned.is_none() {
+                                        open_ch = Some(c.path.clone());
+                                    } else if t.clicked() {
+                                        select = Some(match &c.planned {
+                                            Some(pl) => Sel::Plan(en::str_of(pl, "id").to_string()),
+                                            None => Sel::Cap(c.path.clone()),
+                                        });
                                     }
                                     let gi = all.iter().position(|x| x.path == c.path).unwrap_or(0);
                                     for (key, label, k) in self.beats_at(gi) {
