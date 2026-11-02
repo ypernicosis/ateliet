@@ -418,6 +418,56 @@ pub fn relink_file(root: &Path, rel: &str, moves: &[(String, String)]) -> Result
     Ok(true)
 }
 
+/// Planned chapters whose files are gone (or never existed) take the written
+/// chapter with the same number, when no other plan has it: a chapter made
+/// in the manuscript and the one planned in the outline are the same chapter,
+/// not two. `written` is (path, number) of the numbered chapters, in order.
+/// Their scenes go along. True if anything changed.
+pub fn auto_link(data: &mut Json, written: &[(String, usize)]) -> bool {
+    let Some(plans) = data["planejados"].as_array() else { return false };
+    let exists = |f: &str| written.iter().any(|(p, _)| p == f);
+    let taken: Vec<String> = plans.iter().flat_map(plan_files).filter(|f| exists(f)).collect();
+    let mut links: Vec<(String, Vec<String>, String)> = Vec::new();
+    for p in plans {
+        let files = plan_files(p);
+        if files.iter().any(|f| exists(f)) {
+            continue;
+        }
+        let Some(n) = p["num"].as_f64().filter(|n| n.fract() == 0.0 && *n >= 1.0) else { continue };
+        let Some((path, _)) = written.iter().find(|(_, k)| *k as f64 == n) else { continue };
+        if taken.contains(path) || links.iter().any(|l| &l.2 == path) {
+            continue;
+        }
+        links.push((p["id"].as_str().unwrap_or("").to_string(), files, path.clone()));
+    }
+    for (id, stale, path) in &links {
+        let key = format!("plan:{id}");
+        for s in data["cenas"].as_array_mut().into_iter().flatten() {
+            if s["cap"] == key.as_str() || s["cap"].as_str().is_some_and(|c| stale.iter().any(|f| f == c)) {
+                s["cap"] = json!(path);
+            }
+        }
+        if let Some(p) = data["planejados"].as_array_mut().and_then(|a| a.iter_mut().find(|p| p["id"] == id.as_str())) {
+            p["arquivo"] = json!(path);
+            p["arquivos"] = json!([path]);
+        }
+    }
+    !links.is_empty()
+}
+
+/// (path, number) of the book's numbered chapters, as the grid numbers them.
+pub fn numbered(ix: &Index, book: &Book) -> Vec<(String, usize)> {
+    let mut n = 0;
+    book::chapters(ix, book)
+        .into_iter()
+        .filter(|c| c.numbered && c.include)
+        .map(|c| {
+            n += 1;
+            (c.path, n)
+        })
+        .collect()
+}
+
 /// Distinct parts (arcs) in chapter order.
 pub fn parts(cols: &[Col]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -537,5 +587,25 @@ mod tests {
         assert_eq!(d["estruturas"][0]["de"], json!("L/M/01 — Primeiro.md"));
         assert_eq!(d["mural"]["cards"][0]["link"], json!("L/M/01 — Primeiro.md"));
         assert!(!relink(&mut d, &moves));
+    }
+
+    #[test]
+    fn plans_take_written_chapters() {
+        let mut d = blank();
+        d["planejados"] = json!([
+            { "id": "p1", "num": 1, "arquivo": "M/03 — Um.md", "arquivos": ["M/03 — Um.md"] },
+            { "id": "p2", "num": 2, "titulo": "" },
+            { "id": "p3", "num": 3, "arquivos": ["M/apagado.md"] },
+            { "id": "p4", "num": 4 }
+        ]);
+        d["cenas"] = json!([{ "id": "a", "cap": "plan:p2" }, { "id": "b", "cap": "M/apagado.md" }]);
+        let written = vec![("M/03 — Um.md".to_string(), 1), ("M/04 — Dois.md".to_string(), 2), ("M/05 — Tres.md".to_string(), 3)];
+        assert!(auto_link(&mut d, &written));
+        assert_eq!(d["planejados"][1]["arquivos"], json!(["M/04 — Dois.md"]));
+        assert_eq!(d["planejados"][2]["arquivos"], json!(["M/05 — Tres.md"]));
+        assert!(d["planejados"][3]["arquivo"].is_null());
+        assert_eq!(d["cenas"][0]["cap"], json!("M/04 — Dois.md"));
+        assert_eq!(d["cenas"][1]["cap"], json!("M/05 — Tres.md"));
+        assert!(!auto_link(&mut d, &written));
     }
 }
