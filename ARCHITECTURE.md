@@ -3,7 +3,8 @@
 ```
 ┌──────────────────────────────── src/ (crate `ateliet`, interface em egui) ────────────────────────────────┐
 │ main.rs     janela (eframe/glow), ícone, vault inicial                                                    │
-│ app.rs      estado: vault, abas, splits, histórico, salvamento, ações, arrastar/colar, modelos             │
+│ app.rs      estado: vault, abas, painéis, histórico, salvamento, ações, arrastar/colar, modelos            │
+│ panes.rs    a árvore de painéis do centro: lado a lado ou empilhados, divisórias, encaixe ao arrastar      │
 │ editor.rs · live.rs · markdown.rs   editor com realce, Live Preview por bloco, árvore e desenho do Markdown│
 │ align.rs · typo.rs · media_ui.rs    alinhamento por nota, tipografia do tema, players e PDF nas notas      │
 │ panels.rs · commands.rs · settings_pages.rs   barras laterais, paleta e atalhos, configurações             │

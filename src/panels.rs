@@ -110,8 +110,22 @@ enum TabCmd {
     CloseRight,
     /// Show beside the active tab (a split).
     Beside,
+    /// The same note in a second pane.
+    Twin,
     Reveal,
     OpenExternal,
+}
+/// The "divide the screen" menu.
+#[derive(Clone, Copy)]
+enum SplitCmd {
+    Right,
+    Down,
+    SameRight,
+    SameDown,
+    Flip,
+    Even,
+    Close,
+    Join,
 }
 use serde_json::Value;
 use std::sync::mpsc::{self, Receiver};
@@ -1060,6 +1074,9 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
         let mut focus = false;
         // dragging a tab: (from, pointer x, released)
         let mut drag: Option<(usize, f32, bool)> = None;
+        // a tab dragged down out of the bar, onto the panes (or back up)
+        let mut dock: Option<Option<u64>> = None;
+        let mut split_cmd: Option<SplitCmd> = None;
         let mut first_x = 0.0;
         let mut tab_step = 0.0;
         let compact_tools = app.video.docked() && ui.available_width() < 430.0;
@@ -1086,7 +1103,17 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         }
                         if r.dragged() || r.drag_stopped() {
                             if let Some(ptr) = ui.input(|inp| inp.pointer.latest_pos()) {
-                                drag = Some((i, ptr.x, r.drag_stopped()));
+                                if ptr.y > rect.bottom() + 8.0 {
+                                    // out of the bar: into a pane (the panes take the release)
+                                    if r.dragged() {
+                                        dock = Some(Some(t.uid));
+                                    }
+                                } else {
+                                    if app.pane_drag == Some(t.uid) {
+                                        dock = Some(None);
+                                    }
+                                    drag = Some((i, ptr.x, r.drag_stopped()));
+                                }
                             }
                         }
                         let rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 0.5));
@@ -1121,7 +1148,9 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         let cy = rect.center().y - 1.0;
                         ui.painter().text(egui::pos2(rect.left() + 16.0, cy), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(13.0), if active { p.muted } else { p.faint });
                         let title = format!("{}{}", t.title(), if t.dirty() { " •" } else { "" });
-                        let color = if active { p.text } else { p.muted };
+                        // shown in a pane of the divided centre
+                        let shown = app.panes.as_ref().is_some_and(|n| n.contains(t.uid));
+                        let color = if active || shown { p.text } else { p.muted };
                         let mut job = egui::text::LayoutJob::single_section(title, egui::TextFormat { font_id: if active { kit::medium(12.5) } else { egui::FontId::proportional(12.5) }, color, ..Default::default() });
                         job.wrap = egui::text::TextWrapping::truncate_at_width(tab_w - if active || hovered { 58.0 } else { 38.0 });
                         let galley = ui.fonts(|f| f.layout_job(job));
@@ -1154,8 +1183,11 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                             if kit::menu_entry(ui, "", "Fechar as da direita", "", i + 1 < n_tabs, false, p) {
                                 tab_cmd = Some((i, TabCmd::CloseRight));
                             }
-                            if i != app.active && kit::menu_entry(ui, icons::PANEL_RIGHT, "Abrir ao lado", "", true, false, p) {
+                            if i != app.active && !shown && kit::menu_entry(ui, icons::PANEL_RIGHT, "Abrir ao lado", "", true, false, p) {
                                 tab_cmd = Some((i, TabCmd::Beside));
+                            }
+                            if t.is_note() && kit::menu_entry(ui, icons::COPY, "Abrir a mesma nota ao lado", "", true, false, p) {
+                                tab_cmd = Some((i, TabCmd::Twin));
                             }
                             if is_file {
                                 kit::menu_sep(ui, p);
@@ -1220,11 +1252,41 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         app.read_beside_notes(book);
                     }
                 }
-                // two notes side by side
+                // the centre in panes: beside, below, the same note twice
                 let split = app.split_shown();
-                if icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, if split { "Juntar os painéis" } else { "Dividir: duas notas lado a lado" }, split, p).clicked() {
-                    app.toggle_split();
+                let sr = icon_button(ui, icons::SQUARE_SPLIT_HORIZONTAL, "Dividir a tela", split, p);
+                let sid = ui.make_persistent_id("split-menu");
+                if sr.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(sid));
                 }
+                egui::popup::popup_above_or_below_widget(ui, sid, &sr, egui::AboveOrBelow::Below, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(250.0);
+                    let note = app.tabs.get(app.active).is_some_and(|t| t.is_note());
+                    for (g, label, cmd, on) in [
+                        (icons::PANEL_RIGHT, "Dividir à direita", SplitCmd::Right, true),
+                        (icons::ARROW_DOWN, "Dividir abaixo", SplitCmd::Down, true),
+                        (icons::COPY, "A mesma nota à direita", SplitCmd::SameRight, note),
+                        (icons::COPY, "A mesma nota abaixo", SplitCmd::SameDown, note),
+                    ] {
+                        if kit::menu_entry(ui, g, label, "", on, false, p) {
+                            split_cmd = Some(cmd);
+                        }
+                    }
+                    kit::menu_sep(ui, p);
+                    let flip = if app.panes.as_ref().is_some_and(|n| n.stacked()) { "Pôr lado a lado" } else { "Pôr um em cima do outro" };
+                    for (g, label, cmd) in [
+                        (icons::ARROW_RIGHT_LEFT, flip, SplitCmd::Flip),
+                        (icons::COLUMNS_3, "Igualar os tamanhos", SplitCmd::Even),
+                        (icons::X, "Fechar este painel", SplitCmd::Close),
+                        (icons::MINIMIZE, "Juntar todos os painéis", SplitCmd::Join),
+                    ] {
+                        if kit::menu_entry(ui, g, label, "", split, false, p) {
+                            split_cmd = Some(cmd);
+                        }
+                    }
+                    kit::menu_sep(ui, p);
+                    ui.label(RichText::new("Arraste o topo de um painel, ou uma aba, para a borda de outro painel.").size(11.0).color(p.faint));
+                });
                 if let Some(t) = app.tabs.get_mut(app.active) {
                     if t.view.is_none() && t.board.is_none() && t.quadro.is_none() {
                         focus = kit::icon_button(ui, icons::FOCUS, "Modo foco", false, p).clicked();
@@ -1258,6 +1320,26 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), &mut tools);
             }
         });
+        if let Some(d) = dock {
+            app.pane_drag = d;
+        }
+        if let Some(c) = split_cmd {
+            use crate::panes::Side;
+            match c {
+                SplitCmd::Right => app.split_pane(Side::Right, false),
+                SplitCmd::Down => app.split_pane(Side::Bottom, false),
+                SplitCmd::SameRight => app.split_pane(Side::Right, true),
+                SplitCmd::SameDown => app.split_pane(Side::Bottom, true),
+                SplitCmd::Flip => app.flip_panes(),
+                SplitCmd::Even => app.even_panes(),
+                SplitCmd::Close => {
+                    if let Some(u) = app.tabs.get(app.active).map(|t| t.uid) {
+                        app.close_pane(u);
+                    }
+                }
+                SplitCmd::Join => app.join_panes(),
+            }
+        }
         if let Some(i) = select {
             app.focus_tab(i);
         }
@@ -1276,12 +1358,10 @@ pub fn tab_bar(app: &mut App, ctx: &egui::Context) {
                         app.close_tab(j);
                     }
                 }
-                TabCmd::Beside => {
-                    if let Some(t) = app.tabs.get(i) {
-                        app.split = Some(t.path.clone());
-                        app.split_right = true;
-                        app.save_session();
-                    }
+                TabCmd::Beside => app.show_beside(i),
+                TabCmd::Twin => {
+                    app.focus_tab(i);
+                    app.split_pane(crate::panes::Side::Right, true);
                 }
                 TabCmd::Reveal | TabCmd::OpenExternal => {
                     if let (Some(v), Some(t)) = (&app.vault, app.tabs.get(i)) {

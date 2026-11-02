@@ -23,6 +23,7 @@ mod markdown;
 mod media_ui;
 mod music;
 mod panels;
+mod panes;
 mod quadro_ui;
 mod reader_mode;
 mod reader_ui;

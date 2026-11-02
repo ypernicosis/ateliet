@@ -63,6 +63,12 @@ pub enum Cmd {
     InsertPicture,
     Pinterest,
     SplitRight,
+    SplitDown,
+    SplitSame,
+    SplitSameDown,
+    JoinPanes,
+    FlipPanes,
+    ClosePane,
     ReaderShelf,
     ReaderBeside,
     ReaderBesideNotes,
@@ -125,7 +131,13 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Forward, "app:go-forward", "Avançar"),
     (Cmd::InsertPicture, "ateliet:insert-picture", "Inserir imagem…"),
     (Cmd::Pinterest, "ateliet:pinterest", "Imagens: Trazer do Pinterest…"),
-    (Cmd::SplitRight, "workspace:split-vertical", "Dividir à direita (ou juntar de novo)"),
+    (Cmd::SplitRight, "workspace:split-vertical", "Dividir à direita"),
+    (Cmd::SplitDown, "workspace:split-horizontal", "Dividir abaixo"),
+    (Cmd::SplitSame, "ateliet:split-same", "Abrir a mesma nota à direita"),
+    (Cmd::SplitSameDown, "ateliet:split-same-down", "Abrir a mesma nota abaixo"),
+    (Cmd::FlipPanes, "ateliet:flip-panes", "Painéis: alternar entre lado a lado e um em cima do outro"),
+    (Cmd::ClosePane, "ateliet:close-pane", "Painéis: fechar o painel em uso"),
+    (Cmd::JoinPanes, "ateliet:join-panes", "Painéis: juntar todos"),
     (Cmd::ReplaceTemplates, "templater-obsidian:replace-in-file-templater", "Templater: Substituir templates na nota"),
 ];
 
@@ -228,7 +240,17 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
         Cmd::Focus => app.toggle_focus(),
         Cmd::Back => app.go_history(true),
         Cmd::Forward => app.go_history(false),
-        Cmd::SplitRight => app.toggle_split(),
+        Cmd::SplitRight => app.split_pane(crate::panes::Side::Right, false),
+        Cmd::SplitDown => app.split_pane(crate::panes::Side::Bottom, false),
+        Cmd::SplitSame => app.split_pane(crate::panes::Side::Right, true),
+        Cmd::SplitSameDown => app.split_pane(crate::panes::Side::Bottom, true),
+        Cmd::JoinPanes => app.join_panes(),
+        Cmd::FlipPanes => app.flip_panes(),
+        Cmd::ClosePane => {
+            if let Some(u) = app.tabs.get(app.active).map(|t| t.uid) {
+                app.close_pane(u);
+            }
+        }
         Cmd::Pinterest => {
             if let Some(root) = app.vault.as_ref().map(|v| v.root.clone()) {
                 app.images.open(&root, ctx);
