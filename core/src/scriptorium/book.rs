@@ -247,11 +247,16 @@ pub fn is_chapter(ix: &Index, path: &str) -> bool {
     }
 }
 
+/// A chapter's title from its file name: "03 — A queda.md" → "A queda".
+pub fn title_from_name(path: &str) -> String {
+    static NUM_PREFIX: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^\d+\s*[—\-–.]\s*").unwrap());
+    NUM_PREFIX.replace(basename(path), "").into_owned()
+}
+
 pub fn chapter_info(p: &Page) -> Chapter {
     let fm = &p.yaml;
     let tipo = Some(s(fm, "tipo").to_lowercase()).filter(|x| !x.is_empty()).unwrap_or_else(|| "capitulo".into());
-    static NUM_PREFIX: Lazy<regex::Regex> = Lazy::new(|| regex::Regex::new(r"^\d+\s*[—\-–.]\s*").unwrap());
-    let title = Some(s(fm, "titulo")).filter(|x| !x.is_empty()).unwrap_or_else(|| NUM_PREFIX.replace(basename(&p.path), "").into_owned());
+    let title = Some(s(fm, "titulo")).filter(|x| !x.is_empty()).unwrap_or_else(|| title_from_name(&p.path));
     let status = s(fm, "status");
     Chapter {
         path: p.path.clone(),

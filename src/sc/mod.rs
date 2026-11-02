@@ -72,6 +72,8 @@ pub enum Action {
     SetFm(String, String, Option<Json>),
     Reorder(Vec<String>),
     RenameChapter(String, String),
+    /// A chapter gets a new title at once (its note follows, like in the binder).
+    RetitleChapter(String, String),
     ChapterPart(String, String),
     Trash(String),
     Continue(String),

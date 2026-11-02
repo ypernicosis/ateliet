@@ -153,6 +153,7 @@ impl EnredoView {
                 Sel::Cena(id) => self.draw_scene(ui, p, id, cols, chars, acts),
                 Sel::Trama(id) => self.draw_trama(ui, p, id),
                 Sel::Plan(id) => self.draw_plan(ui, p, id, b, root, ix, acts),
+                Sel::Cap(path) => self.draw_cap(ui, p, path, cols, acts),
                 Sel::Pista(id) => self.draw_pista(ui, p, id, cols),
                 Sel::Arco(id) => self.draw_arc(ui, p, id, cols, acts),
                 Sel::Evento(id) => self.draw_event(ui, p, id),
@@ -560,6 +561,92 @@ impl EnredoView {
             en::delete_planned(&mut self.data, id);
             self.sel = None;
             ch = true;
+        }
+        ch
+    }
+
+    /// A written chapter: its title and arc live in the note, so editing them
+    /// here renames the chapter in the manuscript (and the other way round).
+    fn draw_cap(&mut self, ui: &mut egui::Ui, p: Palette, path: &str, cols: &[Col], acts: &mut Vec<Action>) -> bool {
+        let Some(c) = cols.iter().find(|c| c.path == path) else { return self.missing(ui, p, "Capítulo") };
+        let kick = match c.tipo.as_str() {
+            "prologo" => "Prólogo".to_string(),
+            "epilogo" => "Epílogo".to_string(),
+            "interludio" => "Interlúdio".to_string(),
+            _ if c.numbered => format!("Capítulo · {}", c.label),
+            _ => "Capítulo".to_string(),
+        };
+        if kicker(ui, p, &kick) {
+            self.sel = None;
+            return false;
+        }
+        let tid = ui.make_persistent_id(("en-cap-title", path));
+        let aid = ui.make_persistent_id(("en-cap-arc", path));
+        let (t_focus, a_focus) = ui.memory(|m| (m.has_focus(tid), m.has_focus(aid)));
+        if self.cap_edit.as_ref().is_none_or(|e| e.path != path) {
+            // another chapter was picked while one was being typed: keep what was typed
+            if let Some(old) = self.cap_edit.take() {
+                let (t, a) = (old.title.trim(), old.part.trim());
+                // the arc first: retitling may rename the file
+                if a != old.seen_part {
+                    acts.push(Action::SetFm(old.path.clone(), "parte".into(), if a.is_empty() { None } else { Some(json!(a)) }));
+                }
+                if !t.is_empty() && t != old.seen_title {
+                    acts.push(Action::RetitleChapter(old.path.clone(), t.to_string()));
+                }
+            }
+            self.cap_edit = Some(super::enredo_ui::CapEdit { path: path.into(), title: c.title.clone(), part: c.part.clone(), seen_title: c.title.clone(), seen_part: c.part.clone() });
+        }
+        let e = self.cap_edit.as_mut().unwrap();
+        // renamed in the manuscript (or by the app) while not being typed here
+        if e.seen_title != c.title {
+            e.seen_title = c.title.clone();
+            if !t_focus {
+                e.title = c.title.clone();
+            }
+        }
+        if e.seen_part != c.part {
+            e.seen_part = c.part.clone();
+            if !a_focus {
+                e.part = c.part.clone();
+            }
+        }
+        let r = ui.add(egui::TextEdit::singleline(&mut e.title).id(tid).frame(false).desired_width(f32::INFINITY).font(kit::bold(20.0)).hint_text(RichText::new("Título do capítulo").color(p.faint)));
+        if r.lost_focus() {
+            let t = e.title.trim().to_string();
+            if t.is_empty() {
+                e.title = c.title.clone();
+            } else if t != c.title {
+                e.seen_title = t.clone();
+                acts.push(Action::RetitleChapter(path.to_string(), t));
+            }
+        }
+        ui.horizontal(|ui| {
+            ui.allocate_ui_with_layout(vec2(96.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new("Arco").color(p.muted));
+            });
+            let r = ui.add(egui::TextEdit::singleline(&mut e.part).id(aid).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 4)).hint_text(RichText::new("Arco / parte").color(p.faint)));
+            if r.lost_focus() {
+                let a = e.part.trim().to_string();
+                if a != c.part {
+                    e.seen_part = a.clone();
+                    acts.push(Action::SetFm(path.to_string(), "parte".into(), if a.is_empty() { None } else { Some(json!(a)) }));
+                }
+            }
+        });
+        ui.label(RichText::new("O título e o arco ficam na nota do capítulo: mudar aqui muda no manuscrito.").size(11.5).color(p.faint));
+        let mut ch = false;
+        // the outline entry this chapter came from keeps its notes
+        let plan_id = c.plan.as_ref().map(|pl| en::str_of(pl, "id").to_string());
+        if let Some(i) = plan_id.and_then(|id| self.data["planejados"].as_array().and_then(|a| a.iter().position(|x| x["id"] == id.as_str()))) {
+            label(ui, p, "Notas do roteiro");
+            ch |= area(ui, p, &mut self.data["planejados"][i], "notas", "Notas do roteiro para este capítulo…", 6);
+        }
+        let n = self.data["cenas"].as_array().into_iter().flatten().filter(|s| en::cap_of(s) == Some(path)).count();
+        ui.label(RichText::new(format!("{n} {} neste capítulo", if n == 1 { "cena" } else { "cenas" })).size(12.0).color(p.faint));
+        ui.add_space(10.0);
+        if kit::primary_icon(ui, icons::FILE_TEXT, "Abrir capítulo", p).clicked() {
+            acts.push(Action::Open(path.to_string(), true));
         }
         ch
     }
