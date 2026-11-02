@@ -24,6 +24,10 @@ pub enum Mode {
 }
 
 pub struct Tab {
+    /// Who this tab is, for the panes (two tabs can show the same note).
+    pub uid: u64,
+    /// The text last copied between tabs of the same note (a hash).
+    pub sync: u64,
     pub path: String,
     pub text: String,
     pub saved: String,
@@ -91,8 +95,29 @@ impl Tab {
     }
 
     pub fn editor_id(&self) -> egui::Id {
-        egui::Id::new(("editor", &self.path))
+        egui::Id::new(("editor", self.uid, &self.path))
     }
+
+    /// A plain note (not a board, a drawing, a book or a Scriptorium screen).
+    pub fn is_note(&self) -> bool {
+        self.view.is_none() && self.board.is_none() && self.quadro.is_none() && self.reader.is_none()
+    }
+
+    fn text_hash(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        self.text.hash(&mut h);
+        self.saved.hash(&mut h);
+        h.finish()
+    }
+}
+
+/// The height of the strip on top of each pane when the centre is divided.
+const PANE_HEAD: f32 = 26.0;
+
+/// A new tab's `uid`.
+pub fn next_uid() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -154,11 +179,12 @@ pub struct App {
     /// The shared library being copied (Settings → Images).
     pub copy_job: Option<crate::settings_pages::CopyJob>,
     pub theme_browser: crate::settings_pages::ThemeBrowser,
-    /// A split: the path of the tab in the other pane, and whether that pane is on the right.
-    pub split: Option<String>,
-    pub split_right: bool,
-    /// Where the line between the two panes is, as a fraction of the width.
-    pub split_frac: f32,
+    /// The centre divided in panes (`None`: one pane, the active tab).
+    pub panes: Option<crate::panes::Node>,
+    /// The tab of the pane in use last frame.
+    pane_focus: u64,
+    /// A pane (or a tab from the bar) being dragged to another place.
+    pub pane_drag: Option<u64>,
     pub templater: Templater,
     pub search: panels::SearchState,
     pub calendar: panels::CalendarState,
@@ -230,9 +256,9 @@ impl App {
             ctx: None,
             copy_job: None,
             theme_browser: crate::settings_pages::ThemeBrowser::new(),
-            split: None,
-            split_right: true,
-            split_frac: 0.5,
+            panes: None,
+            pane_focus: 0,
+            pane_drag: None,
             templater: Templater::default(),
             search: Default::default(),
             calendar: panels::CalendarState::new(),
@@ -315,19 +341,38 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — Ateliet", self.vault.as_ref().unwrap().name)));
         // reopen the tabs of the last session
         if let Some(tabs) = session["tabs"].as_array() {
-            for t in tabs.iter().filter_map(|t| t.as_str()) {
-                if self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() || t == crate::reader_ui::SHELF {
-                    self.open(t, true);
+            // the saved tab at each place, by uid (a note open twice comes back twice)
+            let mut uids: Vec<Option<u64>> = Vec::new();
+            for t in tabs.iter().map(|t| t.as_str().unwrap_or("")) {
+                let mut uid = None;
+                if !t.is_empty() && (self.vault.as_ref().unwrap().abs(t).is_file() || crate::sc::View::from_path(t).is_some() || t == crate::reader_ui::SHELF) {
+                    if let Some(j) = self.tabs.iter().position(|x| x.path == t && x.is_note()) {
+                        uid = self.clone_tab(j).map(|k| self.tabs[k].uid);
+                    } else {
+                        let n = self.tabs.len();
+                        self.open(t, true);
+                        uid = (self.tabs.len() > n).then(|| self.tabs[self.active].uid);
+                    }
+                }
+                uids.push(uid);
+            }
+            let saved_active = session["active"].as_u64().unwrap_or(0) as usize;
+            let by_uid = |u: Option<u64>, tabs: &[Tab]| u.and_then(|u| tabs.iter().position(|t| t.uid == u));
+            self.active = by_uid(uids.get(saved_active).copied().flatten(), &self.tabs).unwrap_or(self.tabs.len().saturating_sub(1));
+            // the panes as they were left
+            self.panes = crate::panes::Node::from_json(&session["panes"], &|v| v.as_u64().and_then(|i| uids.get(i as usize).copied().flatten()));
+            // (a session from before: two panes)
+            if self.panes.is_none() {
+                let other = session["split"].as_str().and_then(|sp| self.tabs.iter().position(|t| t.path == sp)).filter(|&i| i != self.active);
+                if let (Some(o), Some(a)) = (other, self.tabs.get(self.active)) {
+                    let right = session["split_right"].as_bool().unwrap_or(true);
+                    let f = session["split_frac"].as_f64().unwrap_or(0.5).clamp(0.2, 0.8) as f32;
+                    let (l, r) = if right { (a.uid, self.tabs[o].uid) } else { (self.tabs[o].uid, a.uid) };
+                    self.panes = Some(crate::panes::Node::Split { down: false, kids: vec![crate::panes::Node::Leaf(l), crate::panes::Node::Leaf(r)], fracs: vec![f, 1.0 - f] });
                 }
             }
-            self.active = session["active"].as_u64().unwrap_or(0) as usize;
-            if self.active >= self.tabs.len() {
-                self.active = self.tabs.len().saturating_sub(1);
-            }
-            // the split as it was left
-            self.split = session["split"].as_str().filter(|sp| self.tabs.iter().enumerate().any(|(i, t)| t.path == *sp && i != self.active)).map(str::to_string);
-            self.split_right = session["split_right"].as_bool().unwrap_or(true);
-            self.split_frac = session["split_frac"].as_f64().map(|f| (f as f32).clamp(0.2, 0.8)).unwrap_or(0.5);
+            self.pane_focus = self.tabs.get(self.active).map(|t| t.uid).unwrap_or(0);
+            self.fix_panes();
         }
         // for tests and scripts: ATELIET_OPEN=<note> [ATELIET_MODE=read]
         if let Ok(p) = std::env::var("ATELIET_OPEN") {
@@ -350,7 +395,8 @@ impl App {
             if let Some(d) = path.parent() {
                 let _ = std::fs::create_dir_all(d);
             }
-            let _ = std::fs::write(path, serde_json::json!({ "tabs": tabs, "active": self.active, "recent": self.recent, "split": self.split, "split_right": self.split_right, "split_frac": self.split_frac }).to_string());
+            let panes = self.panes.as_ref().map(|n| n.to_json(&|u| self.tabs.iter().position(|t| t.uid == u).map(|i| serde_json::json!(i)))).unwrap_or(serde_json::Value::Null);
+            let _ = std::fs::write(path, serde_json::json!({ "tabs": tabs, "active": self.active, "recent": self.recent, "panes": panes }).to_string());
         }
     }
 
@@ -377,7 +423,7 @@ impl App {
                 self.focus_tab(i);
                 return;
             }
-            let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
+            let tab = Tab { uid: next_uid(), sync: 0, path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
             if new_tab || self.tabs.is_empty() {
                 self.tabs.push(tab);
                 self.active = self.tabs.len() - 1;
@@ -448,7 +494,7 @@ impl App {
                 _ => None,
             };
             if let Some(view) = view {
-                let tab = Tab { path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
+                let tab = Tab { uid: next_uid(), sync: 0, path: path.to_string(), text: String::new(), saved: String::new(), mode: Mode::Read, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: Some(view), reader: None, back: Vec::new(), fwd: Vec::new() };
                 if new_tab || self.tabs.is_empty() {
                     self.tabs.push(tab);
                     self.active = self.tabs.len() - 1;
@@ -462,7 +508,7 @@ impl App {
             }
         }
         let text = if is_board || is_quadro { String::new() } else { std::fs::read_to_string(v.abs(path)).unwrap_or_default() };
-        let mut tab = Tab { path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
+        let mut tab = Tab { uid: next_uid(), sync: 0, path: path.to_string(), saved: text.clone(), text, mode: self.default_mode, doc: None, last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
         tab.board = board;
         tab.quadro = quadro;
         if new_tab || self.tabs.is_empty() {
@@ -494,6 +540,8 @@ impl App {
         back.truncate(100);
         tab.back = back;
         tab.fwd = fwd;
+        // the same tab for the panes, showing something else
+        tab.uid = old.uid;
         self.tabs[self.active] = tab;
     }
 
@@ -551,94 +599,294 @@ impl App {
         }
         self.save_tab(i);
         let closing_active = i == self.active;
-        let path = self.tabs.remove(i).path;
-        if self.active >= self.tabs.len() {
+        let uid = self.tabs[i].uid;
+        // a pane in use closing: the one before it (or after) takes the focus
+        let next = self.panes.as_ref().filter(|n| closing_active && n.contains(uid)).and_then(|n| {
+            let l = n.leaves();
+            let k = l.iter().position(|u| *u == uid)?;
+            l.get(k.wrapping_sub(1)).or(l.get(k + 1)).copied()
+        });
+        self.tabs.remove(i);
+        if let Some(n) = self.panes.take() {
+            self.panes = n.remove(uid);
+        }
+        if let Some(j) = next.and_then(|u| self.uid_index(u)) {
+            self.active = j;
+        } else if self.active >= self.tabs.len() {
             self.active = self.tabs.len().saturating_sub(1);
         } else if i < self.active {
             self.active -= 1;
         }
-        // a pane of a split closed: the other one takes the whole centre
-        if let Some(sp) = self.split.take() {
-            if sp != path {
-                match self.tabs.iter().position(|t| t.path == sp) {
-                    Some(j) if closing_active => self.active = j,
-                    Some(_) => self.split = Some(sp),
-                    None => {}
-                }
-            }
+        if next.is_some() {
+            self.pane_focus = self.tabs.get(self.active).map(|t| t.uid).unwrap_or(0);
         }
+        self.fix_panes();
         self.save_session();
     }
 
-    /// Make tab `i` the one in use. When it is the one shown in the other
-    /// pane of a split, the two panes stay as they are and only the focus moves.
+    /// Make tab `i` the one in use. When it is shown in another pane, the
+    /// panes stay as they are and only the focus moves; else the pane in use
+    /// shows it.
     pub fn focus_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || i == self.active {
             return;
         }
-        if self.split.as_deref() == Some(self.tabs[i].path.as_str()) {
-            self.split = self.tabs.get(self.active).map(|t| t.path.clone());
-            self.split_right = !self.split_right;
-        }
         self.active = i;
+        self.fix_panes();
     }
 
-    /// Whether the centre is divided in two panes now.
+    pub fn uid_index(&self, uid: u64) -> Option<usize> {
+        self.tabs.iter().position(|t| t.uid == uid)
+    }
+
+    /// The panes kept in line with the tabs: closed tabs leave their pane, the
+    /// active tab is in one (in the pane in use, when it was elsewhere), and a
+    /// single pane left is no division at all.
+    pub fn fix_panes(&mut self) {
+        let Some(mut n) = self.panes.take() else {
+            self.pane_focus = self.tabs.get(self.active).map(|t| t.uid).unwrap_or(0);
+            return;
+        };
+        for u in n.leaves() {
+            if self.uid_index(u).is_none() {
+                match n.remove(u) {
+                    Some(m) => n = m,
+                    None => return,
+                }
+            }
+        }
+        let Some(active) = self.tabs.get(self.active).map(|t| t.uid) else { return };
+        if !n.contains(active) {
+            let target = Some(self.pane_focus).filter(|u| n.contains(*u)).unwrap_or_else(|| n.leaves()[0]);
+            n.replace(target, active);
+        }
+        self.pane_focus = active;
+        self.panes = match n {
+            crate::panes::Node::Leaf(_) => None,
+            n => Some(n),
+        };
+    }
+
+    /// Whether the centre is divided in panes now.
     pub fn split_shown(&self) -> bool {
-        self.split.as_ref().is_some_and(|sp| self.tabs.iter().enumerate().any(|(i, t)| &t.path == sp && i != self.active))
+        self.panes.is_some()
+    }
+
+    /// A second tab for the note of tab `i` (to show it in two panes), right
+    /// after it. Only plain notes; the two keep the same text.
+    pub fn clone_tab(&mut self, i: usize) -> Option<usize> {
+        let t = self.tabs.get(i).filter(|t| t.is_note())?;
+        let tab = Tab { uid: next_uid(), sync: t.text_hash(), path: t.path.clone(), text: t.text.clone(), saved: t.saved.clone(), mode: t.mode, doc: None, last_edit: None, cursor: t.cursor, highlight: Default::default(), find: Default::default(), scroll_to: None, live: Default::default(), board: None, quadro: None, view: None, reader: None, back: Vec::new(), fwd: Vec::new() };
+        self.tabs[i].sync = tab.sync;
+        self.tabs.insert(i + 1, tab);
+        if self.active > i {
+            self.active += 1;
+        }
+        Some(i + 1)
+    }
+
+    /// Tabs of the same note keep the same text: what changed in one (typing,
+    /// a template, a save) goes to the others.
+    pub fn sync_clones(&mut self) {
+        let n = self.tabs.len();
+        for i in 0..n {
+            if !self.tabs[i].is_note() || self.tabs[..i].iter().any(|t| t.path == self.tabs[i].path && t.is_note()) {
+                continue;
+            }
+            let group: Vec<usize> = (i..n).filter(|&j| self.tabs[j].is_note() && self.tabs[j].path == self.tabs[i].path).collect();
+            if group.len() < 2 {
+                continue;
+            }
+            let hashes: Vec<u64> = group.iter().map(|&j| self.tabs[j].text_hash()).collect();
+            let changed = |k: usize| hashes[k] != self.tabs[group[k]].sync;
+            // the tab in use wins when several changed
+            let src = group.iter().position(|&j| j == self.active).filter(|&k| changed(k)).or_else(|| (0..group.len()).find(|&k| changed(k)));
+            let Some(k) = src else { continue };
+            let (text, saved, h) = (self.tabs[group[k]].text.clone(), self.tabs[group[k]].saved.clone(), hashes[k]);
+            for (m, &j) in group.iter().enumerate() {
+                let t = &mut self.tabs[j];
+                if m != k {
+                    t.text = text.clone();
+                    t.saved = saved.clone();
+                    t.cursor = t.cursor.min(t.text.chars().count());
+                }
+                t.sync = h;
+            }
+        }
+    }
+
+    /// Divide the pane in use: a new pane on `side` of it, with the same note
+    /// (`same`) or another one (the next tab not shown, else the last note
+    /// seen). The new pane is the one in use.
+    pub fn split_pane(&mut self, side: crate::panes::Side, same: bool) {
+        let Some(target) = self.tabs.get(self.active).map(|t| t.uid) else {
+            self.toast("Abra uma nota para dividir a tela.");
+            return;
+        };
+        let shown = |app: &App, i: usize| app.tabs[i].uid == target || app.panes.as_ref().is_some_and(|n| n.contains(app.tabs[i].uid));
+        let mut new = None;
+        if same {
+            new = self.clone_tab(self.active);
+            if new.is_none() {
+                self.toast("Só notas podem ser abertas duas vezes; abrindo outra ao lado.");
+            }
+        }
+        if new.is_none() {
+            // the nearest tab not shown yet, after the active one first
+            let a = self.active;
+            new = (a + 1..self.tabs.len()).chain((0..a).rev()).find(|&i| !shown(self, i));
+        }
+        if new.is_none() {
+            let here = self.active_path();
+            let other = self.vault.as_ref().and_then(|v| self.recent.iter().find(|p| Some(*p) != here.as_ref() && !self.tabs.iter().any(|t| &t.path == *p) && v.abs(p).is_file()).cloned());
+            if let Some(o) = other {
+                let n = self.tabs.len();
+                let keep = self.panes.take();
+                self.open(&o, true);
+                self.panes = keep;
+                new = (self.tabs.len() > n).then_some(self.active);
+            }
+        }
+        // nothing else open: the same note, when it is one
+        if new.is_none() {
+            new = self.uid_index(target).and_then(|i| self.clone_tab(i));
+        }
+        let Some(i) = new else {
+            self.toast("Abra outra nota para dividir a tela.");
+            return;
+        };
+        let uid = self.tabs[i].uid;
+        let mut n = self.panes.take().unwrap_or(crate::panes::Node::Leaf(target));
+        n.insert(target, uid, side);
+        self.panes = Some(n);
+        self.active = i;
+        self.pane_focus = uid;
+        self.save_session();
+    }
+
+    /// Put the tab of `uid` (a pane, or a tab dragged from the bar) on `side`
+    /// of the pane of `target`; in the middle, the two trade places.
+    pub fn dock(&mut self, uid: u64, target: u64, side: crate::panes::Side) {
+        use crate::panes::{Node, Side};
+        if uid == target {
+            return;
+        }
+        let Some(active) = self.tabs.get(self.active).map(|t| t.uid) else { return };
+        let mut n = self.panes.take().unwrap_or(Node::Leaf(active));
+        if !n.contains(target) {
+            self.panes = Some(n).filter(|n| !matches!(n, Node::Leaf(_)));
+            return;
+        }
+        if side == Side::Center {
+            if n.contains(uid) {
+                n.swap(uid, target);
+            } else {
+                n.replace(target, uid);
+            }
+        } else {
+            if n.contains(uid) {
+                n = n.remove(uid).unwrap_or(Node::Leaf(target));
+            }
+            n.insert(target, uid, side);
+        }
+        self.panes = n.normalized();
+        if let Some(i) = self.uid_index(uid) {
+            self.active = i;
+        }
+        self.pane_focus = uid;
+        self.fix_panes();
+        self.save_session();
+    }
+
+    /// Close the pane of `uid`; its tab stays in the bar unless it was a
+    /// second tab of a note shown elsewhere.
+    pub fn close_pane(&mut self, uid: u64) {
+        let Some(i) = self.uid_index(uid) else { return };
+        let twin = self.tabs.iter().any(|t| t.uid != uid && t.path == self.tabs[i].path && t.is_note());
+        if twin {
+            self.close_tab(i);
+            return;
+        }
+        let Some(n) = self.panes.take() else { return };
+        let l = n.leaves();
+        let k = l.iter().position(|u| *u == uid);
+        self.panes = n.remove(uid);
+        if self.active == i {
+            let next = k.and_then(|k| l.get(k.wrapping_sub(1)).or(l.get(k + 1))).and_then(|u| self.uid_index(*u));
+            if let Some(j) = next {
+                self.active = j;
+                self.pane_focus = self.tabs[j].uid;
+            }
+        }
+        self.fix_panes();
+        self.save_session();
+    }
+
+    /// Show tab `i` in a pane beside the one in use, which stays in use.
+    pub fn show_beside(&mut self, i: usize) {
+        let Some(uid) = self.tabs.get(i).map(|t| t.uid) else { return };
+        let Some(active) = self.tabs.get(self.active).map(|t| t.uid) else { return };
+        if self.panes.as_ref().is_some_and(|n| n.contains(uid)) || uid == active {
+            return;
+        }
+        let mut n = self.panes.take().unwrap_or(crate::panes::Node::Leaf(active));
+        n.insert(active, uid, crate::panes::Side::Right);
+        self.panes = Some(n);
+        self.save_session();
     }
 
     /// Open a file in a pane beside the one in use (Obsidian's "Open to the
-    /// right"); the new pane is the one in use.
+    /// right"); the new pane is the one in use. The note in use opens a
+    /// second time.
     pub fn open_beside(&mut self, path: &str) {
-        let Some(before) = self.active_path() else {
+        let Some(before) = self.tabs.get(self.active).map(|t| (t.uid, t.path.clone())) else {
             self.open(path, true);
             return;
         };
-        if before == path {
+        if before.1 == path {
+            self.split_pane(crate::panes::Side::Right, true);
             return;
         }
-        // shown in the other pane already: just go there
-        if self.split_shown() && self.split.as_deref() == Some(path) {
-            if let Some(i) = self.tabs.iter().position(|t| t.path == path) {
-                self.focus_tab(i);
-            }
+        // shown in another pane already: just go there
+        if let Some(i) = self.tabs.iter().position(|t| t.path == path && self.panes.as_ref().is_some_and(|n| n.contains(t.uid))) {
+            self.focus_tab(i);
             return;
         }
-        self.split = None;
+        let keep = self.panes.take();
         self.open(path, true);
-        if self.active_path().as_deref() == Some(path) {
-            self.split = Some(before);
-            self.split_right = false;
+        self.panes = keep;
+        // (it may have been open already, in no pane)
+        let Some(new) = self.tabs.get(self.active).map(|t| t.uid).filter(|u| *u != before.0) else { return };
+        let mut n = self.panes.take().unwrap_or(crate::panes::Node::Leaf(before.0));
+        if !n.contains(new) {
+            n.insert(before.0, new, crate::panes::Side::Right);
         }
+        self.panes = Some(n);
+        self.pane_focus = new;
+        self.fix_panes();
         self.save_session();
     }
 
-    /// Divide the centre in two panes, or join them again. The other pane
-    /// shows the neighbouring tab or, with a single tab, the last note seen.
-    pub fn toggle_split(&mut self) {
-        if self.split_shown() {
-            self.split = None;
-        } else if self.tabs.len() > 1 {
-            let j = if self.active > 0 { self.active - 1 } else { self.active + 1 };
-            self.split = Some(self.tabs[j].path.clone());
-            self.split_right = true;
-        } else {
-            let here = self.active_path();
-            let other = self.vault.as_ref().and_then(|v| self.recent.iter().find(|p| Some(*p) != here.as_ref() && v.abs(p).is_file()).cloned());
-            match (here, other) {
-                (Some(_), Some(o)) => {
-                    let i = self.active;
-                    self.open(&o, true);
-                    // the note in use stays in use, on the left
-                    self.split = self.active_path();
-                    self.split_right = true;
-                    self.active = i;
-                }
-                _ => self.toast("Abra outra nota para dividir a tela."),
-            }
-        }
+    /// Join every pane back into one (the one in use).
+    pub fn join_panes(&mut self) {
+        self.panes = None;
         self.save_session();
+    }
+
+    /// The panes side by side become stacked, and the other way round.
+    pub fn flip_panes(&mut self) {
+        if let Some(n) = self.panes.as_mut() {
+            n.flip();
+            self.save_session();
+        }
+    }
+
+    /// Every pane in each row or column the same size.
+    pub fn even_panes(&mut self) {
+        if let Some(n) = self.panes.as_mut() {
+            n.even_all();
+            self.save_session();
+        }
     }
 
     pub fn save_tab(&mut self, i: usize) {
@@ -1278,6 +1526,8 @@ impl eframe::App for App {
             }
             ctx.request_repaint();
         }
+        // tabs of the same note (one note in two panes) keep the same text
+        self.sync_clones();
         // autosave a second after the last keystroke
         let due: Vec<usize> = self.tabs.iter().enumerate().filter(|(_, t)| t.dirty() && t.last_edit.is_some_and(|e| e.elapsed() > Duration::from_millis(900))).map(|(i, _)| i).collect();
         for i in due {
@@ -1822,73 +2072,94 @@ impl App {
                 panels::empty_state(self, ui);
                 return;
             }
-            // a split: the other pane shows the tab of `split`
-            let other = self.split.as_ref().and_then(|sp| self.tabs.iter().position(|t| &t.path == sp)).filter(|&i| i != self.active);
-            let Some(other) = other else {
-                let rect = ui.available_rect_before_wrap();
+            self.fix_panes();
+            let full = ui.available_rect_before_wrap();
+            let Some(tree) = self.panes.clone() else {
                 self.pane_ui(ui, &mut actions, &mut sc_actions, &mut open_board, true);
-                dropped = self.picture_drop(ui, &[(rect, self.active)]);
+                dropped = self.picture_drop(ui, &[(full, self.active)]);
+                if let Some(uid) = self.tabs.get(self.active).map(|t| t.uid) {
+                    self.dock_ui(ui, &[(uid, full)]);
+                }
                 return;
             };
-            let full = ui.available_rect_before_wrap();
-            let mid = (full.left() + full.width() * self.split_frac).round();
-            let left = egui::Rect::from_min_max(full.min, egui::pos2(mid - 0.5, full.max.y));
-            let right = egui::Rect::from_min_max(egui::pos2(mid + 0.5, full.min.y), full.max);
-            let (li, ri) = if self.split_right { (self.active, other) } else { (other, self.active) };
-            let handle = egui::Rect::from_center_size(egui::pos2(mid, full.center().y), egui::vec2(9.0, full.height()));
+            let mut tree = tree;
+            tree.fit(full);
+            let (rects, handles) = tree.layout(full);
+            self.panes = Some(tree);
+            let grip = |h: &crate::panes::Handle| {
+                if h.down {
+                    egui::Rect::from_center_size(egui::pos2(h.span.center().x, h.at), egui::vec2(h.span.width(), 9.0))
+                } else {
+                    egui::Rect::from_center_size(egui::pos2(h.at, h.span.center().y), egui::vec2(9.0, h.span.height()))
+                }
+            };
+            let grips: Vec<egui::Rect> = handles.iter().map(grip).collect();
             let focused = self.active;
             let mut focus_to = None;
-            for (rect, i) in [(left, li), (right, ri)] {
-                let pressed = ui.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|q| rect.contains(q) && !handle.contains(q)));
+            let mut close = None;
+            let mut bodies = Vec::new();
+            for &(uid, rect) in &rects {
+                let Some(i) = self.uid_index(uid) else { continue };
+                let pressed = ui.input(|inp| inp.pointer.any_pressed() && inp.pointer.interact_pos().is_some_and(|q| rect.contains(q) && !grips.iter().any(|g| g.contains(q))));
                 if pressed && i != focused {
                     focus_to = Some(i);
                 }
+                let head = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.min.y + PANE_HEAD));
+                let body = egui::Rect::from_min_max(egui::pos2(rect.min.x, head.max.y), rect.max);
+                if self.pane_head(ui, head, i, i == focused) {
+                    close = Some(uid);
+                }
                 self.active = i;
-                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect).id_salt(("pane", i)), |ui| {
-                    ui.set_clip_rect(rect);
+                ui.allocate_new_ui(egui::UiBuilder::new().max_rect(body).id_salt(("pane", uid)), |ui| {
+                    ui.set_clip_rect(body);
                     self.pane_ui(ui, &mut actions, &mut sc_actions, &mut open_board, true);
                 });
                 self.active = focused;
-                // the pane in use is marked at the top
-                if i == focused {
-                    ui.painter().hline(rect.x_range(), rect.top() + 1.0, egui::Stroke::new(2.0_f32, p.accent_strong));
+                bodies.push((body, i));
+            }
+            // the lines between the panes move; a double click evens the two around it
+            for (h, g) in handles.iter().zip(&grips) {
+                let hr = ui.interact(*g, ui.id().with(("pane-line", &h.path, h.k)), egui::Sense::click_and_drag());
+                if hr.hovered() || hr.dragged() {
+                    ui.ctx().set_cursor_icon(if h.down { egui::CursorIcon::ResizeVertical } else { egui::CursorIcon::ResizeHorizontal });
+                }
+                if hr.dragged() {
+                    if let (Some(q), Some(n)) = (hr.interact_pointer_pos(), self.panes.as_mut()) {
+                        n.drag(h, if h.down { q.y } else { q.x });
+                    }
+                }
+                if hr.drag_stopped() {
+                    self.save_session();
+                }
+                if hr.double_clicked() {
+                    if let Some(n) = self.panes.as_mut() {
+                        n.even(h);
+                    }
+                    self.save_session();
+                }
+                let line = if hr.hovered() || hr.dragged() { egui::Stroke::new(2.0_f32, p.accent_strong) } else { egui::Stroke::new(1.0_f32, p.border) };
+                if h.down {
+                    ui.painter().hline(h.span.x_range(), h.at, line);
+                } else {
+                    ui.painter().vline(h.at, h.span.y_range(), line);
                 }
             }
-            // the line between the panes moves; a double click puts it back in the middle
-            let hr = ui.interact(handle, ui.id().with("split-handle"), egui::Sense::click_and_drag());
-            if hr.hovered() || hr.dragged() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            if hr.dragged() {
-                if let Some(q) = hr.interact_pointer_pos() {
-                    self.split_frac = ((q.x - full.left()) / full.width().max(1.0)).clamp(0.2, 0.8);
-                }
-            }
-            if hr.drag_stopped() {
-                self.save_session();
-            }
-            if hr.double_clicked() {
-                self.split_frac = 0.5;
-                self.save_session();
-            }
-            let line = if hr.hovered() || hr.dragged() { egui::Stroke::new(2.0_f32, p.accent_strong) } else { egui::Stroke::new(1.0_f32, p.border) };
-            ui.painter().vline(mid, full.y_range(), line);
-            dropped = self.picture_drop(ui, &[(left, li), (right, ri)]);
-            if let Some(i) = focus_to {
-                // the other pane becomes the one in use; the sides stay where they are
-                self.split = Some(self.tabs[self.active].path.clone());
-                self.split_right = !self.split_right;
+            dropped = self.picture_drop(ui, &bodies);
+            self.dock_ui(ui, &rects);
+            if let Some(i) = focus_to.filter(|&i| i < self.tabs.len()) {
+                // the other pane becomes the one in use; the panes stay where they are
                 self.active = i;
+                self.pane_focus = self.tabs[i].uid;
+            }
+            if let Some(uid) = close {
+                self.close_pane(uid);
             }
         });
         // pictures dragged from the side panel: into the pane they were dropped on
         if let Some((i, keys, line)) = dropped {
             if i != self.active && i < self.tabs.len() {
-                if self.split.is_some() {
-                    self.split = Some(self.tabs[self.active].path.clone());
-                    self.split_right = !self.split_right;
-                }
                 self.active = i;
+                self.pane_focus = self.tabs[i].uid;
             }
             self.insert_pictures_at(&keys, line);
         }
@@ -1906,6 +2177,93 @@ impl App {
         for a in sc_actions {
             self.sc_apply(a);
         }
+        self.sync_clones();
+    }
+
+    /// The strip on top of each pane when the centre is divided: what it
+    /// shows, a grip to drag it elsewhere, and a button to close it. True
+    /// when that button was clicked.
+    fn pane_head(&mut self, ui: &mut egui::Ui, rect: egui::Rect, i: usize, focused: bool) -> bool {
+        let p = self.palette;
+        let t = &self.tabs[i];
+        let uid = t.uid;
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, if focused { p.bg } else { p.bg_hover });
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, p.border));
+        // the pane in use is marked at the top
+        if focused {
+            painter.hline(rect.x_range(), rect.top() + 1.0, egui::Stroke::new(2.0_f32, p.accent_strong));
+        }
+        let xr = egui::Rect::from_center_size(egui::pos2(rect.right() - 14.0, rect.center().y), egui::vec2(20.0, 20.0));
+        let drag_rect = egui::Rect::from_min_max(rect.min, egui::pos2(xr.left() - 2.0, rect.max.y));
+        let r = ui.interact(drag_rect, ui.id().with(("pane-head", uid)), egui::Sense::click_and_drag());
+        if r.drag_started() {
+            self.pane_drag = Some(uid);
+        }
+        if r.hovered() && self.pane_drag.is_none() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        }
+        let cy = rect.center().y;
+        let ink = if focused { p.muted } else { p.faint };
+        painter.text(egui::pos2(rect.left() + 12.0, cy), egui::Align2::CENTER_CENTER, crate::icons::GRIP_VERTICAL, crate::kit::icon_font(12.0), if r.hovered() { p.muted } else { p.faint });
+        let copies = if t.is_note() { self.tabs.iter().filter(|o| o.path == t.path && o.is_note()).count() } else { 1 };
+        let twin = copies > 1;
+        let title = format!("{}{}{}", t.title(), if twin { format!("  ×{copies}") } else { String::new() }, if t.dirty() { " •" } else { "" });
+        let mut job = egui::text::LayoutJob::single_section(title, egui::TextFormat { font_id: if focused { crate::kit::medium(12.0) } else { egui::FontId::proportional(12.0) }, color: if focused { p.text } else { p.muted }, ..Default::default() });
+        job.wrap = egui::text::TextWrapping::truncate_at_width((xr.left() - rect.left() - 30.0).max(10.0));
+        let galley = ui.fonts(|f| f.layout_job(job));
+        painter.galley(egui::pos2(rect.left() + 24.0, cy - galley.size().y / 2.0), galley, ink);
+        if twin {
+            r.clone().on_hover_text("A mesma nota em outro painel: o que escrever num aparece no outro. Arraste para mudar de lugar.");
+        } else {
+            r.clone().on_hover_text("Arraste para mudar o painel de lugar: solte na borda de outro painel para pô-lo ao lado, acima ou abaixo, ou no meio para trocar os dois.");
+        }
+        let xresp = ui.interact(xr, ui.id().with(("pane-close", uid)), egui::Sense::click()).on_hover_text("Fechar o painel");
+        if xresp.hovered() {
+            painter.rect_filled(xr, 5.0, p.bg_active);
+        }
+        painter.text(xr.center(), egui::Align2::CENTER_CENTER, crate::icons::X, crate::kit::icon_font(11.0), p.muted);
+        xresp.clicked()
+    }
+
+    /// A pane (or a tab from the bar) dragged over the panes: the part of the
+    /// pane under the pointer it would take is shown, and on release it goes
+    /// there.
+    fn dock_ui(&mut self, ui: &egui::Ui, panes: &[(u64, egui::Rect)]) {
+        let Some(uid) = self.pane_drag else { return };
+        let ctx = ui.ctx();
+        if self.uid_index(uid).is_none() {
+            self.pane_drag = None;
+            return;
+        }
+        let pos = ctx.pointer_latest_pos();
+        let released = ctx.input(|i| i.pointer.any_released() || !i.pointer.any_down());
+        let spot = pos.and_then(|q| panes.iter().find(|(_, r)| r.contains(q)).map(|&(t, r)| (t, r, crate::panes::Side::at(r, q))));
+        if released {
+            self.pane_drag = None;
+            if let Some((target, _, side)) = spot {
+                self.dock(uid, target, side);
+            }
+            return;
+        }
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+        let Some((target, rect, side)) = spot else { return };
+        if target == uid {
+            return;
+        }
+        let p = self.palette;
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("pane-dock")));
+        let zone = side.preview(rect).shrink(4.0);
+        painter.rect(zone, 8.0, p.accent_strong.gamma_multiply(0.18), egui::Stroke::new(2.0_f32, p.accent_strong), egui::StrokeKind::Inside);
+        let hint = match side {
+            crate::panes::Side::Left => "À esquerda",
+            crate::panes::Side::Right => "À direita",
+            crate::panes::Side::Top => "Acima",
+            crate::panes::Side::Bottom => "Abaixo",
+            crate::panes::Side::Center => "Neste lugar",
+        };
+        painter.text(zone.center(), egui::Align2::CENTER_CENTER, hint, crate::kit::medium(13.0), p.accent_strong);
+        ctx.request_repaint();
     }
 
     /// Hovering a note link for a moment shows the note in a small window,
@@ -1968,7 +2326,8 @@ impl App {
             tab.live.spots.clear();
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
             let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
-            let pad = if centered { 32.0 } else { 14.0 };
+            // a narrow pane (the centre divided) keeps its room for the text
+            let pad = if centered && ui.available_width() > 420.0 { 32.0 } else { 14.0 };
             egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
                 let w = avail.min(max_w + 2.0 * pad);
@@ -1976,7 +2335,7 @@ impl App {
                 ui.horizontal_top(|ui| {
                     ui.add_space(side + pad);
                     ui.vertical(|ui| {
-                        ui.set_width((w - 2.0 * pad).max(200.0));
+                        ui.set_width((w - 2.0 * pad).max(140.0));
                         if centered {
                             ui.add_space(28.0);
                             // inline title

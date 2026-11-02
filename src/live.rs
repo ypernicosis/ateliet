@@ -210,7 +210,7 @@ pub fn source_with_queries(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host
     if tab.live.query_edit.is_some_and(|q| q >= blocks.len()) {
         tab.live.query_edit = None;
     }
-    let base = egui::Id::new(("source-pieces", &tab.path));
+    let base = egui::Id::new(("source-pieces", tab.uid, &tab.path));
     let mut changed = false;
     let mut q = 0;
     let n_pieces = pieces.len();
@@ -406,7 +406,7 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     let mut prop_edit: Option<PropEdit> = None;
     tab.live.refresh(&tab.text);
     let segs = tab.live.segs.clone();
-    let id = egui::Id::new(("live-editor", &tab.path));
+    let id = egui::Id::new(("live-editor", tab.uid, &tab.path));
     if segs.is_empty() && tab.live.active.is_none() {
         // an empty note: write right away
         tab.live.active = Some(0);
