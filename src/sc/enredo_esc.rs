@@ -96,6 +96,7 @@ enum Ev {
     Details(String),
     FocusAdd(String),
     ToChapter(String),
+    MoveToChapter(String, String),
     Open(String),
     Select(Sel),
     ToggleArc(String),
@@ -180,6 +181,21 @@ impl EnredoView {
                 en::set_range(&mut self.data, id, Some((a, b)));
             }
         }
+    }
+
+    /// Assign an existing or planned chapter, retaining the complete scene and undo.
+    fn send_scene_to_chapter(&mut self, sid: &str, path: &str, all: &[Col]) -> bool {
+        if en::scene_index(&self.data, sid).is_none() || !all.iter().any(|c| c.path == path) {
+            return false;
+        }
+        self.snapshot();
+        let place = Place::Cap(path.to_string());
+        self.place_scene(sid, &place, None);
+        self.esc.last = Some(place);
+        self.esc.edit = Some((sid.to_string(), Field::Title));
+        self.esc.focus = true;
+        self.changed();
+        true
     }
 
     /// The scene after `id` among those that share its chapter (or its lack of one).
@@ -363,7 +379,7 @@ impl EnredoView {
                                 } else {
                                     "·".into()
                                 };
-                                let (rr, sid, ch, seen) = self.esc_row(ui, p, &cenas[si], si, &num, k, w, place, dragging.as_deref(), &mut evs, &mut card_cmd);
+                                let (rr, sid, ch, seen) = self.esc_row(ui, p, &cenas[si], si, &num, k, w, place, all, dragging.as_deref(), &mut evs, &mut card_cmd);
                                 edited |= ch;
                                 seen_edit |= seen;
                                 cards.push((rr, sid));
@@ -497,7 +513,7 @@ impl EnredoView {
     /// One scene of the outline. Returns its rect, its id, whether its text
     /// changed and whether it is the one being typed in.
     #[allow(clippy::too_many_arguments)]
-    fn esc_row(&mut self, ui: &mut egui::Ui, p: Palette, s: &Json, si: usize, num: &str, k: usize, w: f32, place: &Place, dragging: Option<&str>, evs: &mut Vec<Ev>, card_cmd: &mut Option<(String, super::enredo_ui::CardCmd)>) -> (Rect, String, bool, bool) {
+    fn esc_row(&mut self, ui: &mut egui::Ui, p: Palette, s: &Json, si: usize, num: &str, k: usize, w: f32, place: &Place, all: &[Col], dragging: Option<&str>, evs: &mut Vec<Ev>, card_cmd: &mut Option<(String, super::enredo_ui::CardCmd)>) -> (Rect, String, bool, bool) {
         let sid = en::str_of(s, "id").to_string();
         let editing = self.esc.edit.as_ref().filter(|e| e.0 == sid).map(|e| e.1);
         let want_focus = editing.is_some() && self.esc.focus;
@@ -631,7 +647,7 @@ impl EnredoView {
                         ui.add(egui::Label::new(RichText::new(q).size(11.5).color(p.faint)).truncate());
                     }
                     if !matches!(place, Place::Cap(_)) {
-                        let r = kit::quiet(ui, Some(icons::ARROW_RIGHT), "capítulo", p).on_hover_text("Criar um capítulo a partir desta cena");
+                        let r = kit::quiet(ui, Some(icons::ARROW_RIGHT), "Enviar para…", p).on_hover_text("Escolher o capítulo desta cena");
                         extra_hits.push((r.rect, "chapter"));
                     }
                 });
@@ -667,8 +683,52 @@ impl EnredoView {
                     evs.push(Ev::Details(sid.clone()));
                 }
                 h.on_hover_text("Detalhes da cena (Ctrl+Enter)");
-            } else if h.clicked() {
-                evs.push(Ev::ToChapter(sid.clone()));
+            } else {
+                let popup = ui.make_persistent_id(("esc-send-chapter", &sid));
+                let query_id = popup.with("query");
+                let opened = h.clicked();
+                if opened {
+                    ui.memory_mut(|m| m.toggle_popup(popup));
+                    ui.data_mut(|d| d.insert_temp(query_id, String::new()));
+                }
+                let mut destination = None;
+                let mut create = false;
+                egui::popup_below_widget(ui, popup, &h, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+                    ui.set_min_width(280.0);
+                    ui.label(RichText::new("Enviar para capítulo").font(kit::medium(13.0)).color(p.text));
+                    ui.label(RichText::new("Buscar por número ou título").size(11.5).color(p.muted));
+                    let mut query = ui.data(|d| d.get_temp::<String>(query_id)).unwrap_or_default();
+                    let search = ui.add(egui::TextEdit::singleline(&mut query).desired_width(f32::INFINITY));
+                    if opened { search.request_focus(); }
+                    ui.data_mut(|d| d.insert_temp(query_id, query.clone()));
+                    let query = query.trim().to_lowercase();
+                    let matches: Vec<_> = all.iter().filter(|c| format!("{} {} {}", c.label, c.title, c.part).to_lowercase().contains(&query)).collect();
+                    egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                        for c in &matches {
+                            ui.push_id(&c.path, |ui| {
+                                let title = format!("{} · {}{}", c.label, c.title, if c.planned.is_some() { " (planejado)" } else { "" });
+                                if kit::Row::new(&title).icon(icons::BOOK_OPEN).show(ui, p).clicked() {
+                                    destination = Some(c.path.clone());
+                                }
+                            });
+                        }
+                        if matches.is_empty() {
+                            ui.label(RichText::new("Nenhum capítulo encontrado.").color(p.faint));
+                        }
+                    });
+                    if (search.has_focus() || search.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        destination = matches.first().map(|c| c.path.clone());
+                    }
+                    kit::hairline(ui, p);
+                    create = kit::quiet(ui, Some(icons::PLUS), "Criar capítulo a partir desta cena", p).clicked();
+                });
+                if let Some(path) = destination {
+                    ui.memory_mut(|m| m.close_popup());
+                    evs.push(Ev::MoveToChapter(sid.clone(), path));
+                } else if create {
+                    ui.memory_mut(|m| m.close_popup());
+                    evs.push(Ev::ToChapter(sid.clone()));
+                }
             }
         }
         let fill = if editing.is_some() || sel {
@@ -940,6 +1000,9 @@ impl EnredoView {
                 }
                 Ev::Open(c) => acts.push(Action::Open(c, true)),
                 Ev::ToggleArc(a) => self.arco = if self.arco.as_ref() == Some(&a) { None } else { Some(a) },
+                Ev::MoveToChapter(sid, path) => {
+                    self.send_scene_to_chapter(&sid, &path, all);
+                }
                 Ev::ToChapter(sid) => {
                     let Some(i) = en::scene_index(&self.data, &sid) else { continue };
                     let t = en::str_of(&self.data["cenas"][i], "titulo");
@@ -1002,5 +1065,65 @@ impl EnredoView {
     /// bands with scenes, then ideas), so a scene can move into an empty chapter.
     fn esc_places(&self) -> Vec<Place> {
         self.esc.order.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chapter(path: &str, planned: bool) -> Col {
+        Col {
+            path: path.into(), title: "Revelação".into(), label: "3".into(),
+            status: "ideia".into(), part: String::new(), tipo: "capitulo".into(),
+            numbered: true, include: true,
+            planned: planned.then(|| json!({"id": "chapter-plan"})), plan: None,
+        }
+    }
+
+    #[test]
+    fn sending_loose_or_ranged_scenes_preserves_contents_links_and_undo() {
+        for planned in [false, true] {
+            for ranged in [false, true] {
+                let mut view = EnredoView::new("book");
+                let path = if planned { "plan:chapter-plan" } else { "book/03.md" };
+                let columns = [chapter(path, planned)];
+                let first = en::new_scene(&mut view.data, Some(path), &[]);
+                let scene = en::new_scene(&mut view.data, None, &["mystery"]);
+                let i = en::scene_index(&view.data, &scene).unwrap();
+                view.data["cenas"][i]["titulo"] = json!("O relógio");
+                view.data["cenas"][i]["resumo"] = json!("Ele parou às 3h17.");
+                view.data["cenas"][i]["notas"] = json!("Preservar esta anotação.");
+                if ranged { en::set_range(&mut view.data, &scene, Some(("book/01.md", "book/05.md"))); }
+                view.data["pistas"] = json!([{"id": "clue", "plantios": [{"cena": scene, "nota": "Mostre o ponteiro."}], "colheitas": []}]);
+                let before = view.data.clone();
+                let contents = view.data["cenas"][i].clone();
+                assert!(view.send_scene_to_chapter(&scene, path, &columns));
+                let moved = &view.data["cenas"][en::scene_index(&view.data, &scene).unwrap()];
+                assert_eq!(en::cap_of(moved), Some(path));
+                assert!(en::range_of(moved).is_none());
+                for key in ["id", "titulo", "resumo", "notas", "tramas"] {
+                    assert_eq!(moved[key], contents[key], "{key}");
+                }
+                assert_eq!(view.data["pistas"], before["pistas"]);
+                let order: Vec<_> = en::scenes_in(&view.data, Some(path)).into_iter().map(|i| en::str_of(&view.data["cenas"][i], "id").to_string()).collect();
+                assert_eq!(order, vec![first, scene.clone()]);
+                assert_eq!(view.esc.edit, Some((scene, Field::Title)));
+                assert!(view.esc.focus);
+                assert_eq!(view.esc.undo.pop().unwrap(), before);
+            }
+        }
+    }
+
+    #[test]
+    fn missing_scene_or_chapter_does_not_change_the_outline() {
+        let mut view = EnredoView::new("book");
+        let scene = en::new_scene(&mut view.data, None, &[]);
+        let before = view.data.clone();
+        assert!(!view.send_scene_to_chapter(&scene, "removed.md", &[chapter("book/03.md", false)]));
+        assert!(!view.send_scene_to_chapter("removed-scene", "book/03.md", &[chapter("book/03.md", false)]));
+        assert_eq!(view.data, before);
+        assert!(view.esc.undo.is_empty());
+        assert!(view.esc.edit.is_none());
     }
 }

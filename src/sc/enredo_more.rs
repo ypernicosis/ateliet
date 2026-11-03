@@ -124,6 +124,46 @@ fn pick(ui: &mut egui::Ui, p: Palette, id: &str, glyph: &str, text: &str, active
     out
 }
 
+/// Search stays inside the picker, so choosing a scene preserves the workspace.
+fn scene_pick(ui: &mut egui::Ui, p: Palette, id: &str, items: &[(String, String)]) -> Option<String> {
+    let r = kit::chip(ui, Some(icons::PLUS), "Adicionar cena", false, p);
+    let popup = ui.make_persistent_id(("pista-scene-pick", id));
+    let search_id = popup.with("query");
+    let opened = r.clicked();
+    if opened {
+        ui.memory_mut(|m| m.toggle_popup(popup));
+        ui.data_mut(|d| d.insert_temp(search_id, String::new()));
+    }
+    let mut out = None;
+    egui::popup_below_widget(ui, popup, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_min_width(260.0);
+        let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+        ui.label(RichText::new("Buscar cena").size(11.5).color(p.muted));
+        let search = ui.add(egui::TextEdit::singleline(&mut query).desired_width(f32::INFINITY));
+        if opened { search.request_focus(); }
+        ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
+        let query = query.trim().to_lowercase();
+        let matches: Vec<_> = items.iter().filter(|(_, title)| title.to_lowercase().contains(&query)).collect();
+        if matches.is_empty() {
+            ui.label(RichText::new("Nenhuma cena disponível. Crie uma na Escaleta.").color(p.faint));
+        }
+        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+            for (sid, title) in &matches {
+                ui.push_id(sid, |ui| {
+                    if kit::Row::new(title).show(ui, p).clicked() {
+                        out = Some(sid.to_string());
+                    }
+                });
+            }
+        });
+        if (search.has_focus() || search.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            if let Some((sid, _)) = matches.first() { out = Some(sid.to_string()); }
+        }
+    });
+    if out.is_some() { ui.memory_mut(|m| m.close_popup()); }
+    out
+}
+
 fn scene_label(data: &Json, id: &str) -> String {
     match en::scene_index(data, id) {
         Some(i) => {
@@ -754,28 +794,32 @@ impl EnredoView {
                 }
                 let list = pi[kind].as_array_mut().unwrap();
                 let mut drop = None;
-                for (k, x) in list.iter().enumerate() {
+                for (k, x) in list.iter_mut().enumerate() {
                     let sid = en::str_of(x, "cena").to_string();
                     let l = labels.iter().find(|y| y.0 == sid).map(|y| y.1.clone()).unwrap_or_default();
-                    ui.horizontal(|ui| {
-                        let w = ui.available_width() - 26.0;
-                        ui.allocate_ui_with_layout(vec2(w, 28.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                            if kit::Row::new(&l).icon(icons::CLAPPERBOARD).show(ui, p).clicked() {
-                                goto = Some(Sel::Cena(sid.clone()));
+                    ui.push_id((kind, k), |ui| {
+                        ui.horizontal(|ui| {
+                            let w = (ui.available_width() - 26.0).max(40.0);
+                            ui.allocate_ui_with_layout(vec2(w, 28.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                                if kit::Row::new(&l).icon(icons::CLAPPERBOARD).show(ui, p).clicked() {
+                                    goto = Some(Sel::Cena(sid.clone()));
+                                }
+                            });
+                            if kit::icon_button_sized(ui, icons::X, "Desvincular cena", false, p, 20.0, 12.0).clicked() {
+                                drop = Some(k);
                             }
                         });
-                        if kit::icon_button_sized(ui, icons::X, "Tirar", false, p, 20.0, 12.0).clicked() {
-                            drop = Some(k);
-                        }
+                        ui.label(RichText::new(if kind == "plantios" { "Como aparece" } else { "O que se revela" }).size(11.5).color(p.muted));
+                        ch |= area(ui, p, x, "nota", if kind == "plantios" { "O detalhe que o leitor encontra nesta cena…" } else { "Como esta cena dá sentido à pista…" }, 2);
                     });
                 }
                 if let Some(k) = drop {
                     list.remove(k);
                     ch = true;
                 }
-                let items: Vec<(String, bool)> = scenes.iter().map(|s| (s.1.clone(), false)).collect();
-                if let Some(k) = pick(ui, p, kind, icons::PLUS, "cena", false, &items) {
-                    list.push(json!({ "cena": scenes[k].0 }));
+                let available: Vec<(String, String)> = scenes.iter().filter(|s| !list.iter().any(|x| x["cena"] == s.0.as_str() && en::str_of(x, "livro").is_empty())).cloned().collect();
+                if let Some(sid) = scene_pick(ui, p, kind, &available) {
+                    list.push(json!({ "cena": sid }));
                     if kind == "colheitas" && pi["estado"] == "aberta" {
                         pi["estado"] = json!("paga");
                     }
@@ -785,7 +829,7 @@ impl EnredoView {
         }
         label(ui, p, "Notas");
         let pi = &mut self.data["pistas"][i];
-        ch |= area(ui, p, pi, "notas", "Como o leitor deve perceber (ou não perceber) esta pista?", 3);
+        ch |= plain_area(ui, p, pi, "notas", "Como o leitor deve perceber (ou não perceber) esta pista?", 3);
         ui.add_space(10.0);
         if self.delete_button(ui, p, id, "Excluir pista") {
             self.data["pistas"].as_array_mut().unwrap().remove(i);
@@ -904,14 +948,6 @@ impl EnredoView {
         let id = en::uid("e");
         self.data["eventos"].as_array_mut().unwrap().push(json!({ "id": id, "titulo": "", "quando": "", "desc": "", "tramas": [] }));
         self.sel = Some(Sel::Evento(id));
-        self.focus_title = true;
-        self.changed();
-    }
-
-    pub(super) fn new_pista(&mut self) {
-        let id = en::uid("p");
-        self.data["pistas"].as_array_mut().unwrap().push(json!({ "id": id, "nome": "", "tipo": "pista", "estado": "aberta", "plantios": [], "colheitas": [], "notas": "" }));
-        self.sel = Some(Sel::Pista(id));
         self.focus_title = true;
         self.changed();
     }
@@ -1323,30 +1359,74 @@ impl EnredoView {
     pub(super) fn pistas(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
         let saga = srcs.len() > 1;
         let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
-        // every pista of the books shown, with its book
-        let all: Vec<(String, Json)> = srcs.iter().flat_map(|s| s.d(&self.data)["pistas"].as_array().cloned().unwrap_or_default().into_iter().map(move |x| (s.book.path.clone(), x))).collect();
+        let mut capture = false;
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 14)).show(ui, |ui| {
+            ui.label(RichText::new("Capture uma pista").font(kit::medium(13.0)).color(p.text));
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let items: Vec<(String, bool)> = en::PISTA_TIPOS.iter().enumerate().map(|(i, x)| (x.1.to_string(), i == self.pista_kind)).collect();
+                if let Some(k) = pick(ui, p, "capture-type", icons::TAG, en::PISTA_TIPOS[self.pista_kind].1, false, &items) {
+                    self.pista_kind = k;
+                }
+                let width = (ui.available_width() - 112.0).max(120.0);
+                let input = ui.add(egui::TextEdit::singleline(&mut self.pista_draft).desired_width(width).hint_text("Ex.: O relógio para sempre às 3h17"));
+                if std::mem::take(&mut self.pista_focus) { input.request_focus(); }
+                let enter = (input.has_focus() || input.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                capture = kit::button(ui, Some(icons::PLUS), "Adicionar", p).clicked() || enter;
+                if capture { self.pista_focus = true; }
+            });
+            ui.label(RichText::new("Enter adiciona e mantém o campo pronto para a próxima. Clique em uma pista para personalizar.").size(11.5).color(p.faint));
+        });
+        if capture && !self.pista_draft.trim().is_empty() {
+            let id = en::uid("p");
+            self.data["pistas"].as_array_mut().unwrap().push(json!({
+                "id": id, "nome": self.pista_draft.trim(), "tipo": en::PISTA_TIPOS[self.pista_kind].0,
+                "estado": "aberta", "plantios": [], "colheitas": [], "notas": ""
+            }));
+            self.pista_draft.clear();
+            self.pista_search.clear();
+            self.pista_filter = 0;
+            self.changed();
+        }
+        // Every pista of the books shown, with its book.
+        let mut all: Vec<(String, Json)> = srcs.iter().flat_map(|s| s.d(&self.data)["pistas"].as_array().cloned().unwrap_or_default().into_iter().map(move |x| (s.book.path.clone(), x))).collect();
         let abertas = all.iter().filter(|x| x.1["estado"] == "aberta").count();
         let pagas = all.iter().filter(|x| x.1["estado"] == "paga").count();
         let sem: Vec<String> = all.iter().map(|x| &x.1).filter(|x| x["estado"] == "aberta" && x["plantios"].as_array().is_some_and(|l| !l.is_empty()) && x["colheitas"].as_array().is_none_or(|l| l.is_empty())).map(|x| en::str_of(x, "nome").to_string()).collect();
-        let mut select = None;
         if all.is_empty() {
-            ui.add_space(90.0);
+            ui.add_space(32.0);
             ui.vertical_centered(|ui| {
-                ui.label(kit::icon(icons::KEY_ROUND, 32.0).color(p.faint));
-                ui.add_space(12.0);
-                ui.label(RichText::new("Plantar e colher").font(kit::medium(17.0)).color(p.text));
-                ui.add_space(6.0);
-                ui.allocate_ui(vec2(460.0, 80.0), |ui| {
-                    ui.label(RichText::new("Registre cada pista, mistério, promessa ou objeto que precisa voltar depois. Marque a cena onde é plantado e a cena onde é pago: o que ficou sem resposta aparece aqui, inclusive entre livros da saga.").color(p.muted));
-                });
-                ui.add_space(14.0);
-                if kit::primary_icon(ui, icons::PLUS, "Nova pista", p).clicked() {
-                    select = Some(());
+                ui.label(RichText::new("Uma frase já basta para começar.").font(kit::medium(17.0)).color(p.text));
+                ui.label(RichText::new("Depois, escolha onde plantar a pista e onde revelar seu sentido.").color(p.muted));
+            });
+            return;
+        }
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 0)).show(ui, |ui| {
+            ui.label(RichText::new("Buscar pistas").size(11.5).color(p.muted));
+            ui.add(egui::TextEdit::singleline(&mut self.pista_search).desired_width(f32::INFINITY));
+            ui.horizontal_wrapped(|ui| {
+                for (k, title) in ["Todas", "Abertas", "Pagas", "Sem plantio", "Sem colheita"].iter().enumerate() {
+                    if kit::chip(ui, None, title, self.pista_filter == k, p).clicked() {
+                        self.pista_filter = k;
+                    }
                 }
             });
-            if select.is_some() {
-                self.new_pista();
-            }
+        });
+        let query = self.pista_search.trim().to_lowercase();
+        all.retain(|(_, pi)| {
+            let has = |key: &str| pi[key].as_array().is_some_and(|a| !a.is_empty());
+            let state_matches = match self.pista_filter {
+                1 => pi["estado"] == "aberta",
+                2 => pi["estado"] == "paga",
+                3 => pi["estado"] == "aberta" && !has("plantios"),
+                4 => pi["estado"] == "aberta" && has("plantios") && !has("colheitas"),
+                _ => true,
+            };
+            state_matches && ["nome", "notas", "tipo"].iter().any(|key| en::str_of(pi, key).to_lowercase().contains(&query))
+        });
+        if all.is_empty() {
+            ui.add_space(20.0);
+            ui.label(RichText::new("Nenhuma pista corresponde à busca e aos filtros.").color(p.muted));
             return;
         }
         // columns: each book's ideas, then its chapters
@@ -1585,4 +1665,3 @@ impl EnredoView {
         }
     }
 }
-

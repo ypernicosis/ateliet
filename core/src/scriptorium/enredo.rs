@@ -15,7 +15,7 @@ pub const TRAMA_CORES: [&str; 10] = ["#7a2e3b", "#2f6b6b", "#4b5bb3", "#b07a36",
 
 pub const TRAMA_TIPOS: [(&str, &str); 5] = [("principal", "Trama principal"), ("subtrama", "Subtrama"), ("personagem", "Trama de personagem"), ("tema", "Linha temática"), ("misterio", "Mistério")];
 
-pub const PISTA_TIPOS: [(&str, &str); 7] = [("pista", "Pista"), ("misterio", "Mistério"), ("promessa", "Promessa"), ("objeto", "Objeto"), ("segredo", "Segredo"), ("profecia", "Profecia"), ("armadilha", "Arma de Tchekhov")];
+pub const PISTA_TIPOS: [(&str, &str); 8] = [("pista", "Pista"), ("foreshadowing", "Foreshadowing"), ("misterio", "Mistério"), ("promessa", "Promessa"), ("objeto", "Objeto"), ("segredo", "Segredo"), ("profecia", "Profecia"), ("armadilha", "Arma de Tchekhov")];
 
 pub const ARCO_TIPOS: [(&str, &str); 4] = [("positivo", "Positivo (mentira → verdade)"), ("negativo", "Negativo (verdade → mentira)"), ("plano", "Plano (a verdade muda o mundo)"), ("queda", "Queda (mentira → mentira pior)")];
 
