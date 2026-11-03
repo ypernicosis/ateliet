@@ -154,7 +154,7 @@ impl MundoView {
             ui.label(RichText::new("Novo mapa interativo").font(kit::medium(16.0)).color(p.text));
             ui.add_space(8.0);
             ui.label(RichText::new("Nome do mapa").size(12.0).color(p.muted));
-            let r = ui.add(egui::TextEdit::singleline(&mut nm.name).desired_width(f32::INFINITY).hint_text(RichText::new("Ex.: Continente de Álfheim").color(p.faint)).margin(egui::Margin::symmetric(8, 6)));
+            let r = ui.add(egui::TextEdit::singleline(&mut nm.name).desired_width(f32::INFINITY).hint_text(RichText::new("").color(p.faint)).margin(egui::Margin::symmetric(8, 6)));
             if nm.focus {
                 r.request_focus();
                 if r.has_focus() {

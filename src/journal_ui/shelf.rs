@@ -209,7 +209,7 @@ impl Journal {
             ui.label(RichText::new("Novo caderno").font(kit::bold(17.0)).color(p.text));
             ui.add_space(12.0);
             ui.label(RichText::new("Nome").size(12.5).color(p.muted));
-            let r = ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("Natureza, Diário de 2026…").desired_width(f32::INFINITY));
+            let r = ui.add(egui::TextEdit::singleline(&mut d.name).hint_text("").desired_width(f32::INFINITY));
             if d.focus {
                 r.request_focus();
                 d.focus = false;

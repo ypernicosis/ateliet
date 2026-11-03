@@ -380,7 +380,7 @@ impl EnredoView {
         let has_details = ["local", "quando", "objetivo", "conflito", "desfecho", "valor"].iter().any(|k| !en::str_of(s, k).is_empty());
         sec(ui, p, "Detalhes", icons::LIST, has_details, |ui| {
             ch |= line(ui, p, "Local", s, "local", "Onde?");
-            ch |= line(ui, p, "Quando", s, "quando", "Ex.: Ano 3, inverno");
+            ch |= line(ui, p, "Quando", s, "quando", "");
             let q = en::str_of(s, "quando");
             if !q.is_empty() {
                 ui.horizontal(|ui| {
@@ -395,7 +395,7 @@ impl EnredoView {
                 label(ui, p, l);
                 ch |= area(ui, p, s, k, "", 2);
             }
-            ch |= line(ui, p, "Valor em jogo", s, "valor", "Ex.: confiança → traição");
+            ch |= line(ui, p, "Valor em jogo", s, "valor", "");
         });
         if let Some(sid) = new_trama_for {
             self.new_trama = Some((String::new(), Some(sid)));
@@ -951,8 +951,8 @@ impl EnredoView {
             ch = true;
         }
         for (k, l, ph) in [
-            ("mentira", "A mentira em que acredita", "Ex.: deve haver uma razão para a dor existir"),
-            ("verdade", "A verdade que precisa aprender", "Ex.: o amor não precisa de motivo"),
+            ("mentira", "A mentira em que acredita", ""),
+            ("verdade", "A verdade que precisa aprender", ""),
             ("desejo", "O que deseja", ""),
             ("necessidade", "Do que precisa", ""),
             ("ferida", "A ferida (o porquê da mentira)", ""),
@@ -1005,7 +1005,7 @@ impl EnredoView {
         let tramas: Vec<(String, String)> = self.data["tramas"].as_array().into_iter().flatten().map(|t| (en::str_of(t, "id").to_string(), en::str_of(t, "nome").to_string())).collect();
         let ev = &mut self.data["eventos"][i];
         ch |= title_edit(ui, p, ev, "titulo", "O que aconteceu?", &mut focus);
-        ch |= line(ui, p, "Quando", ev, "quando", "Ex.: 1288, Ano 3 inverno");
+        ch |= line(ui, p, "Quando", ev, "quando", "");
         ui.horizontal(|ui| {
             ui.add_space(100.0);
             ui.label(RichText::new(match en::parse_quando(en::str_of(ev, "quando")) {
@@ -1098,7 +1098,7 @@ impl EnredoView {
             ui.set_width(380.0);
             ui.label(RichText::new(if e.id.is_some() { "Era" } else { "Nova era" }).font(kit::medium(16.0)).color(p.text));
             ui.add_space(12.0);
-            for (l, v, h) in [("Nome", &mut e.nome, "Ex.: Era dos Estelares"), ("Começa em", &mut e.de, "Ex.: 1200, Ano 3"), ("Termina em", &mut e.ate, "Ex.: 1350")] {
+            for (l, v, h) in [("Nome", &mut e.nome, ""), ("Começa em", &mut e.de, ""), ("Termina em", &mut e.ate, "")] {
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(vec2(90.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.label(RichText::new(l).color(p.muted));
@@ -1447,36 +1447,51 @@ impl EnredoView {
     // ── Pistas ────────────────────────────────────────────────────────────
 
     pub(super) fn pistas(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 20)).show(ui, |ui| {
+            ui.set_max_width(ui.available_width().min(1040.0));
+            self.pistas_workspace(ui, p, srcs);
+        });
+    }
+
+    fn pistas_workspace(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
         let saga = srcs.len() > 1;
         let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
-        ui.add_space(10.0);
-        ui.horizontal(|ui| {
-            for (k, title) in ["Pistas narrativas", "Motivos recorrentes"].iter().enumerate() {
-                if kit::chip(ui, None, title, self.pista_model == k, p).clicked() {
-                    self.pista_model = k; self.pista_kind = 0; self.pista_filter = 0; self.pista_search.clear();
-                }
-            }
-        });
+        let categories = if ui.available_width() < 430.0 { [("", "Narrativas"), ("", "Recorrentes")] } else { [("", "Pistas narrativas"), ("", "Motivos recorrentes")] };
+        if let Some(k) = kit::segmented(ui, &categories, self.pista_model, p) {
+            self.pista_model = k; self.pista_kind = 0; self.pista_filter = 0; self.pista_search.clear();
+        }
+        ui.add_space(20.0);
         let recurring = self.pista_model == 1;
         let types: &[(&str, &str)] = if recurring { &en::MOTIVO_TIPOS } else { &en::PISTA_TIPOS };
-        let mut capture = false;
-        egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 14)).show(ui, |ui| {
-            ui.label(RichText::new(if recurring { "Registre um motivo" } else { "Capture uma pista" }).font(kit::medium(13.0)).color(p.text));
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                let items: Vec<(String, bool)> = types.iter().enumerate().map(|(i, x)| (x.1.to_string(), i == self.pista_kind)).collect();
-                if let Some(k) = pick(ui, p, "capture-type", icons::TAG, types[self.pista_kind].1, false, &items) {
-                    self.pista_kind = k;
-                }
-                let width = (ui.available_width() - 112.0).max(120.0);
-                let input = ui.add(egui::TextEdit::singleline(&mut self.pista_draft).desired_width(width).hint_text(if recurring { "Ex.: A caneca de chá do Soren" } else { "Ex.: O relógio para sempre às 3h17" }));
-                if std::mem::take(&mut self.pista_focus) { input.request_focus(); }
-                let enter = (input.has_focus() || input.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                capture = kit::button(ui, Some(icons::PLUS), "Adicionar", p).clicked() || enter;
-                if capture { self.pista_focus = true; }
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(if recurring { "Novo motivo" } else { "Nova pista" }).font(kit::medium(12.0)).color(p.muted));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let items: Vec<_> = types.iter().enumerate().map(|(i, x)| (x.1.to_string(), i == self.pista_kind)).collect();
+                if let Some(k) = pick(ui, p, "capture-type", icons::TAG, types[self.pista_kind].1, false, &items) { self.pista_kind = k; }
             });
-            ui.label(RichText::new("Enter adiciona e mantém o campo pronto. Clique em um registro para personalizar.").size(11.5).color(p.faint));
         });
+        ui.add_space(6.0);
+        let mut capture = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let action = if ui.available_width() >= 360.0 { "Adicionar" } else { "" };
+            let button_w = kit::primary_icon_width(ui, icons::PLUS, action);
+            let width = (ui.available_width() - button_w - 8.0).max(48.0);
+            let input = ui.add_sized([width, 34.0], egui::TextEdit::singleline(&mut self.pista_draft)
+                .id(ui.make_persistent_id("pista-capture"))
+                .desired_width(width).margin(egui::Margin::symmetric(10, 7)));
+            if std::mem::take(&mut self.pista_focus) { input.request_focus(); }
+            let enter = (input.has_focus() || input.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let ready = !self.pista_draft.trim().is_empty();
+            let button = ui.add_enabled_ui(ready, |ui| kit::primary_icon(ui, icons::PLUS, action, p)).inner.on_hover_text("Adicionar · Enter");
+            #[cfg(test)]
+            ui.data_mut(|d| d.insert_temp(egui::Id::new("pista-capture-geometry"), (input.rect, button.rect)));
+            capture = (button.clicked() || enter) && ready;
+            if capture { self.pista_focus = true; }
+        });
+        ui.add_space(22.0);
+        kit::hairline(ui, p);
+        ui.add_space(16.0);
         if capture && !self.pista_draft.trim().is_empty() {
             let record = en::pista_record(self.pista_draft.trim(), types[self.pista_kind].0, recurring);
             self.data["pistas"].as_array_mut().unwrap().push(record);
@@ -1500,9 +1515,9 @@ impl EnredoView {
             });
             return;
         }
-        egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 0)).show(ui, |ui| {
-            ui.label(RichText::new("Buscar pistas").size(11.5).color(p.muted));
-            ui.add(egui::TextEdit::singleline(&mut self.pista_search).desired_width(f32::INFINITY));
+        ui.scope(|ui| {
+            kit::search_field(ui, &mut self.pista_search, "Buscar pistas", p);
+            ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 for (k, title) in ["Todas", "Abertas", "Pagas", "Sem plantio", "Sem colheita"].iter().enumerate() {
                     if kit::chip(ui, None, title, self.pista_filter == k, p).clicked() {
@@ -1647,9 +1662,11 @@ impl EnredoView {
     }
 
     fn motivos_list(&mut self, ui: &mut egui::Ui, p: Palette, all: &[(String, Json)], srcs: &[Src], current: &str) {
-        ui.label(RichText::new("Objetos, gestos, imagens e metáforas que voltam ao longo da obra.").color(p.muted));
-        ui.label("Buscar motivos, sentidos e ocorrências");
-        ui.add(egui::TextEdit::singleline(&mut self.pista_search).desired_width(f32::INFINITY));
+        kit::search_field(ui, &mut self.pista_search, "Buscar motivos", p).on_hover_text("Busca no nome, nos sentidos, nas associações e nas ocorrências");
+        ui.add_space(14.0);
+        let count = all.len();
+        ui.label(RichText::new(format!("{count} {}", if count == 1 { "motivo" } else { "motivos" })).size(11.5).color(p.faint));
+        ui.add_space(6.0);
         let query = self.pista_search.trim().to_lowercase();
         let mut select = None;
         let mut found = 0;
@@ -1658,16 +1675,17 @@ impl EnredoView {
                 if !pi.to_string().to_lowercase().contains(&query) { continue; }
                 found += 1;
                 ui.push_id((book, en::str_of(pi, "id")), |ui| {
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                     let title = en::str_of(pi, "nome");
-                    if kit::Row::new(if title.is_empty() { "Motivo sem nome" } else { title }).icon(icons::KEY_ROUND).show(ui, p).clicked() {
+                    let selected = book == current && matches!(&self.sel, Some(Sel::Pista(id)) if id == en::str_of(pi, "id"));
+                    if kit::Row::new(if title.is_empty() { "Motivo sem nome" } else { title }).icon(icons::LAYERS).selected(selected).show(ui, p).clicked() {
                         select = Some((book.clone(), Sel::Pista(en::str_of(pi, "id").to_string())));
                     }
                     let meaning = en::str_of(pi, "sentido");
                     if !meaning.is_empty() { ui.label(RichText::new(meaning).color(p.muted)); }
                     let links = pi["ocorrencias"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
                     let tipo = en::MOTIVO_TIPOS.iter().find(|x| x.0 == en::str_of(pi, "tipo")).map(|x| x.1).unwrap_or("Motivo");
-                    ui.label(RichText::new(format!("{tipo} · {} ocorrências", links.len())).size(11.5).color(p.faint));
+                    ui.label(RichText::new(format!("{tipo} · {} {}", links.len(), if links.len() == 1 { "ocorrência" } else { "ocorrências" })).size(11.5).color(p.faint));
                     let associations = en::str_of(pi, "associacoes");
                     if !associations.is_empty() { ui.label(RichText::new(associations).size(12.0).color(p.muted)); }
                     ui.horizontal_wrapped(|ui| {
@@ -1681,11 +1699,12 @@ impl EnredoView {
                             }
                         }
                     });
+                    ui.add_space(12.0);
                     kit::hairline(ui, p);
                 });
             }
         });
-        if found == 0 { ui.label(RichText::new("Nenhum motivo por aqui. Registre um acima ou ajuste a busca.").color(p.muted)); }
+        if found == 0 { ui.label(RichText::new("Nenhum motivo encontrado.").color(p.muted)); }
         if let Some((book, sel)) = select {
             if book == current { self.sel = Some(sel); self.confirm = None; } else { self.go_book(&book, Some(sel)); }
         }
@@ -1827,6 +1846,41 @@ mod pista_model_tests {
         out
     }
 
+    pub(super) fn sources() -> Vec<Src> {
+        vec![Src { book: Book { path: "Livro.md".into(), folder: "Livro".into(), title: "Livro".into(), subtitle: String::new(), author: String::new(), serie: String::new(), volume: String::new(), goal: 0, deadline: String::new(), color: String::new(), manuscript: String::new(), created: 0, modified: 0, fm: json!({}) }, data: None, cols: Vec::new() }]
+    }
+
+    pub(super) fn fixture(model: usize) -> EnredoView {
+        let mut view = EnredoView::new("Livro.md");
+        view.pista_model = model;
+        view.data["cenas"] = json!([{"id": "scene", "titulo": "A visita", "cap": null}]);
+        let mut record = en::pista_record("A caneca", "simbolo", model == 1);
+        record["ocorrencias"] = json!([{"cena": "scene", "nota": "Um gesto se repete."}]);
+        view.data["pistas"] = json!([record]);
+        view
+    }
+
+    #[test]
+    fn capture_controls_stay_on_one_row_in_narrow_and_wide_panes() {
+        for width in [352.0, 520.0, 1280.0] {
+            for model in [0, 1] {
+                let ctx = egui::Context::default();
+                ctx.set_fonts(crate::fonts::definitions());
+                let p = Palette::new(&crate::config::Appearance::default());
+                let mut view = fixture(model);
+                for _ in 0..3 {
+                    let out = ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(width, 800.0))), ..Default::default() }, |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| view.pistas(ui, p, &sources()));
+                    });
+                    let (input, button) = ctx.data(|d| d.get_temp::<(Rect, Rect)>(egui::Id::new("pista-capture-geometry"))).unwrap();
+                    assert!((input.center().y - button.center().y).abs() < 3.0, "{width}: {input:?} {button:?}");
+                    assert!(button.right() <= width && input.right() < button.left());
+                    assert!(!texts(&out.shapes).contains("Ex.:"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn recurring_drawer_uses_meanings_and_occurrences_instead_of_payoff_controls() {
         let ctx = egui::Context::default();
@@ -1847,6 +1901,88 @@ mod pista_model_tests {
         assert!(output.contains("Sentido / metáfora"));
         for control in ["Plantada em", "Paga em", "Abandonada", "Colher aqui"] {
             assert!(!output.contains(control), "{control} must not be a recurring-element control");
+        }
+    }
+}
+
+#[cfg(test)]
+mod polish_previews {
+    use super::*;
+    use egui::epaint::{ImageData, Primitive};
+    use std::collections::HashMap;
+
+    fn render(ctx: &egui::Context, outputs: Vec<egui::FullOutput>, size: [f32; 2], path: &Path) {
+        let mut textures: HashMap<egui::TextureId, egui::ColorImage> = HashMap::new();
+        let mut shapes = Vec::new();
+        let mut pixels_per_point = 1.0;
+        for output in outputs {
+            for (id, delta) in output.textures_delta.set {
+                let patch = match delta.image {
+                    ImageData::Color(image) => (*image).clone(),
+                    ImageData::Font(image) => egui::ColorImage { size: image.size, pixels: image.srgba_pixels(None).collect() },
+                };
+                if let Some([x, y]) = delta.pos {
+                    let image = textures.get_mut(&id).unwrap();
+                    for row in 0..patch.size[1] {
+                        let start = (y + row) * image.size[0] + x;
+                        image.pixels[start..start + patch.size[0]].copy_from_slice(&patch.pixels[row * patch.size[0]..(row + 1) * patch.size[0]]);
+                    }
+                } else { textures.insert(id, patch); }
+            }
+            shapes = output.shapes; pixels_per_point = output.pixels_per_point;
+        }
+        let width = (size[0] * pixels_per_point) as u32;
+        let height = (size[1] * pixels_per_point) as u32;
+        let mut canvas = image::RgbaImage::from_pixel(width, height, image::Rgba([255, 255, 255, 255]));
+        for clipped in ctx.tessellate(shapes, pixels_per_point) {
+            let Primitive::Mesh(mesh) = clipped.primitive else { continue };
+            let texture = &textures[&mesh.texture_id];
+            let clip = clipped.clip_rect * pixels_per_point;
+            for tri in mesh.indices.chunks_exact(3) {
+                let v = tri.iter().map(|i| mesh.vertices[*i as usize]).collect::<Vec<_>>();
+                let q = v.iter().map(|v| v.pos * pixels_per_point).collect::<Vec<_>>();
+                let det = (q[1].y-q[2].y)*(q[0].x-q[2].x)+(q[2].x-q[1].x)*(q[0].y-q[2].y);
+                if det.abs() < 0.001 { continue; }
+                let min_x = q.iter().map(|p| p.x).fold(f32::INFINITY, f32::min).max(clip.min.x).max(0.0).floor() as u32;
+                let min_y = q.iter().map(|p| p.y).fold(f32::INFINITY, f32::min).max(clip.min.y).max(0.0).floor() as u32;
+                let max_x = q.iter().map(|p| p.x).fold(0.0, f32::max).min(clip.max.x).min(width as f32).ceil() as u32;
+                let max_y = q.iter().map(|p| p.y).fold(0.0, f32::max).min(clip.max.y).min(height as f32).ceil() as u32;
+                for y in min_y..max_y { for x in min_x..max_x {
+                    let (px, py) = (x as f32+0.5, y as f32+0.5);
+                    let a = ((q[1].y-q[2].y)*(px-q[2].x)+(q[2].x-q[1].x)*(py-q[2].y))/det;
+                    let b = ((q[2].y-q[0].y)*(px-q[2].x)+(q[0].x-q[2].x)*(py-q[2].y))/det;
+                    let c = 1.0-a-b;
+                    if a < 0.0 || b < 0.0 || c < 0.0 { continue; }
+                    let uv = v[0].uv.to_vec2()*a+v[1].uv.to_vec2()*b+v[2].uv.to_vec2()*c;
+                    let tx = ((uv.x*texture.size[0] as f32) as usize).min(texture.size[0]-1);
+                    let ty = ((uv.y*texture.size[1] as f32) as usize).min(texture.size[1]-1);
+                    let texel = texture.pixels[ty*texture.size[0]+tx].to_array();
+                    let mut color = [0.0; 4];
+                    for k in 0..4 { color[k] = (v[0].color[k] as f32*a+v[1].color[k] as f32*b+v[2].color[k] as f32*c)*texel[k] as f32/255.0; }
+                    let dest = canvas.get_pixel_mut(x, y);
+                    for k in 0..3 { dest[k] = (color[k]+dest[k] as f32*(1.0-color[3]/255.0)).min(255.0) as u8; }
+                }}
+            }
+        }
+        canvas.save(path).unwrap();
+    }
+
+    #[test]
+    #[ignore = "writes PNGs for manual visual QA"]
+    fn workspace_previews() {
+        let out = std::path::PathBuf::from("/tmp/ateliet-polish");
+        std::fs::create_dir_all(&out).unwrap();
+        for (name, width, model, populated) in [("motivos-wide", 1280.0, 1, true), ("motivos-narrow", 352.0, 1, true), ("pistas-wide", 1280.0, 0, true), ("empty", 520.0, 1, false)] {
+            let ctx = egui::Context::default();
+            ctx.set_fonts(crate::fonts::definitions());
+            let p = crate::theme::apply(&ctx, &crate::config::Appearance::default());
+            let mut view = super::pista_model_tests::fixture(model);
+            if !populated { view.data["pistas"] = json!([]); }
+            let size = [width, 680.0];
+            let outputs = (0..4).map(|_| ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(size[0], size[1]))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| view.pistas(ui, p, &super::pista_model_tests::sources()));
+            })).collect();
+            render(&ctx, outputs, size, &out.join(format!("{name}.png")));
         }
     }
 }

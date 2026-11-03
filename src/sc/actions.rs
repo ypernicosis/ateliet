@@ -102,12 +102,12 @@ impl App {
             Purpose::NewBook,
             "Criar",
             vec![
-                Field::text("titulo", "Título", "").hint("Ex.: A Torre de Vidro"),
+                Field::text("titulo", "Título", "").hint(""),
                 Field::text("subtitulo", "Subtítulo", ""),
                 Field::text("autor", "Autor", &author),
                 Field::text("serie", "Série (opcional)", ""),
                 Field::text("volume", "Volume", ""),
-                Field::text("genero", "Gênero", "").hint("Ex.: Fantasia"),
+                Field::text("genero", "Gênero", ""),
                 Field::text("meta", "Meta de palavras", "80000"),
                 Field::text("prazo", "Prazo (AAAA-MM-DD)", ""),
                 Field::area("sinopse", "Sinopse", ""),
@@ -131,8 +131,8 @@ impl App {
             Purpose::NewChapter { book: book.to_string() },
             "Criar",
             vec![
-                Field::text("titulo", "Título", "").hint("Ex.: Preparativos"),
-                Field::text("parte", "Parte / arco (opcional)", parts.last().map(String::as_str).unwrap_or("")).hint("Ex.: Ato Um"),
+                Field::text("titulo", "Título", ""),
+                Field::text("parte", "Parte / arco (opcional)", parts.last().map(String::as_str).unwrap_or("")),
                 Field::select("tipo", "Tipo", "capitulo", &CHAPTER_TYPES),
             ],
         ));

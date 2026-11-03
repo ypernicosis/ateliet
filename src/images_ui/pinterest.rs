@@ -220,7 +220,7 @@ impl ImagesState {
             ui.label(RichText::new("Trazer do Pinterest").font(kit::medium(17.0)).color(p.text));
             ui.label(RichText::new(match &self.shared { Some(_) => "As imagens vão para a biblioteca compartilhada (a mesma do Pictogrep).", None => "Sem biblioteca compartilhada, as imagens vão para a pasta Pinterest do cofre." }).size(12.0).color(p.muted));
             ui.add_space(8.0);
-            ui.add(egui::TextEdit::singleline(&mut f.url).hint_text("https://pinterest.com/usuario/pasta/").desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
+            ui.add(egui::TextEdit::singleline(&mut f.url).hint_text("").desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 for (k, l) in [("new", format!("Nova {unit}")), ("existing", format!("{} existente", if unit == "coleção" { "Coleção" } else { "Pasta" })), ("direct", "Direto".to_string())] {

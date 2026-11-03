@@ -652,7 +652,7 @@ impl SheetView {
                 card(ui, p, |ui| {
                     ui.label(RichText::new(if *is_list { "Nova lista de pessoas" } else { "Nova seção" }).font(kit::medium(13.0)).color(p.text));
                     ui.add_space(6.0);
-                    let r = ui.add(egui::TextEdit::singleline(title).hint_text(if *is_list { "Ex.: família, rivais, mentores" } else { "Ex.: Poderes, Segredos, Voz, Medos" }).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
+                    let r = ui.add(egui::TextEdit::singleline(title).hint_text(if *is_list { "" } else { "" }).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
                     r.request_focus();
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {

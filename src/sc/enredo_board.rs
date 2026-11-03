@@ -805,11 +805,11 @@ impl EnredoView {
                     ui.add_space(6.0);
                 };
                 if let Some(lab) = e.link_label.as_mut() {
-                    field(ui, "Rótulo", lab, "Ex.: irmãos, traiu, ama, deve a vida", 1, true);
+                    field(ui, "Rótulo", lab, "", 1, true);
                 } else {
                     match kind.as_str() {
                         "link" => {
-                            field(ui, "Endereço", &mut e.url, "https://… ou [[nota]]", 1, true);
+                            field(ui, "Endereço", &mut e.url, "", 1, true);
                             field(ui, "Título", &mut e.titulo, "", 1, false);
                             field(ui, "Por que guardar?", &mut e.texto, "", 3, false);
                         }
