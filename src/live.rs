@@ -1,7 +1,6 @@
-//! Live Preview: the note is split into top-level blocks; every block is shown
-//! rendered except the one being edited, which becomes a text editor of its
-//! own lines. Clicking a block edits it; arrows at its edges move to the
-//! neighbouring block; Escape shows it rendered again.
+//! Live Preview renders the resting note as blocks. Editing uses one buffer
+//! for the entire document, so selections, deletion and undo cross paragraphs.
+//! Escape returns to the fully rendered note, including embeds and queries.
 
 use crate::editor;
 use crate::markdown::{self, Doc};
@@ -81,15 +80,12 @@ pub fn segments(text: &str) -> Vec<Segment> {
 pub struct LiveState {
     key: u64,
     pub segs: Vec<Segment>,
-    /// The block being edited: its first line, and its text while editing.
+    /// An editing session owns the whole note (always starts at line zero).
     pub active: Option<usize>,
     pub buf: String,
     pub buf_end: usize,
-    pub highlight: editor::HighlightCache,
     /// Where to put the cursor when a block opens (char index), or the end.
     pub cursor_at: Option<usize>,
-    /// Where the block was clicked to open it: the cursor goes there.
-    pub click: Option<egui::Pos2>,
     /// In the source editor: the query block (by its order) shown as code.
     pub query_edit: Option<usize>,
     query_focus: bool,
@@ -97,6 +93,10 @@ pub struct LiveState {
     /// The blocks as drawn this frame, top to bottom: (top, bottom, first
     /// line, last line). Where a dragged picture would land.
     pub spots: Vec<(f32, f32, usize, usize)>,
+    /// Last rendered text hit targets, retained for press-and-drag activation.
+    edit_targets: Vec<(egui::Rect, usize)>,
+    /// A press begun on rendered text must keep its anchor through editor activation.
+    drag_anchor: Option<usize>,
 }
 
 impl LiveState {
@@ -110,11 +110,12 @@ impl LiveState {
         }
     }
 
-    pub fn open(&mut self, seg: &Segment, cursor_at_end: bool) {
-        self.active = Some(seg.start);
-        self.buf = seg.text.clone();
-        self.buf_end = seg.end;
-        self.cursor_at = Some(if cursor_at_end { seg.text.chars().count() } else { 0 });
+    pub fn open_document(&mut self, text: &str, cursor: usize) {
+        self.active = Some(0);
+        self.buf = text.to_string();
+        self.buf_end = text.split('\n').count().saturating_sub(1);
+        self.cursor_at = Some(cursor.min(text.chars().count()));
+        self.drag_anchor = None;
     }
 
     /// The line a picture dropped at height `y` goes before, and the height
@@ -133,29 +134,10 @@ impl LiveState {
 
     pub fn close(&mut self) {
         self.active = None;
-        self.click = None;
+        self.drag_anchor = None;
     }
 
-    /// Put the edited lines back into the note.
-    pub fn splice(&mut self, text: &str) -> String {
-        let Some(start) = self.active else { return text.to_string() };
-        let lines: Vec<&str> = text.split('\n').collect();
-        let end = self.buf_end.min(lines.len().saturating_sub(1));
-        let mut out: Vec<&str> = Vec::with_capacity(lines.len());
-        out.extend_from_slice(&lines[..start.min(lines.len())]);
-        let buf = self.buf.clone();
-        let mut s = out.join("\n");
-        if !out.is_empty() {
-            s.push('\n');
-        }
-        s.push_str(&buf);
-        if end + 1 < lines.len() {
-            s.push('\n');
-            s.push_str(&lines[end + 1..].join("\n"));
-        }
-        self.buf_end = start + buf.split('\n').count() - 1;
-        s
-    }
+
 }
 
 /// The `dataview` / `dataviewjs` fenced blocks of a note, as byte ranges
@@ -280,17 +262,17 @@ mod tests {
     }
 
     #[test]
-    fn blocks_and_splice() {
+    fn blocks_and_document_editing() {
         let t = "---\na: 1\n---\n# Title\n\nPara one\nstill one\n\n- a\n- b\n\n```js\nx\n```\n";
         let s = segments(t);
         let spans: Vec<(usize, usize)> = s.iter().map(|x| (x.start, x.end)).collect();
         assert_eq!(spans, vec![(0, 2), (3, 3), (5, 6), (8, 9), (11, 13)]);
         let mut l = LiveState::default();
-        l.open(&s[2], true);
-        l.buf = "Para one changed\nstill one\nand three".into();
-        let out = l.splice(t);
-        assert!(out.contains("# Title\n\nPara one changed\nstill one\nand three\n\n- a"));
-        assert_eq!(l.buf_end, 7);
+        l.open_document(t, t.chars().count());
+        assert_eq!(l.active, Some(0));
+        assert_eq!(l.buf, t);
+        assert_eq!(l.buf_end, t.split('\n').count() - 1);
+        assert_eq!(l.cursor_at, Some(t.chars().count()));
     }
 }
 
@@ -400,161 +382,95 @@ fn properties(ui: &mut egui::Ui, text: &str, host: &dyn Host) -> Option<PropEdit
     edit
 }
 
-/// Draw the note in Live Preview; returns the actions of clicked links and tasks.
+/// Resting notes keep their rich rendering; an editing session spans the whole note.
 pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::Styles) -> Vec<Action> {
+    let id = tab.editor_id();
+    let press = ui.input(|i| i.pointer.primary_pressed() && !i.modifiers.command);
+    let at = ui.input(|i| i.pointer.interact_pos());
+    let target = at.and_then(|at| tab.live.edit_targets.iter().find(|(rect, _)| rect.contains(at))).copied();
+    if tab.live.active.is_none() && press && !ui.memory(|m| m.any_popup_open()) {
+        if let Some((rect, line)) = target {
+            let cursor = if let Some(seg) = tab.live.segs.iter().find(|s| s.start == line) {
+                let offset: usize = tab.text.split_inclusive('\n').take(line).map(|l| l.chars().count()).sum();
+                let galley = editor::galley(ui, &seg.text, &mut tab.highlight, st, editor::Reveal(None), rect.width());
+                offset + galley.cursor_from_pos(at.unwrap() - rect.min).ccursor.index
+            } else { tab.text.chars().count() };
+            tab.live.open_document(&tab.text, cursor);
+            tab.live.drag_anchor = Some(cursor);
+        }
+    }
+    if tab.live.active.is_none() && (tab.text.trim().is_empty() || tab.find.pending.is_some() || tab.scroll_to.is_some()) {
+        tab.live.open_document(&tab.text, tab.cursor);
+    }
+    if tab.live.active.is_some() {
+        if ui.ctx().memory(|m| m.has_focus(id))
+            && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            tab.live.close();
+            ui.ctx().memory_mut(|m| m.surrender_focus(id));
+        } else {
+            document_editor(ui, tab, st);
+            return Vec::new();
+        }
+    }
+
     let mut actions = Vec::new();
-    let mut prop_edit: Option<PropEdit> = None;
+    let mut prop_edit = None;
     tab.live.refresh(&tab.text);
     let segs = tab.live.segs.clone();
-    let id = egui::Id::new(("live-editor", tab.uid, &tab.path));
-    if segs.is_empty() && tab.live.active.is_none() {
-        // an empty note: write right away
-        tab.live.active = Some(0);
-        tab.live.buf = tab.text.clone();
-        tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
-        tab.live.cursor_at = Some(tab.text.chars().count());
-    }
-    let find_target = tab.find.pending.take();
-    let find_line = find_target.as_ref().map(|r| tab.text[..r.start].bytes().filter(|b| *b == b'\n').count());
-    let active = tab.live.active;
-    let buf_end = tab.live.buf_end;
-    let mut drawn_editor = false;
-    let mut open: Option<(usize, bool)> = None;
+    tab.live.edit_targets.clear();
     let size = host.size();
-    // the same rhythm as the reading view: more room above headings
-    let gap_before = |seg: &Segment| match seg.doc.blocks.first() {
-        Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
-        _ => size * crate::typo::get().gap,
-    };
     for (i, seg) in segs.iter().enumerate() {
-        if let Some(a) = active {
-            if seg.start >= a && seg.start <= buf_end || (seg.start < a && seg.end >= a) {
-                if !drawn_editor {
-                    drawn_editor = true;
-                    if i > 0 {
-                        ui.add_space(gap_before(seg));
-                    }
-                    if find_line.is_some_and(|l| a <= l && l <= buf_end) {
-                        let offset: usize = tab.text.split_inclusive('\n').take(a).map(str::len).sum();
-                        if let Some(range) = &find_target {
-                            crate::find::request_scroll(ui.ctx(), id, range.start.saturating_sub(offset)..range.end.saturating_sub(offset));
-                        }
-                    }
-                    if let Some(nav) = editor_block(ui, tab, id, st) {
-                        match nav {
-                            Nav::Up => {
-                                if let Some(prev) = segs.iter().rev().find(|s| s.end < a) {
-                                    open = Some((segs.iter().position(|s| s.start == prev.start).unwrap(), true));
-                                }
-                            }
-                            Nav::Down => {
-                                let end = tab.live.buf_end;
-                                if let Some(next) = segs.iter().find(|s| s.start > end) {
-                                    open = Some((segs.iter().position(|s| s.start == next.start).unwrap(), false));
-                                }
-                            }
-                            Nav::Close => tab.live.close(),
-                        }
-                    }
-                }
-                continue;
-            }
-            if seg.start > buf_end && !drawn_editor {
-                drawn_editor = true;
-                if i > 0 {
-                    ui.add_space(size * 0.7);
-                }
-                if let Some(Nav::Close) = editor_block(ui, tab, id, st) {
-                    tab.live.close();
-                }
-            }
-        }
         if i > 0 {
-            ui.add_space(gap_before(seg));
+            let gap = match seg.doc.blocks.first() {
+                Some(crate::markdown::Block::Heading { level, .. }) => size * if *level <= 2 { 1.5 } else { 1.1 },
+                _ => size * crate::typo::get().gap,
+            };
+            ui.add_space(gap);
         }
         let top = ui.cursor().min;
         let before = actions.len();
-        let is_target = find_line.is_some_and(|l| seg.start <= l && l <= seg.end);
-        if is_target {
-            let offset: usize = tab.text.split_inclusive('\n').take(seg.start).map(str::len).sum();
-            if let Some(range) = &find_target {
-                crate::find::begin_target(&seg.text, range.start.saturating_sub(offset).min(seg.text.len()));
-            }
-        }
-        let dim = active.is_some() && crate::sc::focus::DIM.with(|d| d.get());
         if seg.frontmatter {
-            if tab.find.open {
-                crate::find::plain(ui, &seg.text, egui::FontId::monospace(size), st.p.muted);
-            } else if !crate::sc::focus::ON.with(|f| f.get()) {
+            if !crate::sc::focus::ON.with(|f| f.get()) {
                 prop_edit = properties(ui, &seg.text, host);
             }
         } else {
-            let mut r = Renderer::new(host);
-            if dim {
-                ui.scope(|ui| {
-                    ui.multiply_opacity(0.28);
-                    r.blocks(ui, &seg.doc.blocks);
-                });
-            } else {
-                r.blocks(ui, &seg.doc.blocks);
-            }
-            for a in r.actions.drain(..) {
-                actions.push(match a {
-                    Action::ToggleTask(line, c) => Action::ToggleTask(line + seg.start, c),
+            let mut renderer = Renderer::new(host);
+            renderer.blocks(ui, &seg.doc.blocks);
+            for action in renderer.actions.drain(..) {
+                actions.push(match action {
+                    Action::ToggleTask(line, checked) => Action::ToggleTask(line + seg.start, checked),
                     other => other,
                 });
             }
         }
         let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
         tab.live.spots.push((rect.top(), rect.bottom(), seg.start, seg.end));
-        if is_target && !crate::find::end_target() {
-            ui.scroll_to_rect(rect, Some(egui::Align::Center));
-        }
-        let clicked = ui.input(|inp| inp.pointer.primary_clicked() && inp.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
-        // the properties are edited with their own widgets, not as YAML
-        if clicked && actions.len() == before && !seg.frontmatter {
-            open = Some((i, true));
-            tab.live.click = ui.input(|inp| inp.pointer.interact_pos());
-        }
-        if ui.rect_contains_pointer(rect) && actions.len() == before && !seg.frontmatter {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-        }
-    }
-    if active.is_some() && !drawn_editor {
-        if !segs.is_empty() {
-            ui.add_space(size * 0.7);
-        }
-        if let Some(Nav::Close) = editor_block(ui, tab, id, st) {
-            tab.live.close();
-        }
-    }
-    // the space below the note: continue writing at the end
-    let below = ui.clip_rect().bottom() - ui.cursor().top();
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), below.clamp(160.0, 4000.0)), egui::Sense::click());
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
-    }
-    let _ = rect;
-    if resp.clicked() {
-        if !tab.text.ends_with("\n\n") {
-            if !tab.text.ends_with('\n') && !tab.text.is_empty() {
-                tab.text.push('\n');
+        if !seg.frontmatter {
+            if !tab.live.edit_targets.iter().any(|(r, _)| *r == rect)
+                && ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)))
+                && actions.len() == before {
+                let offset = tab.text.split_inclusive('\n').take(seg.start).map(|l| l.chars().count()).sum();
+                tab.live.open_document(&tab.text, offset);
+                ui.ctx().request_repaint();
             }
-            tab.text.push('\n');
-        }
-        let last = tab.text.split('\n').count() - 1;
-        tab.live.active = Some(last);
-        tab.live.buf = String::new();
-        tab.live.buf_end = last;
-        tab.live.cursor_at = Some(0);
-        tab.last_edit = Some(std::time::Instant::now());
-    }
-    if let Some((i, at_end)) = open {
-        if let Some(seg) = tab.live.segs.get(i).cloned() {
-            tab.live.open(&seg, at_end);
+            // Interactive blocks keep their own controls on a simple click.
+            let interactive = seg.text.contains("[[") || seg.text.contains("](")
+                || seg.text.contains("[ ]") || seg.text.contains("[x]") || seg.text.contains("[X]")
+                || seg.text.contains("[!") || seg.text.contains("```dataview");
+            if !interactive { tab.live.edit_targets.push((rect, seg.start)); }
+            if !interactive && ui.rect_contains_pointer(rect) && actions.len() == before {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
+            }
         }
     }
-    // a property edited: the frontmatter key changes, the rest stays as written
+    let below = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(160.0, 4000.0);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), below), egui::Sense::click());
+    tab.live.edit_targets.push((rect, usize::MAX));
+    if resp.hovered() { ui.ctx().set_cursor_icon(egui::CursorIcon::Text); }
+    if resp.clicked() {
+        tab.live.open_document(&tab.text, tab.text.chars().count());
+        ui.ctx().request_repaint();
+    }
     if let Some((key, value)) = prop_edit {
         tab.text = ateliet_core::scriptorium::set_frontmatter(&tab.text, &key, value.as_ref());
         tab.last_edit = Some(std::time::Instant::now());
@@ -562,61 +478,185 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     actions
 }
 
-enum Nav {
-    Up,
-    Down,
-    Close,
-}
-
-fn editor_block(ui: &mut egui::Ui, tab: &mut Tab, id: egui::Id, st: &editor::Styles) -> Option<Nav> {
-    let mut nav = None;
-    if let Some(pos) = tab.live.click.take() {
-        // the block opened where it was clicked: the text is set as it was
-        // drawn (marks hidden), so the click lands on the same letter
-        let g = editor::galley(ui, &tab.live.buf, &mut tab.live.highlight, st, editor::Reveal(None), ui.available_width());
-        tab.live.cursor_at = Some(g.cursor_from_pos(pos - ui.cursor().min).ccursor.index);
-    }
+/// One editor owns all characters, including newlines between rendered blocks.
+fn document_editor(ui: &mut egui::Ui, tab: &mut Tab, st: &editor::Styles) {
+    let id = tab.editor_id();
     if let Some(ci) = tab.live.cursor_at.take() {
         let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
         state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(ci))));
         state.store(ui.ctx(), id);
         ui.ctx().memory_mut(|m| m.request_focus(id));
     }
-    let focused = ui.ctx().memory(|m| m.has_focus(id));
-    if focused {
-        let cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or(0);
-        let b = editor::char_to_byte(&tab.live.buf, cursor);
-        let on_first = !tab.live.buf[..b].contains('\n');
-        let on_last = !tab.live.buf[b..].contains('\n');
-        if on_first && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
-            nav = Some(Nav::Up);
-        } else if on_last && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)) {
-            nav = Some(Nav::Down);
-        } else if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
-            nav = Some(Nav::Close);
-        }
+    if let Some(line) = tab.scroll_to.take() {
+        let byte = tab.text.split_inclusive('\n').take(line).map(str::len).sum::<usize>();
+        crate::find::request_scroll(ui.ctx(), id, byte..byte);
     }
-    let before = tab.live.buf.clone();
-    let resp = ui.add(editor::editor_widget(&mut tab.live.buf, id, &mut tab.live.highlight, st, 1));
-    if tab.live.buf != before && crate::sc::focus::TYPEWRITER.with(|t| t.get()) {
-        // keep the line being typed in the middle of the screen
-        let cursor = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range()).map(|r| r.primary.index).unwrap_or(0);
-        let lines = tab.live.buf.split('\n').count().max(1) as f32;
-        let at = tab.live.buf.chars().take(cursor).filter(|c| *c == '\n').count() as f32;
-        let r = resp.rect;
-        let y = r.top() + r.height() * ((at + 0.5) / lines);
-        ui.scroll_to_rect(egui::Rect::from_center_size(egui::pos2(r.center().x, y), egui::vec2(10.0, st.size)), Some(egui::Align::Center));
+    if let Some(range) = tab.find.pending.take() {
+        crate::find::request_scroll(ui.ctx(), id, range);
     }
-    if tab.live.buf != before {
-        tab.text = tab.live.splice(&tab.text);
+    let before = tab.text.clone();
+    let response = ui.add(editor::editor_widget(&mut tab.text, id, &mut tab.highlight, st, 1));
+    let range = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range());
+    if let Some(range) = range {
+        tab.cursor = range.primary.index;
+    }
+    if tab.text != before {
         tab.last_edit = Some(std::time::Instant::now());
-    }
-    if let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) {
-        if let Some(r) = state.cursor.char_range() {
-            // cursor in note coordinates, for Templater insertions
-            let line_start: usize = tab.text.split_inclusive('\n').take(tab.live.active.unwrap_or(0)).map(|l| l.chars().count()).sum();
-            tab.cursor = line_start + r.primary.index;
+        ui.ctx().request_repaint();
+        if crate::sc::focus::TYPEWRITER.with(|t| t.get()) {
+            let reveal = editor::Reveal(range.map(|r| (
+                editor::char_to_byte(&tab.text, r.primary.index),
+                editor::char_to_byte(&tab.text, r.secondary.index),
+            )));
+            let galley = editor::galley(ui, &tab.text, &mut tab.highlight, st, reveal, response.rect.width());
+            let cursor = galley.from_ccursor(egui::text::CCursor::new(tab.cursor));
+            ui.scroll_to_rect(galley.pos_from_cursor(&cursor).translate(response.rect.min.to_vec2()), Some(egui::Align::Center));
         }
     }
-    nav
+    // Keep integrations in note coordinates; never splice an old block back into it.
+    tab.live.active = Some(0);
+    tab.live.buf.clone_from(&tab.text);
+    tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
+    let reveal = editor::Reveal(range.map(|r| (
+        editor::char_to_byte(&tab.text, r.primary.index),
+        editor::char_to_byte(&tab.text, r.secondary.index),
+    )));
+    let galley = editor::galley(ui, &tab.text, &mut tab.highlight, st, reveal, response.rect.width());
+    if let Some(anchor) = tab.live.drag_anchor {
+        if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
+            let cursor = galley.cursor_from_pos(pos - response.rect.min).ccursor;
+            let primary = if ui.input(|i| i.pointer.primary_pressed()) { egui::text::CCursor::new(anchor) } else { cursor };
+            let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(anchor), primary)));
+            state.store(ui.ctx(), id);
+            ui.ctx().memory_mut(|m| m.request_focus(id));
+            tab.cursor = primary.index;
+            ui.ctx().request_repaint();
+            if pos.y < ui.clip_rect().top() || pos.y > ui.clip_rect().bottom() {
+                ui.scroll_to_rect(galley.pos_from_cursor(&galley.from_ccursor(primary)).translate(response.rect.min.to_vec2()), None);
+            }
+        }
+        if !ui.input(|i| i.pointer.primary_down()) { tab.live.drag_anchor = None; }
+    }
+    let mut line = 0;
+    for row in &galley.rows {
+        tab.live.spots.push((response.rect.top() + row.min_y(), response.rect.top() + row.max_y(), line, line));
+        if row.ends_with_newline { line += 1; }
+    }
+}
+
+#[cfg(test)]
+mod editing_tests {
+    use super::*;
+    use crate::app::Mode;
+    use egui::{Event, Key, Modifiers, PointerButton, Pos2};
+
+    struct TestHost;
+    impl Host for TestHost {
+        fn palette(&self) -> crate::theme::Palette { crate::theme::Palette::new(&crate::config::Appearance::default()) }
+        fn size(&self) -> f32 { 16.0 }
+        fn source(&self) -> &str { "note.md" }
+        fn resolved(&self, _: &str) -> bool { true }
+        fn image(&mut self, _: &egui::Context, _: &str) -> Option<(egui::TextureId, egui::Vec2)> { None }
+        fn query(&mut self, _: &str, _: &str) -> serde_json::Value { serde_json::Value::Null }
+        fn inline_query(&mut self, _: bool, _: &str) -> serde_json::Value { serde_json::Value::Null }
+        fn embed(&mut self, _: &str) -> Option<(String, Arc<Doc>)> { None }
+    }
+
+    fn note(text: &str) -> Tab {
+        Tab {
+            uid: crate::app::next_uid(), sync: 0, path: "note.md".into(),
+            text: text.into(), saved: text.into(), mode: Mode::Edit, doc: None,
+            last_edit: None, cursor: 0, highlight: Default::default(), find: Default::default(),
+            scroll_to: None, live: Default::default(), board: None, quadro: None,
+            view: None, reader: None, back: Vec::new(), fwd: Vec::new(),
+        }
+    }
+
+    fn frame(ctx: &egui::Context, tab: &mut Tab, events: Vec<Event>, modifiers: Modifiers) -> egui::FullOutput {
+        ctx.run(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 1000.0))),
+            events, modifiers, ..Default::default()
+        }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                tab.live.spots.clear();
+                let st = editor::Styles::live(16.0, TestHost.palette());
+                show(ui, tab, &mut TestHost, &st);
+            });
+        })
+    }
+
+    fn key(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }
+    }
+
+    fn context() -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        ctx
+    }
+
+    #[test]
+    fn mouse_drag_selects_across_separate_rendered_paragraphs() {
+        let ctx = context();
+        let mut tab = note("Primeira linha.\n\nSegunda linha.\n\nTerceira linha.");
+        for _ in 0..2 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        let start = egui::pos2(12.0, (tab.live.spots[0].0 + tab.live.spots[0].1) / 2.0);
+        let _ = frame(&ctx, &mut tab, vec![
+            Event::PointerMoved(start),
+            Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        ], Modifiers::NONE);
+        assert_eq!(tab.live.active, Some(0));
+        assert_eq!(tab.live.buf, tab.text);
+        let last = tab.live.spots.last().unwrap();
+        let end = egui::pos2(180.0, (last.0 + last.1) / 2.0);
+        let _ = frame(&ctx, &mut tab, vec![Event::PointerMoved(end)], Modifiers::NONE);
+        let _ = frame(&ctx, &mut tab, vec![
+            Event::PointerButton { pos: end, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+        ], Modifiers::NONE);
+        let (a, b) = editor::selection(&ctx, tab.editor_id()).unwrap();
+        assert!(b > tab.text.find("Terceira").unwrap(), "selection {a}..{b} must cross paragraph boundaries");
+        assert!(a < tab.text.find("Segunda").unwrap());
+        let copied = frame(&ctx, &mut tab, vec![Event::Copy], Modifiers::NONE);
+        assert!(copied.platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if t.contains("Segunda linha.") && t.contains("\n\n"))), "{:?}; selection={:?}, focused={:?}", copied.platform_output.commands, editor::selection(&ctx, tab.editor_id()), ctx.memory(|m| m.focused()));
+    }
+
+    #[test]
+    fn deleting_selected_lines_shrinks_immediately_and_undo_restores_them() {
+        let ctx = context();
+        let original = "# Título\n\nUm parágrafo.\n\nOutro parágrafo.";
+        let mut tab = note(original);
+        tab.live.open_document(&tab.text, 0);
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        let id = tab.editor_id();
+        let mut state = egui::TextEdit::load_state(&ctx, id).unwrap();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0), egui::text::CCursor::new(original.chars().count()),
+        )));
+        state.store(&ctx, id);
+        let _ = frame(&ctx, &mut tab, vec![key(Key::Backspace, Modifiers::NONE)], Modifiers::NONE);
+        assert_eq!(tab.text, "");
+        assert_eq!(tab.live.buf, "");
+        assert_eq!(tab.live.buf_end, 0);
+        let erased_height = ctx.read_response(id).unwrap().rect.height();
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        assert!((erased_height - ctx.read_response(id).unwrap().rect.height()).abs() < 1.0, "height must update without cursor movement");
+        let command = Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..Modifiers::NONE };
+        let _ = frame(&ctx, &mut tab, vec![key(Key::Z, command)], command);
+        assert_eq!(tab.text, original);
+    }
+
+    #[test]
+    fn shift_down_crosses_blank_lines_without_switching_editors() {
+        let ctx = context();
+        let mut tab = note("Um.\n\nDois.\n\nTrês.");
+        tab.live.open_document(&tab.text, 0);
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        for _ in 0..4 { let _ = frame(&ctx, &mut tab, vec![key(Key::ArrowDown, shift)], shift); }
+        let (a, b) = editor::selection(&ctx, tab.editor_id()).unwrap();
+        assert_eq!(a, 0);
+        assert!(b > tab.text.find("Dois").unwrap());
+        assert_eq!(tab.live.active, Some(0));
+    }
 }

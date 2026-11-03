@@ -935,7 +935,6 @@ fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutpu
 
 /// The note editor; `min_rows` keeps an empty note clickable.
 pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut HighlightCache, st: &'a Styles, min_rows: usize) -> impl egui::Widget + 'a {
-    let rows = text.split('\n').count().max(min_rows);
     move |ui: &mut egui::Ui| {
         let reveal = if st.live { reveal_of(ui.ctx(), id, text) } else { Reveal(None) };
         if st.live {
@@ -953,7 +952,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
             .id(id)
             .frame(false)
             .desired_width(f32::INFINITY)
-            .desired_rows(rows)
+            .desired_rows(min_rows)
             .lock_focus(true)
             .layouter(&mut layouter);
         if st.live {

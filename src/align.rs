@@ -102,8 +102,8 @@ pub fn apply(ctx: &egui::Context, tab: &mut crate::app::Tab, a: TextAlign) {
     // where the frontmatter ended before: the cursor only moves past it
     let fm_end = ateliet_core::syntax::frontmatter(&old).map(|f| old[..f.block.end.min(old.len())].chars().count()).unwrap_or(0);
     let shift = |x: usize| (x as isize + lines).max(0) as usize;
-    if let Some(start) = tab.live.active {
-        tab.live.active = Some(shift(start));
+    if tab.live.active.is_some() {
+        tab.live.active = Some(0);
         tab.live.buf_end = shift(tab.live.buf_end);
     }
     tab.text = new;
