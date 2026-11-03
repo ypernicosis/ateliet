@@ -527,7 +527,7 @@ impl MundoView {
         self.changed();
     }
 
-    fn person_drawer(&mut self, ui: &mut egui::Ui, p: Palette, ti: usize, w: &Json, acts: &mut Vec<Action>) {
+    fn person_drawer(&mut self, ui: &mut egui::Ui, p: Palette, ti: usize, _w: &Json, acts: &mut Vec<Action>) {
         let Some(pid) = self.person.clone() else { return };
         let Some(pi) = self.data["arvores"][ti]["pessoas"].as_array().and_then(|a| a.iter().position(|x| x["id"] == pid.as_str())) else {
             self.person = None;
@@ -541,16 +541,15 @@ impl MundoView {
                 }
             });
         });
-        let antes = w["calendario"]["eraAntes"].as_str().unwrap_or("AC").to_string();
         let mut ch = false;
         let focus = self.focus_name;
         {
             let x = &mut self.data["arvores"][ti]["pessoas"][pi];
-            for (label, key, hint) in [("Nome", "nome", "Nome"), ("Título ou papel", "titulo", "Rainha de Sadaka, fundador…"), ("Nascimento (ano)", "nasc", ""), ("Morte (ano)", "morte", ""), ("Nota ou ficha ligada", "nota", "Nome da nota")] {
+            for (label, key, hint) in [("Nome", "nome", "Nome"), ("Título ou papel", "titulo", ""), ("Nascimento (ano)", "nasc", ""), ("Morte (ano)", "morte", ""), ("Nota ou ficha ligada", "nota", "Nome da nota")] {
                 ui.add_space(4.0);
                 ui.label(RichText::new(label).size(12.0).color(p.muted));
                 let mut v = x[key].as_str().map(String::from).or_else(|| x[key].as_i64().map(|n| n.to_string())).unwrap_or_default();
-                let hint = if key == "nasc" { format!("ex.: 2790 (ou -300 para {antes})") } else { hint.to_string() };
+                let hint = hint.to_string();
                 let r = ui.add(egui::TextEdit::singleline(&mut v).hint_text(RichText::new(hint).color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
                 if key == "nome" && focus {
                     // keep asking until it holds (the click that made the person may still be going on)
@@ -817,7 +816,7 @@ impl MundoView {
             ui.label(RichText::new(if editing { "Renomear mundo" } else { "Novo mundo" }).font(kit::medium(16.0)).color(p.text));
             ui.add_space(10.0);
             ui.label(RichText::new("Nome").size(12.0).color(p.muted));
-            let r = ui.add(egui::TextEdit::singleline(&mut nw.nome).hint_text(RichText::new("Álfheim").color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
+            let r = ui.add(egui::TextEdit::singleline(&mut nw.nome).hint_text(RichText::new("").color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
             if nw.nome.is_empty() {
                 r.request_focus();
             }
@@ -1061,7 +1060,7 @@ impl MundoView {
         let res = Self::window(ctx, "mu-era", 440.0, |ui| {
             ui.label(RichText::new(if e.id.is_some() { "Editar era" } else { "Nova era" }).font(kit::medium(16.0)).color(p.text));
             ui.add_space(8.0);
-            for (l, v, h) in [("Nome", &mut e.nome, String::new()), ("Começa em", &mut e.de, format!("ex.: 3000 {antes}")), ("Termina em", &mut e.ate, format!("ex.: 150 {depois}")), ("Nomes nativos", &mut e.nativo, String::new())] {
+            for (l, v, h) in [("Nome", &mut e.nome, String::new()), ("Começa em", &mut e.de, String::new()), ("Termina em", &mut e.ate, String::new()), ("Nomes nativos", &mut e.nativo, String::new())] {
                 ui.label(RichText::new(l).size(12.0).color(p.muted));
                 ui.add(egui::TextEdit::singleline(v).hint_text(RichText::new(h).color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 5)));
                 ui.add_space(4.0);
@@ -1148,8 +1147,8 @@ impl MundoView {
                     ui.label(RichText::new("A semana recomeça a cada mês").color(p.text));
                 });
                 ui.add_space(8.0);
-                field(ui, "Nome da semana", "Ex.: seisseno", &mut c.semana_nome, 1);
-                field(ui, "Nome do 30º dia", "Ex.: Dia da Lua", &mut c.dia_extra, 1);
+                field(ui, "Nome da semana", "", &mut c.semana_nome, 1);
+                field(ui, "Nome do 30º dia", "", &mut c.dia_extra, 1);
                 field(ui, "Mês intercalar", "Nome | nome local | dias (vazio = sem intercalar)", &mut c.inter, 1);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("depois do mês nº").size(12.0).color(p.muted));
@@ -1157,7 +1156,7 @@ impl MundoView {
                     ui.label(RichText::new("ciclo de anos").size(12.0).color(p.muted));
                     ui.add(egui::TextEdit::singleline(&mut c.ciclo).desired_width(40.0));
                     ui.label(RichText::new("anos com intercalar").size(12.0).color(p.muted));
-                    ui.add(egui::TextEdit::singleline(&mut c.anos).hint_text(RichText::new("3, 6, 8, 11, 14, 17, 19").color(p.faint)).desired_width(f32::INFINITY));
+                    ui.add(egui::TextEdit::singleline(&mut c.anos).hint_text(RichText::new("").color(p.faint)).desired_width(f32::INFINITY));
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -1212,7 +1211,7 @@ impl MundoView {
         let res = Self::window(ctx, "mu-tree-new", 400.0, |ui| {
             ui.label(RichText::new(if renaming { "Renomear árvore" } else { "Nova árvore" }).font(kit::medium(16.0)).color(p.text));
             ui.add_space(8.0);
-            let r = ui.add(egui::TextEdit::singleline(nome).hint_text(RichText::new("Casa Vanasbern · Família Minerva").color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
+            let r = ui.add(egui::TextEdit::singleline(nome).hint_text(RichText::new("").color(p.faint)).desired_width(f32::INFINITY).margin(egui::Margin::symmetric(8, 6)));
             r.request_focus();
             let (mut s, c) = Self::footer(ui, p, if renaming { "Salvar" } else { "Criar" });
             s |= ui.input(|i| i.key_pressed(egui::Key::Enter));

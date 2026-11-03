@@ -836,7 +836,7 @@ impl MapaView {
         let cal = self.cal();
         let g = |k: &str, d: &str| l[k].as_str().map(String::from).or_else(|| l[k].as_f64().map(fmt_f)).unwrap_or_else(|| d.to_string());
         let mut f: Vec<(&'static str, String, String, String)> = match str_of(&l, "t") {
-            "pino" => vec![("rotulo", "Nome".into(), g("rotulo", ""), String::new()), ("link", "Nota ligada (nome ou [[link]])".into(), link_text(str_of(&l, "link")), "Ex.: Elevenlore".into()), ("cor", "Cor".into(), g("cor", ma::PIN), String::new())],
+            "pino" => vec![("rotulo", "Nome".into(), g("rotulo", ""), String::new()), ("link", "Nota ligada (nome ou [[link]])".into(), link_text(str_of(&l, "link")), "".into()), ("cor", "Cor".into(), g("cor", ma::PIN), String::new())],
             "rotulo" => vec![("texto", "Texto".into(), g("texto", ""), String::new()), ("tam", "Tamanho (% da largura)".into(), g("tam", "1.6"), String::new()), ("rot", "Rotação (°)".into(), g("rot", "0"), String::new()), ("cor", "Cor".into(), g("cor", "#3b2a1a"), String::new())],
             "carimbo" => vec![("w", "Tamanho (% da largura)".into(), g("w", "4"), String::new()), ("rot", "Rotação (°)".into(), g("rot", "0"), String::new()), ("cor", "Cor da tinta".into(), g("cor", ma::STAMP_INK), String::new())],
             _ => vec![("rotulo", "Nome".into(), g("rotulo", ""), String::new()), ("cor", "Cor".into(), g("cor", ma::PIN), String::new())],
@@ -1280,7 +1280,7 @@ impl MapaView {
                 ui.label(RichText::new("A linha tracejada vermelha mostra a elipse no mapa.").size(11.5).color(p.faint));
             } else {
                 ui.label(RichText::new("Largura do mapa (km)").size(12.0).color(p.muted));
-                ui.add(egui::TextEdit::singleline(&mut s.km).desired_width(140.0).hint_text(RichText::new("Ex.: 1200").color(p.faint)).margin(egui::Margin::symmetric(8, 5)));
+                ui.add(egui::TextEdit::singleline(&mut s.km).desired_width(140.0).hint_text(RichText::new("").color(p.faint)).margin(egui::Margin::symmetric(8, 5)));
                 ui.label(RichText::new("Ou meça um trecho conhecido com a régua e use \"Usar esta medida como escala\".").size(11.5).color(p.faint));
             }
             ui.add_space(10.0);

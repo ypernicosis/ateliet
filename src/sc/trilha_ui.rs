@@ -710,7 +710,7 @@ impl TrilhaView {
             };
             field(ui, "Nome da faixa", &mut a.nome, "");
             field(ui, "Artista", &mut a.artista, "");
-            field(ui, "Link (Spotify, YouTube, SoundCloud, Apple Music), opcional", &mut a.link, "https://…");
+            field(ui, "Link (Spotify, YouTube, SoundCloud, Apple Music), opcional", &mut a.link, "");
             ui.label(RichText::new("Ou um áudio do cofre").size(12.0).color(p.muted));
             egui::ComboBox::from_id_salt("tr-audio").width(400.0).selected_text(if a.arquivo.is_empty() { "nenhum".to_string() } else { a.arquivo.clone() }).show_ui(ui, |ui| {
                 ui.selectable_value(&mut a.arquivo, String::new(), "nenhum");
@@ -781,7 +781,7 @@ impl TrilhaView {
             ui.label(RichText::new(format!("Tema de {}", match kind { "personagem" => "qual personagem?", "capitulo" => "qual capítulo?", "cena" => "qual cena?", "trama" => "qual trama?", "batida" => "qual ato?", _ => "um lugar" })).font(kit::medium(16.0)).color(p.text));
             ui.add_space(8.0);
             if kind == "lugar" {
-                let r = ui.add(egui::TextEdit::singleline(&mut tp.lugar).desired_width(f32::INFINITY).hint_text(RichText::new("Ex.: Düsseldorf, a torre, o deserto").color(p.faint)).margin(egui::Margin::symmetric(8, 6)));
+                let r = ui.add(egui::TextEdit::singleline(&mut tp.lugar).desired_width(f32::INFINITY).hint_text(RichText::new("").color(p.faint)).margin(egui::Margin::symmetric(8, 6)));
                 r.request_focus();
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !tp.lugar.trim().is_empty() {
                     chosen = Some(tp.lugar.trim().to_string());
