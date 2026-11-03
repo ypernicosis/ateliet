@@ -74,10 +74,13 @@ struct Drag {
 
 /// Where a dragged scene can land.
 pub(super) struct Zone {
-    rect: Rect,
-    cap: Option<String>,
-    trama: Option<String>,
-    cards: Vec<(Rect, String)>,
+    pub(super) rect: Rect,
+    pub(super) cap: Option<String>,
+    pub(super) trama: Option<String>,
+    /// Without a chapter: `Some(None)` takes the scene out of any range,
+    /// `Some(Some(..))` puts it in one; `None` leaves it as it is.
+    pub(super) range: Option<Option<(String, String)>>,
+    pub(super) cards: Vec<(Rect, String)>,
 }
 
 /// A written chapter's title and arc while they are typed in the drawer;
@@ -102,7 +105,7 @@ pub struct EnredoView {
     filter_tramas: Option<Vec<String>>,
     filter_pov: String,
     filter_status: String,
-    arco: Option<String>,
+    pub(super) arco: Option<String>,
     pub(super) focus_title: bool,
     pub(super) new_trama: Option<(String, Option<String>)>,
     pub(super) era: Option<super::enredo_more::EraEdit>,
@@ -124,6 +127,8 @@ pub struct EnredoView {
     pub(super) pending_book: Option<(String, Option<Sel>)>,
     /// The selected chapter's title and arc as typed.
     pub(super) cap_edit: Option<CapEdit>,
+    /// The Escaleta's typing state.
+    pub(super) esc: super::enredo_esc::Esc,
 }
 
 pub fn status_color(k: &str) -> Color32 {
@@ -183,6 +188,7 @@ impl EnredoView {
             saga_cache: Default::default(),
             pending_book: None,
             cap_edit: None,
+            esc: Default::default(),
         }
     }
 
@@ -264,7 +270,7 @@ impl EnredoView {
     }
 
     /// The visible chapters: the chosen arc, or all.
-    fn window(&mut self, all: &[Col]) -> (usize, usize) {
+    pub(super) fn window(&mut self, all: &[Col]) -> (usize, usize) {
         if let Some(a) = &self.arco {
             let idx: Vec<usize> = all.iter().enumerate().filter(|(_, c)| &c.part == a).map(|(i, _)| i).collect();
             if let (Some(lo), Some(hi)) = (idx.first(), idx.last()) {
@@ -338,7 +344,7 @@ impl EnredoView {
             Mode::Relacoes => self.board(ui, p, cx, &b, "relacoes", &chars, &mut acts),
             Mode::Grade if saga_on => self.grade_saga(ui, p, &srcs),
             Mode::Grade => self.grade(ui, p, &b, &cols, &chars, &mut acts),
-            Mode::Escaleta => self.escaleta(ui, p, &b, &cols, &root, &ix, &mut acts),
+            Mode::Escaleta => self.escaleta(ui, p, &b, &cols, &chars, &root, &ix, &mut acts),
             Mode::Cronologia => self.cronologia(ui, p, &srcs),
             Mode::Pistas => self.pistas(ui, p, &srcs),
             Mode::Arcos => self.arcos(ui, p, &srcs, &ix),
@@ -392,7 +398,8 @@ impl EnredoView {
 
     fn primary(&mut self) {
         match self.mode {
-            Mode::Grade | Mode::Escaleta => self.new_scene(None, &[]),
+            Mode::Grade => self.new_scene(None, &[]),
+            Mode::Escaleta => self.esc.focus_add = Some(self.esc.last.clone().unwrap_or(super::enredo_esc::Place::Ideas).key()),
             Mode::Cronologia => self.new_event(),
             Mode::Pistas => self.new_pista(),
             Mode::Arcos => self.new_arc(),
@@ -583,8 +590,13 @@ impl EnredoView {
         let bar = tr.first().map(|t| self.trama_color(t, p)).unwrap_or(p.border_strong);
         painter.rect_filled(Rect::from_min_size(rect.min + vec2(0.0, 0.0), vec2(3.0, rect.height())), egui::CornerRadius { nw: 8, sw: 8, ne: 0, se: 0 }, bar.gamma_multiply(alpha));
         let title = en::str_of(s, "titulo");
-        let (t, c) = if title.is_empty() { ("Cena sem título", p.faint) } else { (title, p.text) };
-        let g = truncated(ui, t, kit::medium(12.5), c.gamma_multiply(alpha), rect.width() - 22.0);
+        let first = en::str_of(s, "resumo").lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
+        let (t, c, f) = match (title.is_empty(), first.is_empty()) {
+            (false, _) => (title, p.text, kit::medium(12.5)),
+            (true, false) => (first, p.muted, egui::FontId::proportional(12.5)),
+            _ => ("Cena sem título", p.faint, kit::medium(12.5)),
+        };
+        let g = truncated(ui, t, f, c.gamma_multiply(alpha), rect.width() - 22.0);
         painter.galley(pos2(rect.left() + 12.0, rect.top() + 8.0), g, c);
         let y = rect.bottom() - 13.0;
         painter.circle_filled(pos2(rect.left() + 15.5, y), 3.5, status_color(en::str_of(s, "status")).gamma_multiply(alpha));
@@ -639,6 +651,7 @@ impl EnredoView {
             }
             CardCmd::ToIdeas => {
                 en::move_scene(&mut self.data, &sid, None, None, None);
+                en::set_range(&mut self.data, &sid, None);
                 self.changed();
             }
             CardCmd::Status(k) => {
@@ -699,6 +712,9 @@ impl EnredoView {
             if let Some(z) = target {
                 let trama = z.trama.as_deref().map(|t| (d.from.as_deref(), t));
                 en::move_scene(&mut self.data, &d.id, z.cap.as_deref(), before.as_deref(), trama);
+                if let Some(r) = &z.range {
+                    en::set_range(&mut self.data, &d.id, r.as_ref().map(|(a, b)| (a.as_str(), b.as_str())));
+                }
                 self.changed();
             }
         }
@@ -857,7 +873,7 @@ impl EnredoView {
                         self.paint_card(ui, cr, &cenas[si], p, hovered, dragging.as_deref() == Some(sid.as_str()));
                         cards.push((cr, sid));
                     }
-                    zones.push(Zone { rect: vis, cap: caps[ci].clone(), trama: Some(tid.clone()), cards });
+                    zones.push(Zone { rect: vis, cap: caps[ci].clone(), trama: Some(tid.clone()), range: None, cards });
                 }
                 painter.line_segment([pos2(o.x, y + h), pos2(o.x + total.x.max(avail.x), y + h)], hair);
                 y += h;
@@ -1073,221 +1089,6 @@ impl EnredoView {
             }
         } else if close {
             self.new_trama = None;
-        }
-    }
-
-    // ── Escaleta ──────────────────────────────────────────────────────────
-
-    #[allow(clippy::too_many_arguments)]
-    fn escaleta(&mut self, ui: &mut egui::Ui, p: Palette, b: &Book, all: &[Col], root: &Path, ix: &Index, acts: &mut Vec<Action>) {
-        let (lo, hi) = self.window(all);
-        let groups: Vec<Option<&Col>> = all[lo..hi].iter().map(Some).chain(std::iter::once(None)).collect();
-        let cenas: Vec<Json> = self.data["cenas"].as_array().cloned().unwrap_or_default();
-        let dragging = Self::dragging(ui);
-        let mut zones = Vec::new();
-        let mut select = None;
-        let mut new_in: Option<Option<String>> = None;
-        let mut open_ch = None;
-        let mut to_chapter: Option<String> = None;
-        let mut toggle_arc = None;
-        let mut card_cmd = None;
-        egui::ScrollArea::vertical().id_salt("en-esc").auto_shrink([false, false]).show(ui, |ui| {
-            let avail = ui.available_width();
-            let w = (avail - 80.0).clamp(320.0, 820.0);
-            let side = ((avail - w) / 2.0).max(16.0);
-            ui.add_space(24.0);
-            ui.horizontal_top(|ui| {
-                ui.add_space(side);
-                ui.vertical(|ui| {
-                    ui.set_width(w);
-                    let mut last_part = String::new();
-                    let mut n = 0;
-                    for g in &groups {
-                        let cap = g.map(|c| c.path.clone());
-                        let list: Vec<usize> = en::scenes_in(&self.data, cap.as_deref()).into_iter().filter(|&i| self.passes(&cenas[i])).collect();
-                        if let Some(c) = g {
-                            if !c.part.is_empty() && c.part != last_part {
-                                ui.add_space(14.0);
-                                let on = self.arco.as_ref() == Some(&c.part);
-                                let r = ui.add(egui::Label::new(RichText::new(c.part.to_uppercase()).font(kit::medium(11.0)).color(if on { p.accent_strong } else { p.faint }).extra_letter_spacing(1.2)).sense(Sense::click())).on_hover_text("Clique: mostrar só este arco");
-                                if r.clicked() {
-                                    toggle_arc = Some(c.part.clone());
-                                }
-                                last_part = c.part.clone();
-                                ui.add_space(4.0);
-                            }
-                        }
-                        // chapter head
-                        ui.add_space(10.0);
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 8.0;
-                            match g {
-                                Some(c) => {
-                                    let (r, _) = ui.allocate_exact_size(vec2(8.0, 18.0), Sense::hover());
-                                    ui.painter().circle_filled(r.center(), 3.5, if c.planned.is_some() { p.faint } else { status_color(&c.status) });
-                                    ui.label(RichText::new(&c.label).font(kit::medium(14.0)).color(p.faint));
-                                    let t = ui.add(egui::Label::new(RichText::new(&c.title).font(if c.planned.is_some() { egui::FontId::new(15.0, egui::FontFamily::Name("italic".into())) } else { kit::medium(15.0) }).color(p.text)).sense(Sense::click()).truncate());
-                                    if t.hovered() {
-                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                    }
-                                    let t = if c.planned.is_none() { t.on_hover_text("Clique para editar, duplo clique para abrir") } else { t };
-                                    if t.double_clicked() && c.planned.is_none() {
-                                        open_ch = Some(c.path.clone());
-                                    } else if t.clicked() {
-                                        select = Some(match &c.planned {
-                                            Some(pl) => Sel::Plan(en::str_of(pl, "id").to_string()),
-                                            None => Sel::Cap(c.path.clone()),
-                                        });
-                                    }
-                                    let gi = all.iter().position(|x| x.path == c.path).unwrap_or(0);
-                                    for (key, label, k) in self.beats_at(gi) {
-                                        let col = super::enredo_st::band_color(k, p);
-                                        let r = ui.add(egui::Label::new(RichText::new(format!("◆ {label}")).size(11.5).color(col)).sense(Sense::click()).truncate());
-                                        if r.hovered() {
-                                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        if r.clicked() {
-                                            select = Some(Sel::Batida(key));
-                                        }
-                                    }
-                                }
-                                None => {
-                                    ui.label(kit::icon(icons::INBOX, 14.0).color(p.faint));
-                                    ui.label(RichText::new("Ideias").font(kit::medium(15.0)).color(p.text));
-                                    ui.label(RichText::new("cenas sem capítulo").color(p.faint));
-                                }
-                            }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if kit::icon_button_sized(ui, icons::PLUS, "Nova cena aqui", false, p, 24.0, 14.0).clicked() {
-                                    new_in = Some(cap.clone());
-                                }
-                                ui.label(RichText::new(format!("{} {}", list.len(), if list.len() == 1 { "cena" } else { "cenas" })).size(11.5).color(p.faint));
-                            });
-                        });
-                        if let Some(pl) = g.and_then(|c| c.planned.as_ref().or(c.plan.as_ref())) {
-                            let notas: Vec<&str> = en::str_of(pl, "notas").lines().filter(|l| !l.trim().is_empty()).take(2).collect();
-                            if !notas.is_empty() {
-                                ui.add(egui::Label::new(RichText::new(notas.join(" · ")).size(12.0).italics().color(p.faint)).truncate());
-                            }
-                        }
-                        ui.add_space(6.0);
-                        // the scenes
-                        let frame = egui::Frame::new().stroke(Stroke::new(1.0_f32, p.border)).corner_radius(10.0).fill(if cap.is_none() { p.bg_secondary } else { p.bg });
-                        let mut cards = Vec::new();
-                        let fr = frame.show(ui, |ui| {
-                            ui.set_width(w);
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            if list.is_empty() {
-                                ui.add_space(14.0);
-                                ui.horizontal(|ui| {
-                                    ui.add_space(16.0);
-                                    ui.label(RichText::new(if cap.is_some() { "Nenhuma cena planejada" } else { "Arraste para cá o que ainda não tem lugar" }).size(12.5).color(p.faint));
-                                });
-                                ui.add_space(14.0);
-                            }
-                            for (k, &si) in list.iter().enumerate() {
-                                n += 1;
-                                let s = &cenas[si];
-                                let sid = en::str_of(s, "id").to_string();
-                                let bg = ui.painter().add(egui::Shape::Noop);
-                                let inner = ui.horizontal_top(|ui| {
-                                    ui.set_width(w);
-                                    ui.add_space(14.0);
-                                    ui.allocate_ui_with_layout(vec2(26.0, 20.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                                        ui.add_space(12.0);
-                                        ui.label(RichText::new(n.to_string()).size(12.0).color(p.faint));
-                                    });
-                                    let meta_w = 190.0_f32.min(w * 0.32);
-                                    ui.allocate_ui_with_layout(vec2(w - 26.0 - 14.0 - meta_w - 16.0, 20.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                                        ui.add_space(11.0);
-                                        let t = en::str_of(s, "titulo");
-                                        ui.add(egui::Label::new(RichText::new(if t.is_empty() { "Cena sem título" } else { t }).font(kit::medium(13.5)).color(if t.is_empty() { p.faint } else { p.text })).truncate());
-                                        let r = en::str_of(s, "resumo");
-                                        if !r.is_empty() {
-                                            ui.add_space(2.0);
-                                            ui.add(egui::Label::new(RichText::new(r).size(12.5).color(p.muted)).wrap());
-                                        }
-                                        ui.add_space(11.0);
-                                    });
-                                    ui.vertical(|ui| {
-                                        ui.add_space(11.0);
-                                        ui.allocate_ui_with_layout(vec2(meta_w, 18.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            ui.spacing_mut().item_spacing.x = 6.0;
-                                            ui.add_space(6.0);
-                                            for t in en::tramas_of(s).iter().rev() {
-                                                let (r, resp) = ui.allocate_exact_size(vec2(9.0, 16.0), Sense::hover());
-                                                ui.painter().circle_filled(r.center(), 4.0, self.trama_color(t, p));
-                                                if let Some(tt) = en::trama(&self.data, t) {
-                                                    resp.on_hover_text(en::str_of(tt, "nome"));
-                                                }
-                                            }
-                                            let pov = en::str_of(s, "pov");
-                                            if !pov.is_empty() {
-                                                ui.label(RichText::new(pov).size(11.5).color(p.muted));
-                                            }
-                                            let q = en::str_of(s, "quando");
-                                            if !q.is_empty() {
-                                                ui.label(RichText::new(q).size(11.5).color(p.faint));
-                                            }
-                                            if cap.is_none() && kit::quiet(ui, Some(icons::ARROW_RIGHT), "capítulo", p).on_hover_text("Criar um capítulo a partir desta cena").clicked() {
-                                                to_chapter = Some(sid.clone());
-                                            }
-                                        });
-                                    });
-                                });
-                                let rr = inner.response.rect;
-                                let resp = ui.interact(rr, ui.id().with(("esc", &sid)), Sense::click_and_drag());
-                                let sel = matches!(&self.sel, Some(Sel::Cena(id)) if id == &sid);
-                                let ghost = dragging.as_deref() == Some(sid.as_str());
-                                let fill = if sel { p.accent_soft } else if resp.hovered() && dragging.is_none() { p.bg_hover } else { Color32::TRANSPARENT };
-                                let mut shapes = vec![egui::Shape::rect_filled(rr.shrink(1.0), 8.0, if ghost { p.bg_secondary } else { fill })];
-                                shapes.push(egui::Shape::rect_filled(Rect::from_min_size(rr.min + vec2(0.0, 10.0), vec2(3.0, rr.height() - 20.0)), 2.0, status_color(en::str_of(s, "status"))));
-                                if k > 0 {
-                                    shapes.push(egui::Shape::line_segment([rr.left_top() + vec2(14.0, 0.0), rr.right_top() - vec2(14.0, 0.0)], Stroke::new(1.0_f32, p.border)));
-                                }
-                                ui.painter().set(bg, egui::Shape::Vec(shapes));
-                                if resp.clicked() {
-                                    select = Some(Sel::Cena(sid.clone()));
-                                }
-                                Self::drag_source(ui, &resp, &sid, None);
-                                Self::card_menu(&resp, &sid, cap.as_deref(), en::str_of(s, "status"), p, &mut card_cmd);
-                                cards.push((rr, sid));
-                            }
-                        });
-                        zones.push(Zone { rect: fr.response.rect.intersect(ui.clip_rect()), cap, trama: None, cards });
-                    }
-                    ui.add_space(60.0);
-                });
-            });
-        });
-        self.drops(ui, p, &zones);
-        if let Some(s) = select {
-            self.sel = Some(s);
-            self.confirm = None;
-        }
-        if let Some(cap) = new_in {
-            self.new_scene(cap.as_deref(), &[]);
-        }
-        if let Some(c) = open_ch {
-            acts.push(Action::Open(c, true));
-        }
-        if let Some(a) = toggle_arc {
-            self.arco = if self.arco.as_ref() == Some(&a) { None } else { Some(a) };
-        }
-        self.card_cmd(card_cmd, acts);
-        if let Some(sid) = to_chapter {
-            if let Some(i) = en::scene_index(&self.data, &sid) {
-                let t = en::str_of(&self.data["cenas"][i], "titulo");
-                let title = if t.is_empty() { "Novo capítulo".to_string() } else { t.to_string() };
-                match book::create_chapter(root, ix, b, &title, "", "capitulo") {
-                    Ok(path) => {
-                        en::move_scene(&mut self.data, &sid, Some(&path), None, None);
-                        self.changed();
-                        acts.push(Action::Saved(path));
-                    }
-                    Err(e) => eprintln!("capítulo: {e}"),
-                }
-            }
         }
     }
 }
