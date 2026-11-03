@@ -494,53 +494,54 @@ fn document_editor(ui: &mut egui::Ui, tab: &mut Tab, st: &editor::Styles) {
     if let Some(range) = tab.find.pending.take() {
         crate::find::request_scroll(ui.ctx(), id, range);
     }
-    let before = tab.text.clone();
     let response = ui.add(editor::editor_widget(&mut tab.text, id, &mut tab.highlight, st, 1));
     let range = egui::TextEdit::load_state(ui.ctx(), id).and_then(|s| s.cursor.char_range());
     if let Some(range) = range {
         tab.cursor = range.primary.index;
     }
-    if tab.text != before {
+    if response.changed() {
         tab.last_edit = Some(std::time::Instant::now());
         ui.ctx().request_repaint();
         if crate::sc::focus::TYPEWRITER.with(|t| t.get()) {
-            let reveal = editor::Reveal(range.map(|r| (
-                editor::char_to_byte(&tab.text, r.primary.index),
-                editor::char_to_byte(&tab.text, r.secondary.index),
-            )));
-            let galley = editor::galley(ui, &tab.text, &mut tab.highlight, st, reveal, response.rect.width());
+            let (galley, origin) = tab.highlight.rendered.as_ref().unwrap();
             let cursor = galley.from_ccursor(egui::text::CCursor::new(tab.cursor));
-            ui.scroll_to_rect(galley.pos_from_cursor(&cursor).translate(response.rect.min.to_vec2()), Some(egui::Align::Center));
+            ui.scroll_to_rect(galley.pos_from_cursor(&cursor).translate(origin.to_vec2()), Some(egui::Align::Center));
         }
     }
     // Keep integrations in note coordinates; never splice an old block back into it.
     tab.live.active = Some(0);
-    tab.live.buf.clone_from(&tab.text);
-    tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
-    let reveal = editor::Reveal(range.map(|r| (
-        editor::char_to_byte(&tab.text, r.primary.index),
-        editor::char_to_byte(&tab.text, r.secondary.index),
-    )));
-    let galley = editor::galley(ui, &tab.text, &mut tab.highlight, st, reveal, response.rect.width());
+    if response.changed() {
+        tab.live.buf.clone_from(&tab.text);
+        tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
+    }
+    // Reuse the exact geometry TextEdit already laid out, at its actual width.
+    let (galley, origin) = tab.highlight.rendered.as_ref().unwrap();
     if let Some(anchor) = tab.live.drag_anchor {
         if let Some(pos) = ui.input(|i| i.pointer.interact_pos()) {
-            let cursor = galley.cursor_from_pos(pos - response.rect.min).ccursor;
+            let cursor = galley.cursor_from_pos(pos - *origin).ccursor;
             let primary = if ui.input(|i| i.pointer.primary_pressed()) { egui::text::CCursor::new(anchor) } else { cursor };
             let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(anchor), primary)));
+            let next = egui::text::CCursorRange::two(egui::text::CCursor::new(anchor), primary);
+            let moved = state.cursor.char_range() != Some(next);
+            state.cursor.set_char_range(Some(next));
             state.store(ui.ctx(), id);
             ui.ctx().memory_mut(|m| m.request_focus(id));
             tab.cursor = primary.index;
-            ui.ctx().request_repaint();
+            if moved { ui.ctx().request_repaint(); }
             if pos.y < ui.clip_rect().top() || pos.y > ui.clip_rect().bottom() {
-                ui.scroll_to_rect(galley.pos_from_cursor(&galley.from_ccursor(primary)).translate(response.rect.min.to_vec2()), None);
+                ui.scroll_to_rect(galley.pos_from_cursor(&galley.from_ccursor(primary)).translate(origin.to_vec2()), None);
             }
         }
         if !ui.input(|i| i.pointer.primary_down()) { tab.live.drag_anchor = None; }
     }
     let mut line = 0;
     for row in &galley.rows {
-        tab.live.spots.push((response.rect.top() + row.min_y(), response.rect.top() + row.max_y(), line, line));
+        if origin.y + row.min_y() > ui.clip_rect().bottom() { break; }
+        if origin.y + row.max_y() < ui.clip_rect().top() {
+            if row.ends_with_newline { line += 1; }
+            continue;
+        }
+        tab.live.spots.push((origin.y + row.min_y(), origin.y + row.max_y(), line, line));
         if row.ends_with_newline { line += 1; }
     }
 }
@@ -644,6 +645,20 @@ mod editing_tests {
         let command = Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..Modifiers::NONE };
         let _ = frame(&ctx, &mut tab, vec![key(Key::Z, command)], command);
         assert_eq!(tab.text, original);
+    }
+
+    #[test]
+    fn idle_editing_reuses_the_exact_textedit_layout_and_does_not_repaint_continuously() {
+        let ctx = context();
+        let mut tab = note(&"Um parágrafo de planejamento.\n\n".repeat(400));
+        tab.live.open_document(&tab.text, 0);
+        for _ in 0..4 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        let first = tab.highlight.rendered.as_ref().unwrap().0.clone();
+        for _ in 0..5 {
+            let out = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+            assert!(Arc::ptr_eq(&first, &tab.highlight.rendered.as_ref().unwrap().0));
+            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20));
+        }
     }
 
     #[test]

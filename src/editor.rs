@@ -10,7 +10,8 @@ use std::hash::{Hash, Hasher};
 
 static INLINE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
-        r"(?P<code>`[^`\n]+`)",
+        r"(?P<escape>\\[[:punct:]])",
+        r"|(?P<code>`[^`\n]+`)",
         r"|(?P<wiki>!?\[\[[^\]\n]+\]\])",
         r"|(?P<mdlink>!?\[[^\]\n]*\]\([^)\n]*\))",
         r"|(?P<url>https?://[^\s)>\]]+)",
@@ -215,6 +216,7 @@ pub enum Deco {
     Quote(usize),
     /// A line of a fenced code block (the fences included).
     Code,
+    Rule,
 }
 
 /// The width of a list item's marker box, plus the gap after it, as the
@@ -224,6 +226,13 @@ pub fn list_step(size: f32) -> f32 {
 }
 
 static QUOTE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*(>\s?)+").unwrap());
+
+fn markdown_rule(body: &str) -> bool {
+    if body.len() - body.trim_start_matches(' ').len() > 3 { return false; }
+    let mut chars = body.chars().filter(|c| !matches!(c, ' ' | '\t' | '\r'));
+    let Some(mark) = chars.next() else { return false };
+    matches!(mark, '-' | '*' | '_') && chars.clone().count() >= 2 && chars.all(|c| c == mark)
+}
 
 /// The styled layout, and how each line sits in Live Preview.
 pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, Vec<LineInfo>) {
@@ -367,8 +376,13 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
                 }
                 rest = &line[end..];
                 rest_at += end;
-            } else if body.trim() == "---" || body.trim() == "***" {
-                job.append(line, 0.0, st.fmt(st.size, p.faint));
+            } else if markdown_rule(body) {
+                if st.live && !on_line {
+                    job.append(line, 0.0, hidden(&base));
+                    info.deco = Deco::Rule;
+                } else {
+                    job.append(line, 0.0, st.fmt(st.size, p.faint));
+                }
                 break 'line;
             } else if !list_cols.is_empty() && !body.trim().is_empty() {
                 // a continuation of a list item: under its text
@@ -415,7 +429,11 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
         let s = &text[start..end];
         let marks = Marks { p: *p, hide: st.live && !reveal.touches(offset + start, offset + end) };
         let mut f = base.clone();
-        if c.name("code").is_some() {
+        if c.name("escape").is_some() {
+            let m = marks.mark(&f);
+            job.append(&s[..1], 0.0, m);
+            job.append(&s[1..], 0.0, f);
+        } else if c.name("code").is_some() {
             f = st.mono(p.text);
             f.background = p.code_bg;
             wrapped(job, s, 1, 1, f, &marks);
@@ -508,6 +526,7 @@ pub struct HighlightCache {
     key: u64,
     job: Option<LayoutJob>,
     lines: Vec<LineInfo>,
+    pub(crate) rendered: Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
     live_key: u64,
     live: Option<(std::sync::Arc<egui::Galley>, std::sync::Arc<Vec<DecoShape>>)>,
 }
@@ -540,14 +559,16 @@ impl HighlightCache {
 
     /// The Live Preview galley at `width`, and what to draw with it.
     pub fn live(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32) -> (std::sync::Arc<egui::Galley>, std::sync::Arc<Vec<DecoShape>>) {
-        let job = self.get(text, st, reveal);
+        // Cache hits must not clone the complete document and its sections.
+        let key = Self::key(text, st, reveal);
         let a = crate::align::current();
         let mut h = DefaultHasher::new();
-        self.key.hash(&mut h);
+        key.hash(&mut h);
         width.to_bits().hash(&mut h);
         (a as u8).hash(&mut h);
         let k = h.finish();
         if self.live_key != k || self.live.is_none() {
+            let job = self.get(text, st, reveal);
             let (g, d) = compose(fonts, job, &self.lines, width, a, st);
             self.live = Some((std::sync::Arc::new(g), std::sync::Arc::new(d)));
             self.live_key = k;
@@ -563,6 +584,7 @@ pub enum DecoShape {
     Check(egui::Pos2, bool),
     Bar(f32, f32, f32),
     CodeBox(egui::Rect),
+    Rule(egui::Rect),
 }
 
 /// The note's lines laid out one by one, each at its own indent and width,
@@ -607,6 +629,7 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
         let wrap = (width - line.content_x).max(40.0);
         let mut j = sub(line.sections.clone(), &line.bytes);
         j.wrap.max_width = wrap;
+        if line.deco == Deco::Rule { j.first_row_min_height = st.size * st.typo.line; }
         let g = crate::align::layout(fonts, j, wrap, align);
         ppp = g.pixels_per_point;
         let x0 = line.content_x - lead_w;
@@ -636,6 +659,7 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
         y = top + g.rect.height().max(first.height());
         let step = list_step(st.size);
         match line.deco {
+            Deco::Rule => decos.push(DecoShape::Rule(egui::Rect::from_min_max(egui::pos2(0.0, top), egui::pos2(width, y)))),
             Deco::Bullet(level) => decos.push(DecoShape::Bullet(egui::pos2(step * level as f32 + st.size * 0.65, first.center().y))),
             Deco::Task(level, done) => decos.push(DecoShape::Check(egui::pos2(step * level as f32 + st.size * 0.65, first.center().y), done)),
             _ => {}
@@ -672,31 +696,44 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
 
 /// Draw what the reading view draws around the text: list bullets and check
 /// boxes, quote bars, the code block's box.
-fn paint_decos(painter: &egui::Painter, at: egui::Pos2, decos: &[DecoShape], size: f32, p: &Palette) {
+fn deco_shapes(clip: egui::Rect, at: egui::Pos2, decos: &[DecoShape], size: f32, p: &Palette) -> Vec<egui::Shape> {
+    let mut shapes = Vec::new();
     let v = at.to_vec2();
     let typo = crate::typo::get();
     for d in decos {
+        let visible = match d {
+            DecoShape::Bullet(c) | DecoShape::Check(c, _) => egui::Rect::from_center_size(*c + v, egui::vec2(size * 2.0, size * 2.0)),
+            DecoShape::Bar(x, t, b) => egui::Rect::from_min_max(egui::pos2(at.x + x - 2.0, at.y + t), egui::pos2(at.x + x + 2.0, at.y + b)),
+            DecoShape::CodeBox(r) | DecoShape::Rule(r) => r.translate(v),
+        };
+        if !visible.intersects(clip) { continue; }
         match d {
+            DecoShape::Rule(r) => {
+                let r = r.translate(v);
+                shapes.push(egui::Shape::line_segment([r.left_center(), r.right_center()], Stroke::new(1.0_f32, p.border_strong)));
+            }
             DecoShape::Bullet(c) => {
-                painter.circle_filled(*c + v, (size * 0.16).max(2.2), typo.bullet.unwrap_or(p.faint));
+                shapes.push(egui::Shape::circle_filled(*c + v, (size * 0.16).max(2.2), typo.bullet.unwrap_or(p.faint)));
             }
             DecoShape::Check(c, done) => {
                 let r = egui::Rect::from_center_size(*c + v, egui::vec2(size * 0.9, size * 0.9));
                 // as egui draws the reading view's check box
-                painter.rect_filled(r, 3.0, p.bg_active);
+                shapes.push(egui::Shape::rect_filled(r, 3.0, p.bg_active));
                 if *done {
                     let k = r.width();
-                    let _ = painter.line(vec![r.min + egui::vec2(k * 0.22, k * 0.52), r.min + egui::vec2(k * 0.42, k * 0.72), r.min + egui::vec2(k * 0.78, k * 0.28)], Stroke::new(1.5_f32, p.text));
+                    shapes.push(egui::Shape::line(vec![r.min + egui::vec2(k * 0.22, k * 0.52), r.min + egui::vec2(k * 0.42, k * 0.72), r.min + egui::vec2(k * 0.78, k * 0.28)], Stroke::new(1.5_f32, p.text)));
                 }
             }
             DecoShape::Bar(x, t, b) => {
-                painter.line_segment([egui::pos2(at.x + x, at.y + t + 2.0), egui::pos2(at.x + x, at.y + b - 2.0)], Stroke::new(typo.quote_width, typo.quote.unwrap_or(p.border_strong)));
+                shapes.push(egui::Shape::line_segment([egui::pos2(at.x + x, at.y + t + 2.0), egui::pos2(at.x + x, at.y + b - 2.0)], Stroke::new(typo.quote_width, typo.quote.unwrap_or(p.border_strong))));
             }
             DecoShape::CodeBox(r) => {
-                painter.rect(r.translate(v), 8.0, p.code_bg, Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside);
+                shapes.push(egui::Shape::rect_filled(r.translate(v), 8.0, p.code_bg));
+                shapes.push(egui::Shape::rect_stroke(r.translate(v), 8.0, Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside));
             }
         }
     }
+    shapes
 }
 
 /// Character index ↔ byte offset helpers for the editor's cursor.
@@ -937,12 +974,8 @@ fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutpu
 pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut HighlightCache, st: &'a Styles, min_rows: usize) -> impl egui::Widget + 'a {
     move |ui: &mut egui::Ui| {
         let reveal = if st.live { reveal_of(ui.ctx(), id, text) } else { Reveal(None) };
-        if st.live {
-            // bullets, bars and code boxes go under the text
-            let w = ui.available_width();
-            let decos = ui.fonts(|f| cache.live(f, text, st, reveal, w).1);
-            paint_decos(ui.painter(), ui.cursor().min, &decos, st.size, &st.p);
-        }
+        // Reserve the background slot; layout only at TextEdit's actual wrap width.
+        let deco_slot = st.live.then(|| ui.painter().add(egui::Shape::Noop));
         let before_text = text.clone();
         let mut layouter = |ui: &egui::Ui, s: &str, wrap: f32| galley(ui, s, cache, st, reveal, wrap);
         // a right click must not move the caret: the menu acts on the selection
@@ -964,6 +997,11 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let cursor_stroke = ui.visuals().text_cursor.stroke;
         ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
+        cache.rendered = Some((out.galley.clone(), out.galley_pos));
+        if let Some(slot) = deco_slot {
+            let decos = &cache.live.as_ref().unwrap().1;
+            ui.painter().set(slot, egui::Shape::Vec(deco_shapes(ui.clip_rect(), out.galley_pos, decos, st.size, &st.p)));
+        }
         crate::find::paint(ui, &out.galley, out.galley_pos);
         crate::find::scroll_editor(ui, id, &out);
         ui.visuals_mut().text_cursor.stroke = cursor_stroke;
@@ -996,6 +1034,43 @@ mod tests {
 
     fn styles() -> Styles {
         Styles::live(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))
+    }
+
+    #[test]
+    fn live_preview_renders_escaped_punctuation_and_rules_without_changing_source() {
+        let st = styles();
+        let text = "Antes\n\n1\\. sacrificar o mundo\n\n---\n\nDepois";
+        let (job, lines) = highlight_lines(text, &st, Reveal(None));
+        assert_eq!(job.text, text);
+        let slash = text.find('\\').unwrap();
+        let syntax = job.sections.iter().find(|s| s.byte_range.contains(&slash)).unwrap();
+        assert_eq!(syntax.format.color, Color32::TRANSPARENT);
+        assert_eq!(lines[4].deco, Deco::Rule);
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let mut cache = HighlightCache::default();
+        let (g, decos) = cache.live(&fonts, text, &st, Reveal(None), 400.0);
+        assert!(decos.iter().any(|d| matches!(d, DecoShape::Rule(_))));
+        assert_eq!(g.rows.iter().map(|r| r.char_count_including_newline()).sum::<usize>(), text.chars().count());
+        let source = Styles::source(16.0, st.p);
+        let (raw, _) = highlight_lines(text, &source, Reveal(None));
+        assert_ne!(raw.sections.iter().find(|s| s.byte_range.contains(&slash)).unwrap().format.color, Color32::TRANSPARENT);
+    }
+
+    #[test]
+    fn a_multimegabyte_note_reuses_its_layout_on_idle_frames() {
+        let st = styles();
+        let text = "Uma nota longa com **ênfase**, [[referência]] e texto para planejar a história.\n\n".repeat(32_000);
+        assert!(text.len() > 2_400_000);
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let mut cache = HighlightCache::default();
+        let (first, decos) = cache.live(&fonts, &text, &st, Reveal(None), 700.0);
+        let start = std::time::Instant::now();
+        for _ in 0..8 {
+            let (next, next_decos) = cache.live(&fonts, &text, &st, Reveal(None), 700.0);
+            assert!(std::sync::Arc::ptr_eq(&first, &next));
+            assert!(std::sync::Arc::ptr_eq(&decos, &next_decos));
+        }
+        eprintln!("8 idle cache hits, {} bytes: {:?}", text.len(), start.elapsed());
     }
 
     #[test]
