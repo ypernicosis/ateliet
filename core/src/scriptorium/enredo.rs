@@ -17,6 +17,44 @@ pub const TRAMA_TIPOS: [(&str, &str); 5] = [("principal", "Trama principal"), ("
 
 pub const PISTA_TIPOS: [(&str, &str); 8] = [("pista", "Pista"), ("foreshadowing", "Foreshadowing"), ("misterio", "Mistério"), ("promessa", "Promessa"), ("objeto", "Objeto"), ("segredo", "Segredo"), ("profecia", "Profecia"), ("armadilha", "Arma de Tchekhov")];
 
+pub const MOTIVO_TIPOS: [(&str, &str); 4] = [("simbolo", "Símbolo / metáfora"), ("motivo", "Motivo recorrente"), ("eco", "Eco / paralelo"), ("foreshadowing", "Foreshadowing")];
+
+pub fn recurring_pista(pi: &Json) -> bool { pi["natureza"] == "recorrente" }
+
+/// Switching the model never destroys the other model's notes or links.
+pub fn set_pista_model(pi: &mut Json, recurring: bool) {
+    let was_recurring = recurring_pista(pi);
+    if was_recurring == recurring { return; }
+    let old_key = if was_recurring { "tipo_recorrente" } else { "tipo_linear" };
+    pi[old_key] = pi["tipo"].clone();
+    let new_key = if recurring { "tipo_recorrente" } else { "tipo_linear" };
+    pi["tipo"] = pi[new_key].as_str().map(|s| json!(s)).unwrap_or_else(|| json!(if recurring { "simbolo" } else { "pista" }));
+    pi["natureza"] = json!(if recurring { "recorrente" } else { "narrativa" });
+    if !recurring {
+        if !pi["estado"].is_string() { pi["estado"] = json!("aberta"); }
+        for key in ["plantios", "colheitas"] { if !pi[key].is_array() { pi[key] = json!([]); } }
+    }
+    if recurring && !pi["ocorrencias"].is_array() {
+        let mut occurrences: Vec<Json> = Vec::new();
+        for key in ["plantios", "colheitas"] {
+            for link in pi[key].as_array().into_iter().flatten() {
+                if !occurrences.iter().any(|x| x["cena"] == link["cena"] && x["livro"] == link["livro"]) {
+                    occurrences.push(link.clone());
+                }
+            }
+        }
+        pi["ocorrencias"] = json!(occurrences);
+    }
+}
+
+pub fn pista_record(name: &str, tipo: &str, recurring: bool) -> Json {
+    if recurring {
+        json!({"id": uid("m"), "natureza": "recorrente", "nome": name, "tipo": tipo, "ocorrencias": [], "sentido": "", "associacoes": "", "notas": ""})
+    } else {
+        json!({"id": uid("p"), "natureza": "narrativa", "nome": name, "tipo": tipo, "estado": "aberta", "plantios": [], "colheitas": [], "notas": ""})
+    }
+}
+
 pub const ARCO_TIPOS: [(&str, &str); 4] = [("positivo", "Positivo (mentira → verdade)"), ("negativo", "Negativo (verdade → mentira)"), ("plano", "Plano (a verdade muda o mundo)"), ("queda", "Queda (mentira → mentira pior)")];
 
 pub fn uid(prefix: &str) -> String {
@@ -329,9 +367,9 @@ pub fn delete_scene(data: &mut Json, id: &str) {
         a.retain(|s| s["id"] != id);
     }
     for p in data["pistas"].as_array_mut().into_iter().flatten() {
-        for k in ["plantios", "colheitas"] {
+        for k in ["plantios", "colheitas", "ocorrencias"] {
             if let Some(l) = p[k].as_array_mut() {
-                l.retain(|x| x["cena"] != id);
+                l.retain(|x| x["cena"] != id || (k == "ocorrencias" && !str_of(x, "livro").is_empty()));
             }
         }
     }
@@ -715,6 +753,50 @@ pub fn fmt_quando(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recurring_elements_have_occurrences_without_a_resolution_state() {
+        let mut pi = pista_record("A caneca do Soren", "simbolo", true);
+        assert!(recurring_pista(&pi));
+        assert!(pi.get("estado").is_none());
+        assert!(pi.get("plantios").is_none());
+        assert!(pi.get("colheitas").is_none());
+        pi["ocorrencias"] = json!([{"cena": "a", "nota": "Chá na caneca", "leitura": "Um sentido"}, {"cena": "b", "nota": "A mesma caneca", "leitura": "Outro sentido"}]);
+        let saved = serde_json::to_string(&pi).unwrap();
+        let restored: Json = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored["ocorrencias"].as_array().unwrap().len(), 2);
+        assert!(restored.get("estado").is_none());
+    }
+
+    #[test]
+    fn changing_model_preserves_both_models_and_legacy_records_stay_narrative() {
+        let mut pi = json!({"id": "old", "tipo": "promessa", "estado": "paga", "notas": "Não perder", "plantios": [{"cena": "a", "nota": "Detalhe"}], "colheitas": [{"cena": "b"}]});
+        assert!(!recurring_pista(&pi));
+        let before = pi.clone();
+        set_pista_model(&mut pi, true);
+        assert!(recurring_pista(&pi));
+        assert_eq!(pi["ocorrencias"].as_array().unwrap().len(), 2);
+        pi["ocorrencias"][0]["leitura"] = json!("Nova leitura");
+        set_pista_model(&mut pi, false);
+        for key in ["tipo", "estado", "plantios", "colheitas", "notas"] { assert_eq!(pi[key], before[key]); }
+        set_pista_model(&mut pi, true);
+        assert_eq!(pi["ocorrencias"][0]["leitura"], "Nova leitura");
+        let mut new_motif = pista_record("A caneta da Gomer", "simbolo", true);
+        set_pista_model(&mut new_motif, false);
+        assert_eq!(new_motif["estado"], "aberta");
+    }
+
+    #[test]
+    fn deleting_a_scene_removes_its_occurrences_but_keeps_the_motif_and_other_books() {
+        let mut data = blank();
+        let mut pi = pista_record("Caneta", "simbolo", true);
+        pi["ocorrencias"] = json!([{"cena": "a"}, {"cena": "b"}, {"cena": "a", "livro": "outro-livro"}]);
+        data["pistas"] = json!([pi]);
+        delete_scene(&mut data, "a");
+        assert_eq!(data["pistas"].as_array().unwrap().len(), 1);
+        assert_eq!(data["pistas"][0]["ocorrencias"].as_array().unwrap().len(), 2);
+    }
+
 
     #[test]
     fn quando() {
