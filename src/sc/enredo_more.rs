@@ -401,12 +401,12 @@ impl EnredoView {
             self.new_trama = Some((String::new(), Some(sid)));
         }
         // clues
-        let in_pistas: Vec<(String, String, bool)> = self.data["pistas"].as_array().into_iter().flatten().filter_map(|pi| {
+        let in_pistas: Vec<(String, String, bool)> = self.data["pistas"].as_array().into_iter().flatten().filter(|pi| !en::recurring_pista(pi)).filter_map(|pi| {
             let pl = pi["plantios"].as_array().is_some_and(|l| l.iter().any(|x| x["cena"] == id));
             let co = pi["colheitas"].as_array().is_some_and(|l| l.iter().any(|x| x["cena"] == id));
             (pl || co).then(|| (en::str_of(pi, "id").to_string(), en::str_of(pi, "nome").to_string(), pl))
         }).collect();
-        let all_pistas: Vec<(String, String)> = self.data["pistas"].as_array().into_iter().flatten().map(|pi| (en::str_of(pi, "id").to_string(), en::str_of(pi, "nome").to_string())).collect();
+        let all_pistas: Vec<(String, String)> = self.data["pistas"].as_array().into_iter().flatten().filter(|pi| !en::recurring_pista(pi)).map(|pi| (en::str_of(pi, "id").to_string(), en::str_of(pi, "nome").to_string())).collect();
         let mut link: Option<(&str, Option<String>)> = None;
         let mut goto = None;
         sec(ui, p, "Pistas", icons::KEY_ROUND, !in_pistas.is_empty(), |ui| {
@@ -443,6 +443,36 @@ impl EnredoView {
                     pi["estado"] = json!("paga");
                 }
             }
+            ch = true;
+        }
+        let motifs: Vec<(String, String, bool)> = self.data["pistas"].as_array().into_iter().flatten().filter(|pi| en::recurring_pista(pi)).map(|pi| (
+            en::str_of(pi, "id").to_string(), en::str_of(pi, "nome").to_string(),
+            pi["ocorrencias"].as_array().is_some_and(|a| a.iter().any(|x| x["cena"] == id && en::str_of(x, "livro").is_empty()))
+        )).collect();
+        let mut occurrence = None;
+        sec(ui, p, "Motivos recorrentes", icons::KEY_ROUND, motifs.iter().any(|x| x.2), |ui| {
+            for (pid, name, _) in motifs.iter().filter(|x| x.2) {
+                if kit::Row::new(name).show(ui, p).clicked() { goto = Some(Sel::Pista(pid.clone())); }
+            }
+            let available: Vec<_> = motifs.iter().filter(|x| !x.2).collect();
+            let mut items: Vec<_> = available.iter().map(|x| (x.1.clone(), false)).collect();
+            items.push(("Novo motivo…".into(), false));
+            if let Some(n) = pick(ui, p, "motivo-na-cena", icons::PLUS, "Registrar aparição", false, &items) {
+                occurrence = Some(available.get(n).map(|x| x.0.clone()));
+            }
+        });
+        if let Some(existing) = occurrence {
+            let pid = existing.unwrap_or_else(|| {
+                let record = en::pista_record("", "simbolo", true);
+                let pid = en::str_of(&record, "id").to_string();
+                self.data["pistas"].as_array_mut().unwrap().push(record);
+                self.focus_title = true;
+                pid
+            });
+            let pi = self.data["pistas"].as_array_mut().unwrap().iter_mut().find(|pi| pi["id"] == pid).unwrap();
+            if !pi["ocorrencias"].is_array() { pi["ocorrencias"] = json!([]); }
+            pi["ocorrencias"].as_array_mut().unwrap().push(json!({"cena": id, "nota": "", "leitura": ""}));
+            goto = Some(Sel::Pista(pid));
             ch = true;
         }
         // character arcs
@@ -759,10 +789,16 @@ impl EnredoView {
 
     fn draw_pista(&mut self, ui: &mut egui::Ui, p: Palette, id: &str, cols: &[Col]) -> bool {
         let Some(i) = self.data["pistas"].as_array().and_then(|a| a.iter().position(|x| x["id"] == id)) else { return self.missing(ui, p, "Pista") };
-        if kicker(ui, p, "Pista") {
+        let recurrent = en::recurring_pista(&self.data["pistas"][i]);
+        if kicker(ui, p, if recurrent { "Motivo recorrente" } else { "Pista narrativa" }) {
             self.sel = None;
             return false;
         }
+        if let Some(model) = kit::segmented(ui, &[("", "Narrativa"), ("", "Recorrente")], usize::from(recurrent), p) {
+            en::set_pista_model(&mut self.data["pistas"][i], model == 1);
+            return true;
+        }
+        if recurrent { return self.draw_motivo(ui, p, id, i, cols); }
         let mut ch = false;
         let mut focus = std::mem::take(&mut self.focus_title);
         let scenes = self.scene_items(cols);
@@ -838,6 +874,60 @@ impl EnredoView {
         }
         if goto.is_some() {
             self.sel = goto;
+        }
+        ch
+    }
+
+    fn draw_motivo(&mut self, ui: &mut egui::Ui, p: Palette, id: &str, i: usize, cols: &[Col]) -> bool {
+        let scenes = self.scene_items(cols);
+        let labels: Vec<_> = self.data["pistas"][i]["ocorrencias"].as_array().into_iter().flatten().map(|x| {
+            let book = en::str_of(x, "livro");
+            let sid = en::str_of(x, "cena");
+            let name = if book.is_empty() || book == self.book { scene_label(&self.data, sid) }
+                else { self.saga_cache.get(book).map(|(_, data)| scene_label(data, sid)).unwrap_or_else(|| "Cena de outro livro".into()) };
+            (book.to_string(), sid.to_string(), name)
+        }).collect();
+        let pi = &mut self.data["pistas"][i];
+        let mut focus = std::mem::take(&mut self.focus_title);
+        let mut ch = title_edit(ui, p, pi, "nome", "Qual elemento se repete?", &mut focus);
+        ui.label(RichText::new("Acompanhe as aparições e seus sentidos. Não exige plantio nem colheita.").size(12.0).color(p.muted));
+        let tipo = en::str_of(pi, "tipo").to_string();
+        let items: Vec<_> = en::MOTIVO_TIPOS.iter().map(|x| (x.1.to_string(), x.0 == tipo)).collect();
+        if let Some(k) = pick(ui, p, "motivo-tipo", icons::TAG, en::MOTIVO_TIPOS.iter().find(|x| x.0 == tipo).map(|x| x.1).unwrap_or("Motivo"), false, &items) {
+            pi["tipo"] = json!(en::MOTIVO_TIPOS[k].0); ch = true;
+        }
+        label(ui, p, "Sentido / metáfora");
+        ch |= plain_area(ui, p, pi, "sentido", "O que esse elemento sugere? Pode ter mais de uma leitura.", 3);
+        ch |= line(ui, p, "Associações", pi, "associacoes", "Personagens, temas ou outros motivos");
+        label(ui, p, "Ocorrências");
+        if !pi["ocorrencias"].is_array() { pi["ocorrencias"] = json!([]); }
+        let list = pi["ocorrencias"].as_array_mut().unwrap();
+        let mut remove = None;
+        let mut goto = None;
+        for (n, x) in list.iter_mut().enumerate() {
+            ui.push_id(("motivo", id, n), |ui| {
+                let sid = en::str_of(x, "cena");
+                let book = en::str_of(x, "livro");
+                let name = labels.iter().find(|l| l.0 == book && l.1 == sid).map(|l| l.2.as_str()).unwrap_or("Cena removida");
+                ui.horizontal(|ui| {
+                    if kit::quiet(ui, Some(icons::CLAPPERBOARD), name, p).clicked() { goto = Some((book.to_string(), Sel::Cena(sid.to_string()))); }
+                    if kit::icon_button_sized(ui, icons::X, "Desvincular ocorrência", false, p, 20.0, 12.0).clicked() { remove = Some(n); }
+                });
+                label(ui, p, "Como aparece");
+                ch |= area(ui, p, x, "nota", "O gesto, o objeto, a imagem, o trecho…", 2);
+                label(ui, p, "Sentido nesta aparição");
+                ch |= area(ui, p, x, "leitura", "O que reforça, contrasta ou muda aqui?", 2);
+                kit::hairline(ui, p);
+            });
+        }
+        if let Some(n) = remove { list.remove(n); ch = true; }
+        let available = scenes;
+        if let Some(sid) = scene_pick(ui, p, "motivo-ocorrencia", &available) { list.push(json!({"cena": sid, "nota": "", "leitura": ""})); ch = true; }
+        label(ui, p, "Notas livres");
+        ch |= area(ui, p, pi, "notas", "Possibilidades, relações e aparições ainda sem cena definida…", 3);
+        if self.delete_button(ui, p, id, "Excluir motivo") { self.data["pistas"].as_array_mut().unwrap().remove(i); self.sel = None; ch = true; }
+        if let Some((book, sel)) = goto {
+            if book.is_empty() || book == self.book { self.sel = Some(sel); } else { self.go_book(&book, Some(sel)); }
         }
         ch
     }
@@ -1359,30 +1449,37 @@ impl EnredoView {
     pub(super) fn pistas(&mut self, ui: &mut egui::Ui, p: Palette, srcs: &[Src]) {
         let saga = srcs.len() > 1;
         let current = srcs.iter().find(|s| s.current()).map(|s| s.book.path.clone()).unwrap_or_default();
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            for (k, title) in ["Pistas narrativas", "Motivos recorrentes"].iter().enumerate() {
+                if kit::chip(ui, None, title, self.pista_model == k, p).clicked() {
+                    self.pista_model = k; self.pista_kind = 0; self.pista_filter = 0; self.pista_search.clear();
+                }
+            }
+        });
+        let recurring = self.pista_model == 1;
+        let types: &[(&str, &str)] = if recurring { &en::MOTIVO_TIPOS } else { &en::PISTA_TIPOS };
         let mut capture = false;
         egui::Frame::new().inner_margin(egui::Margin::symmetric(20, 14)).show(ui, |ui| {
-            ui.label(RichText::new("Capture uma pista").font(kit::medium(13.0)).color(p.text));
+            ui.label(RichText::new(if recurring { "Registre um motivo" } else { "Capture uma pista" }).font(kit::medium(13.0)).color(p.text));
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
-                let items: Vec<(String, bool)> = en::PISTA_TIPOS.iter().enumerate().map(|(i, x)| (x.1.to_string(), i == self.pista_kind)).collect();
-                if let Some(k) = pick(ui, p, "capture-type", icons::TAG, en::PISTA_TIPOS[self.pista_kind].1, false, &items) {
+                let items: Vec<(String, bool)> = types.iter().enumerate().map(|(i, x)| (x.1.to_string(), i == self.pista_kind)).collect();
+                if let Some(k) = pick(ui, p, "capture-type", icons::TAG, types[self.pista_kind].1, false, &items) {
                     self.pista_kind = k;
                 }
                 let width = (ui.available_width() - 112.0).max(120.0);
-                let input = ui.add(egui::TextEdit::singleline(&mut self.pista_draft).desired_width(width).hint_text("Ex.: O relógio para sempre às 3h17"));
+                let input = ui.add(egui::TextEdit::singleline(&mut self.pista_draft).desired_width(width).hint_text(if recurring { "Ex.: A caneca de chá do Soren" } else { "Ex.: O relógio para sempre às 3h17" }));
                 if std::mem::take(&mut self.pista_focus) { input.request_focus(); }
                 let enter = (input.has_focus() || input.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 capture = kit::button(ui, Some(icons::PLUS), "Adicionar", p).clicked() || enter;
                 if capture { self.pista_focus = true; }
             });
-            ui.label(RichText::new("Enter adiciona e mantém o campo pronto para a próxima. Clique em uma pista para personalizar.").size(11.5).color(p.faint));
+            ui.label(RichText::new("Enter adiciona e mantém o campo pronto. Clique em um registro para personalizar.").size(11.5).color(p.faint));
         });
         if capture && !self.pista_draft.trim().is_empty() {
-            let id = en::uid("p");
-            self.data["pistas"].as_array_mut().unwrap().push(json!({
-                "id": id, "nome": self.pista_draft.trim(), "tipo": en::PISTA_TIPOS[self.pista_kind].0,
-                "estado": "aberta", "plantios": [], "colheitas": [], "notas": ""
-            }));
+            let record = en::pista_record(self.pista_draft.trim(), types[self.pista_kind].0, recurring);
+            self.data["pistas"].as_array_mut().unwrap().push(record);
             self.pista_draft.clear();
             self.pista_search.clear();
             self.pista_filter = 0;
@@ -1390,6 +1487,8 @@ impl EnredoView {
         }
         // Every pista of the books shown, with its book.
         let mut all: Vec<(String, Json)> = srcs.iter().flat_map(|s| s.d(&self.data)["pistas"].as_array().cloned().unwrap_or_default().into_iter().map(move |x| (s.book.path.clone(), x))).collect();
+        all.retain(|(_, pi)| en::recurring_pista(pi) == recurring);
+        if recurring { self.motivos_list(ui, p, &all, srcs, &current); return; }
         let abertas = all.iter().filter(|x| x.1["estado"] == "aberta").count();
         let pagas = all.iter().filter(|x| x.1["estado"] == "paga").count();
         let sem: Vec<String> = all.iter().map(|x| &x.1).filter(|x| x["estado"] == "aberta" && x["plantios"].as_array().is_some_and(|l| !l.is_empty()) && x["colheitas"].as_array().is_none_or(|l| l.is_empty())).map(|x| en::str_of(x, "nome").to_string()).collect();
@@ -1499,7 +1598,7 @@ impl EnredoView {
                 };
                 painter.text(pos2(o.x + 8.0, row.top() + 15.0), egui::Align2::CENTER_CENTER, glyph, kit::icon_font(13.0), gc);
                 let nome = en::str_of(pi, "nome");
-                let tipo = en::PISTA_TIPOS.iter().find(|x| pi["tipo"] == x.0).map(|x| x.1).unwrap_or("Pista");
+                let tipo = types.iter().find(|x| pi["tipo"] == x.0).map(|x| x.1).unwrap_or("Pista");
                 let g = truncated(ui, if nome.is_empty() { "Pista sem nome" } else { nome }, kit::medium(13.0), if estado == "abandonada" { p.faint } else { p.text }, NAME - 40.0);
                 painter.galley(pos2(o.x + 22.0, row.top() + 6.0), g, p.text);
                 painter.text(pos2(o.x + 22.0, row.top() + 26.0), egui::Align2::LEFT_TOP, tipo, egui::FontId::proportional(11.0), p.faint);
@@ -1544,6 +1643,51 @@ impl EnredoView {
                 self.confirm = None;
             }
             None => {}
+        }
+    }
+
+    fn motivos_list(&mut self, ui: &mut egui::Ui, p: Palette, all: &[(String, Json)], srcs: &[Src], current: &str) {
+        ui.label(RichText::new("Objetos, gestos, imagens e metáforas que voltam ao longo da obra.").color(p.muted));
+        ui.label("Buscar motivos, sentidos e ocorrências");
+        ui.add(egui::TextEdit::singleline(&mut self.pista_search).desired_width(f32::INFINITY));
+        let query = self.pista_search.trim().to_lowercase();
+        let mut select = None;
+        let mut found = 0;
+        egui::ScrollArea::vertical().id_salt("motivos-list").show(ui, |ui| {
+            for (book, pi) in all {
+                if !pi.to_string().to_lowercase().contains(&query) { continue; }
+                found += 1;
+                ui.push_id((book, en::str_of(pi, "id")), |ui| {
+                    ui.add_space(10.0);
+                    let title = en::str_of(pi, "nome");
+                    if kit::Row::new(if title.is_empty() { "Motivo sem nome" } else { title }).icon(icons::KEY_ROUND).show(ui, p).clicked() {
+                        select = Some((book.clone(), Sel::Pista(en::str_of(pi, "id").to_string())));
+                    }
+                    let meaning = en::str_of(pi, "sentido");
+                    if !meaning.is_empty() { ui.label(RichText::new(meaning).color(p.muted)); }
+                    let links = pi["ocorrencias"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+                    let tipo = en::MOTIVO_TIPOS.iter().find(|x| x.0 == en::str_of(pi, "tipo")).map(|x| x.1).unwrap_or("Motivo");
+                    ui.label(RichText::new(format!("{tipo} · {} ocorrências", links.len())).size(11.5).color(p.faint));
+                    let associations = en::str_of(pi, "associacoes");
+                    if !associations.is_empty() { ui.label(RichText::new(associations).size(12.0).color(p.muted)); }
+                    ui.horizontal_wrapped(|ui| {
+                        for link in links {
+                            let bk = link["livro"].as_str().filter(|s| !s.is_empty()).unwrap_or(book);
+                            if let Some(src) = srcs.iter().find(|s| s.book.path == bk) {
+                                let name = scene_label(src.d(&self.data), en::str_of(link, "cena"));
+                                if kit::chip(ui, None, &name, false, p).on_hover_text(format!("{}\n{}", en::str_of(link, "nota"), en::str_of(link, "leitura"))).clicked() {
+                                    select = Some((bk.to_string(), Sel::Cena(en::str_of(link, "cena").to_string())));
+                                }
+                            }
+                        }
+                    });
+                    kit::hairline(ui, p);
+                });
+            }
+        });
+        if found == 0 { ui.label(RichText::new("Nenhum motivo por aqui. Registre um acima ou ajuste a busca.").color(p.muted)); }
+        if let Some((book, sel)) = select {
+            if book == current { self.sel = Some(sel); self.confirm = None; } else { self.go_book(&book, Some(sel)); }
         }
     }
 
@@ -1662,6 +1806,47 @@ impl EnredoView {
                 self.confirm = None;
             }
             None => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod pista_model_tests {
+    use super::*;
+
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> String {
+        fn add(shape: &egui::Shape, out: &mut String) {
+            match shape {
+                egui::Shape::Text(t) => { out.push_str(&t.galley.job.text); out.push('\n'); }
+                egui::Shape::Vec(list) => for shape in list { add(shape, out); },
+                _ => {}
+            }
+        }
+        let mut out = String::new();
+        for shape in shapes { add(&shape.shape, &mut out); }
+        out
+    }
+
+    #[test]
+    fn recurring_drawer_uses_meanings_and_occurrences_instead_of_payoff_controls() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::fonts::definitions());
+        let p = Palette::new(&crate::config::Appearance::default());
+        let mut view = EnredoView::new("book");
+        let motif = en::pista_record("Caneca do Soren", "simbolo", true);
+        let id = en::str_of(&motif, "id").to_string();
+        view.data["pistas"] = json!([motif]);
+        let mut output = String::new();
+        for _ in 0..3 {
+            let frame = ctx.run(egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 1200.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| { view.draw_pista(ui, p, &id, &[]); });
+            });
+            output = texts(&frame.shapes);
+        }
+        assert!(output.contains("Ocorrências"), "{output}");
+        assert!(output.contains("Sentido / metáfora"));
+        for control in ["Plantada em", "Paga em", "Abandonada", "Colher aqui"] {
+            assert!(!output.contains(control), "{control} must not be a recurring-element control");
         }
     }
 }
