@@ -5,6 +5,7 @@
 use super::library::Cx;
 use super::picker::{Picker, Purpose};
 use super::Action;
+use crate::editor::{self, HighlightCache, Styles};
 use crate::host::{self, RenderHost};
 use crate::icons;
 use crate::kit;
@@ -22,6 +23,8 @@ pub struct SheetView {
     dirty: bool,
     last_edit: Option<Instant>,
     editing: Option<usize>,
+    section_highlights: Vec<HighlightCache>,
+    phrase_highlight: HighlightCache,
     name: String,
     rename_attr: Option<(String, String)>,
     new_attr: Option<(String, String)>,
@@ -110,7 +113,7 @@ impl SheetView {
         let abs = root.join(path);
         let text = std::fs::read_to_string(&abs).unwrap_or_default();
         let name = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".md").to_string();
-        SheetView { path: path.into(), sheet: Sheet::parse(&text), mtime: std::fs::metadata(&abs).and_then(|m| m.modified()).ok(), dirty: false, last_edit: None, editing: None, name, rename_attr: None, new_attr: None, new_section: None }
+        SheetView { path: path.into(), sheet: Sheet::parse(&text), mtime: std::fs::metadata(&abs).and_then(|m| m.modified()).ok(), dirty: false, last_edit: None, editing: None, section_highlights: Vec::new(), phrase_highlight: HighlightCache::default(), name, rename_attr: None, new_attr: None, new_section: None }
     }
 
     pub fn changed(&mut self) {
@@ -158,6 +161,11 @@ impl SheetView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, cx: &mut Cx) -> Vec<Action> {
+        // These editors belong to the sheet, independent of the last note
+        // or chapter drawn in another pane.
+        crate::writing::set_chapter(None);
+        crate::find::clear_highlight();
+        crate::align::set_current(crate::align::TextAlign::Left);
         let p = cx.palette;
         let mut acts = Vec::new();
         // the file changed on disk and there is nothing unsaved here: reload
@@ -316,7 +324,8 @@ impl SheetView {
             card_head(ui, p, icons::QUOTE, "Frase marcante");
             let mut frase = self.sheet.str("frase");
             let fid = egui::Id::new(("sheet-frase", &self.path));
-            if ui.add(egui::TextEdit::multiline(&mut frase).id(fid).frame(false).desired_rows(2).desired_width(f32::INFINITY).hint_text(RichText::new("Uma fala que é a cara dele…").color(p.faint)).font(egui::FontId::new(14.0, egui::FontFamily::Name("italic".into())))).changed() | crate::editor::auto_dash(ui, fid, &mut frase) {
+            let styles = Styles::live(14.0, p);
+            if ui.add(editor::editor_widget(&mut frase, fid, &mut self.phrase_highlight, &styles, 2)).changed() {
                 self.sheet.fm.insert("frase".into(), json!(frase));
                 self.changed();
             }
@@ -787,11 +796,13 @@ impl SheetView {
             if editing {
                 let mut t = text.to_string();
                 let id = egui::Id::new(("sec-edit", &self.path, j));
-                let r = ui.add(egui::TextEdit::multiline(&mut t).id(id).frame(false).desired_rows(3).desired_width(f32::INFINITY).font(egui::FontId::proportional(14.0)).hint_text(RichText::new("Escreva…").color(p.faint)));
+                self.section_highlights.resize_with(self.sheet.sections.len(), HighlightCache::default);
+                let styles = Styles::live(14.0, p);
+                let r = ui.add(editor::editor_widget(&mut t, id, &mut self.section_highlights[j], &styles, 3));
                 if self.editing == Some(j) && !r.has_focus() && r.ctx.memory(|m| m.focused().is_none()) {
                     r.request_focus();
                 }
-                if crate::editor::auto_dash(ui, id, &mut t) || r.changed() {
+                if r.changed() {
                     self.sheet.sections[j].1 = t;
                     self.changed();
                 }

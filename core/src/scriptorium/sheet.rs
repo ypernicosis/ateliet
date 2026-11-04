@@ -32,19 +32,31 @@ pub fn split(text: &str) -> (Option<Map<String, Json>>, Option<String>, String) 
 impl Sheet {
     pub fn parse(text: &str) -> Sheet {
         let (fm, invalid, body) = split(text);
-        let mut pre = Vec::new();
-        let mut sections: Vec<(String, Vec<&str>)> = Vec::new();
-        for l in body.split('\n') {
-            if let Some(t) = l.strip_prefix("## ") {
-                sections.push((t.trim().to_string(), Vec::new()));
-                continue;
-            }
-            match sections.last_mut() {
-                Some(s) => s.1.push(l),
-                None => pre.push(l),
+        // Only a top-level Markdown heading opens a card. A literal `##`
+        // inside code, quotes or lists belongs to the current card's text.
+        let mut headings = Vec::new();
+        let mut depth = 0;
+        for (event, range) in pulldown_cmark::Parser::new(&body).into_offset_iter() {
+            match event {
+                pulldown_cmark::Event::Start(tag) => {
+                    if depth == 0 && matches!(tag, pulldown_cmark::Tag::Heading { level: pulldown_cmark::HeadingLevel::H2, .. }) {
+                        if let Some(title) = body[range.start..].lines().next().and_then(|l| l.strip_prefix("## ")) {
+                            let end = body[range.start..].find('\n').map_or(body.len(), |n| range.start + n + 1);
+                            headings.push((range.start, end, title.trim().to_string()));
+                        }
+                    }
+                    depth += 1;
+                }
+                pulldown_cmark::Event::End(_) => depth -= 1,
+                _ => {}
             }
         }
-        Sheet { fm: fm.unwrap_or_default(), invalid, pre: pre.join("\n"), sections: sections.into_iter().map(|(t, ls)| (t, ls.join("\n").trim().to_string())).collect() }
+        let pre = body[..headings.first().map_or(body.len(), |h| h.0)].trim_end_matches('\n').to_string();
+        let sections = headings.iter().enumerate().map(|(i, (_, end, title))| {
+            let next = headings.get(i + 1).map_or(body.len(), |h| h.0);
+            (title.clone(), body[*end..next].trim().to_string())
+        }).collect();
+        Sheet { fm: fm.unwrap_or_default(), invalid, pre, sections }
     }
 
     pub fn to_text(&self) -> String {
@@ -307,6 +319,19 @@ mod tests {
         assert!(out.contains("## Personalidade\n\nTeimosa.\n\n## Notas"));
         assert_eq!(attr_label("vortice"), "vórtice");
         assert_eq!(initials("Ana Clara"), "AC");
+    }
+
+    #[test]
+    fn markdown_inside_cards_survives_round_trip() {
+        for fence in ["```", "~~~~"] {
+            let body = format!("### Memória\n\n**Firme**, *reservada*, ==atenta==.\n\n- um segredo\n- [x] uma promessa\n\n> Uma lembrança.\n\n[[Bia]] e [carta](carta.md)\n\n{fence}md\n## Isto é código\n{fence}\n\n    ## Também é código\n\n> ## Isto é uma citação");
+            let source = format!("---\nscriptorium: personagem\n---\n\n## Personalidade\n\n{body}\n\n## Notas\n\nDepois.\n");
+            let sheet = Sheet::parse(&source);
+            assert_eq!(sheet.sections.len(), 2);
+            assert_eq!(sheet.sections[0], ("Personalidade".into(), body));
+            let reopened = Sheet::parse(&sheet.to_text());
+            assert_eq!(reopened.sections, sheet.sections);
+        }
     }
 
     #[test]
