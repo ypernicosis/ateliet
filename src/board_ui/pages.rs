@@ -39,15 +39,20 @@ pub(super) struct PageState {
     /// The balloon being typed in, and the board before.
     editing: Option<(String, Value)>,
     pub numbers: bool,
-    deco: Option<(egui::TextureHandle, String)>,
-    job: Option<(String, Receiver<egui::ColorImage>)>,
+    decorations: HashMap<String, DecorationCache>,
     last_down: Option<(Instant, String)>,
     layout: String,
 }
 
+#[derive(Default)]
+struct DecorationCache {
+    deco: Option<(egui::TextureHandle, String)>,
+    job: Option<(String, Receiver<egui::ColorImage>)>,
+}
+
 impl PageState {
     pub fn new(kind: &str) -> PageState {
-        PageState { sel_panel: None, sel_balloon: None, drag: None, bkind: "speech".into(), bvertical: kind == "name", bsize: 28.0, editing: None, numbers: true, deco: None, job: None, last_down: None, layout: "one".into() }
+        PageState { sel_panel: None, sel_balloon: None, drag: None, bkind: "speech".into(), bvertical: kind == "name", bsize: 28.0, editing: None, numbers: true, decorations: HashMap::new(), last_down: None, layout: "one".into() }
     }
 }
 
@@ -89,10 +94,16 @@ impl BoardEditor {
         if before == self.doc.board {
             return;
         }
+        let all_pages = before["page"] != self.doc.board["page"] || before["background"] != self.doc.board["background"];
         let after = self.doc.board.clone();
         self.undo.push(Edit::Structure { before, after, tiles: Vec::new() });
         self.redo.clear();
-        self.doc.mark_frame(self.frame);
+        for i in 0..self.doc.frame_count() {
+            if !all_pages && i != self.frame { continue; }
+            self.doc.mark_frame(i);
+            *self.versions.entry(self.doc.frame_id(i)).or_default() += 1;
+        }
+        self.invalidate();
         self.changed();
     }
 
@@ -383,42 +394,57 @@ impl BoardEditor {
 
     /// The page over the layers (drawn in the background at the view's
     /// scale), the webtoon slices, the selection and what is being dragged.
-    pub(super) fn page_draw(&mut self, ui: &egui::Ui, clip: &egui::Painter, origin: egui::Pos2) {
+    pub(super) fn page_decorations(&mut self, ui: &egui::Ui, clip: &egui::Painter, origin: egui::Pos2, frame_index: usize) {
         let (w, h) = (self.doc.width() as f32, self.doc.height() as f32);
         let page = egui::Rect::from_min_size(origin, egui::vec2(w, h) * self.zoom);
         let ppp = ui.ctx().pixels_per_point();
-        let scale = ((self.zoom * ppp).min(4096.0 / w.max(h)) * 8.0).round() / 8.0;
-        let frame = self.doc.frame(self.frame).clone();
-        let key = format!("{}|{}|{}|{}|{scale}|{}", self.doc.board["page"], frame["panels"], frame["balloons"], self.doc.board["background"], self.pg.numbers);
-        if let Some((k, rx)) = &self.pg.job {
-            if let Ok(img) = rx.try_recv() {
-                let k = k.clone();
-                self.pg.job = None;
-                let tex = ui.ctx().load_texture("board-page", img, egui::TextureOptions::LINEAR);
-                self.pg.deco = Some((tex, k));
-            } else {
-                ui.ctx().request_repaint_after(Duration::from_millis(50));
+        let scale = (((self.zoom * ppp).min(4096.0 / w.max(h)) * 8.0).round() / 8.0).max(0.125);
+        let frame = self.doc.frame(frame_index).clone();
+        let joined = self.is_joined();
+        let key = format!("{joined}|{}|{}|{}|{}|{scale}|{}", self.doc.board["page"], frame["panels"], frame["balloons"], self.doc.board["background"], self.pg.numbers);
+        let id = self.doc.frame_id(frame_index);
+        let current_id = self.doc.frame_id(self.frame);
+        let facing_id = self.spread().map(|(j, _)| self.doc.frame_id(j));
+        self.pg.decorations.retain(|id, _| *id == current_id || Some(id) == facing_id.as_ref());
+        let cache = self.pg.decorations.entry(id.clone()).or_default();
+        if let Some((k, rx)) = &cache.job {
+            match rx.try_recv() {
+                Ok(img) => {
+                    let k = k.clone();
+                    cache.job = None;
+                    let tex = ui.ctx().load_texture(format!("board-page:{id}"), img, egui::TextureOptions::LINEAR);
+                    cache.deco = Some((tex, k));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => cache.job = None,
+                Err(mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(50)),
             }
         }
-        if self.pg.job.is_none() && self.pg.deco.as_ref().map(|d| &d.1) != Some(&key) {
+        if cache.job.is_none() && cache.deco.as_ref().map(|d| &d.1) != Some(&key) {
             let (tx, rx) = mpsc::channel();
             let mut board = json!({ "page": self.doc.board["page"], "width": w, "height": h, "background": self.doc.board["background"], "kind": self.doc.kind() });
-            if self.is_joined() {
+            if joined {
                 // joined pages: no paper over the margins
                 board["page"]["mask"] = json!(false);
             }
             let numbers = self.pg.numbers;
+            let ctx = ui.ctx().clone();
             std::thread::spawn(move || {
                 let db = crate::fonts::book_fonts();
                 let items = pg::decorations(&board, &frame, &db, numbers);
                 let (pw, ph, px) = ateliet_core::typeset::raster::render_layer(&items, w, h, &db, &[], scale);
                 let _ = tx.send(egui::ColorImage::from_rgba_unmultiplied([pw as usize, ph as usize], &px));
+                ctx.request_repaint();
             });
-            self.pg.job = Some((key, rx));
+            cache.job = Some((key.clone(), rx));
         }
-        if let Some((t, _)) = &self.pg.deco {
+        if let Some((t, _)) = cache.deco.as_ref().filter(|(_, k)| *k == key) {
             clip.image(t.id(), page, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
+    }
+
+    pub(super) fn page_draw(&mut self, ui: &egui::Ui, clip: &egui::Painter, origin: egui::Pos2) {
+        let (w, h) = (self.doc.width() as f32, self.doc.height() as f32);
+        self.page_decorations(ui, clip, origin, self.frame);
         let to = |p: Pt| egui::pos2(origin.x + p.0 * self.zoom, origin.y + p.1 * self.zoom);
         let blue = Color32::from_rgb(0x2f, 0x80, 0xed);
         let page_v = &self.doc.board["page"];
@@ -620,6 +646,7 @@ impl BoardEditor {
                 }
             });
         }
+        let book_pages = matches!(self.doc.kind(), "name" | "comic");
         let page = &mut self.doc.board["page"];
         let mut row = |ui: &mut egui::Ui, label: &str, key: &str, max: f32| {
             ui.horizontal(|ui| {
@@ -646,6 +673,25 @@ impl BoardEditor {
         };
         flag(ui, "Papel fora dos quadros", "mask");
         flag(ui, "Da direita para a esquerda", "rtl");
+        if book_pages {
+            flag(ui, "Mostrar páginas duplas", "spreads");
+            let first_left = pg::first_is_left(&self.doc.board);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Primeira página").size(12.0).color(p.muted));
+                for (side, name, selected) in [("left", "Esquerda", first_left), ("right", "Direita", !first_left)] {
+                    if kit::chip(ui, None, name, selected, p).clicked() {
+                        self.doc.board["page"]["firstSide"] = json!(side);
+                    }
+                }
+            });
+            if self.spread().is_some() {
+                let joined = self.is_joined();
+                if kit::button(ui, Some(icons::BOOK_OPEN), if joined { "Separar páginas" } else { "Unir páginas" }, p).clicked() {
+                    self.toggle_joined();
+                    return;
+                }
+            }
+        }
         ui.horizontal(|ui| {
             kit::toggle(ui, &mut self.pg.numbers, p);
             ui.label(RichText::new("Ordem de leitura").size(12.0).color(p.muted));
@@ -666,6 +712,9 @@ impl BoardEditor {
             let mut b2 = before.clone();
             b2["frames"][self.frame]["script"] = self.doc.board["frames"][self.frame]["script"].clone();
             if b2 != self.doc.board {
+                if b2["page"]["spreads"] != self.doc.board["page"]["spreads"] || b2["page"]["firstSide"] != self.doc.board["page"]["firstSide"] || b2["page"]["rtl"] != self.doc.board["page"]["rtl"] {
+                    self.fit = true;
+                }
                 self.commit_board(before);
             }
         }

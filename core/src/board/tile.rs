@@ -58,11 +58,20 @@ impl Tile {
     /// Paint a round dab centred at (`cx`, `cy`) (tile coordinates).
     #[allow(clippy::too_many_arguments)]
     pub fn dab(&mut self, cx: f32, cy: f32, radius: f32, hardness: f32, color: [u8; 3], alpha: f32, mode: DabMode) {
+        self.dab_clipped(cx, cy, radius, hardness, color, alpha, mode, (0, 0, TILE as i32, TILE as i32));
+    }
+
+    /// Dab clipped to a half-open rectangle in this tile. Page edges can
+    /// fall inside a tile, so tile-level clipping alone leaves a seam.
+    #[allow(clippy::too_many_arguments)]
+    pub fn dab_clipped(&mut self, cx: f32, cy: f32, radius: f32, hardness: f32, color: [u8; 3], alpha: f32, mode: DabMode, clip: (i32, i32, i32, i32)) {
         let r = radius.max(0.5);
-        let x0 = ((cx - r).floor().max(0.0)) as usize;
-        let y0 = ((cy - r).floor().max(0.0)) as usize;
-        let x1 = ((cx + r).ceil().min(TILE as f32 - 1.0)).max(0.0) as usize;
-        let y1 = ((cy + r).ceil().min(TILE as f32 - 1.0)).max(0.0) as usize;
+        let x0 = ((cx - r).floor().max(clip.0.max(0) as f32)) as usize;
+        let y0 = ((cy - r).floor().max(clip.1.max(0) as f32)) as usize;
+        let x1 = (cx + r).ceil().min((clip.2.min(TILE as i32) - 1) as f32);
+        let y1 = (cy + r).ceil().min((clip.3.min(TILE as i32) - 1) as f32);
+        if x1 < x0 as f32 || y1 < y0 as f32 { return; }
+        let (x1, y1) = (x1 as usize, y1 as usize);
         if cx + r < 0.0 || cy + r < 0.0 || cx - r >= TILE as f32 || cy - r >= TILE as f32 {
             return;
         }
@@ -91,6 +100,13 @@ impl Tile {
                         p[1] = (mul255(color[1] as u32, sa) + mul255(p[1] as u32, inv)) as u8;
                         p[2] = (mul255(color[2] as u32, sa) + mul255(p[2] as u32, inv)) as u8;
                         p[3] = (sa + mul255(p[3] as u32, inv)) as u8;
+                    }
+                    DabMode::Atop => {
+                        let sa = (a * 255.0) as u32;
+                        let da = p[3] as u32;
+                        for k in 0..3 {
+                            p[k] = (mul255(mul255(color[k] as u32, sa), da) + mul255(p[k] as u32, 255 - sa)).min(255) as u8;
+                        }
                     }
                     DabMode::Max => {
                         // no build-up inside one stroke (markers, stroke buffers)
@@ -151,6 +167,7 @@ impl Tile {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum DabMode {
+    Atop,
     Over,
     Max,
     Erase,

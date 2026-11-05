@@ -509,6 +509,21 @@ impl BoardDoc {
         }
     }
 
+    /// An owned view of one frame for background thumbnail rendering.
+    /// Only its layers and tiles are copied; archives and other frames stay out.
+    pub fn frame_snapshot(&self, frame: usize) -> BoardDoc {
+        let ids: HashSet<_> = self.frame_layers(frame).into_iter().collect();
+        let mut board = self.board.clone();
+        board["frames"] = json!([self.frame(frame)]);
+        if let Some(layers) = board["layers"].as_object_mut() { layers.retain(|id, _| ids.contains(id)); }
+        BoardDoc {
+            board,
+            tiles: self.tiles.iter().filter(|(k, _)| ids.contains(&k.0)).map(|(k, s)| (k.clone(), Slot { png: s.png.clone(), tile: s.tile.clone(), dirty: s.dirty })).collect(),
+            refs: self.refs.clone(), thumbs: HashMap::new(), preview: None,
+            other: Vec::new(), changed_frames: HashSet::new(),
+        }
+    }
+
     // ── saving ─────────────────────────────────────────────────────────────
 
     /// The zip bytes; `thumb` makes a frame's thumbnail PNG (for changed frames).
