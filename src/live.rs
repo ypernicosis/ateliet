@@ -598,6 +598,31 @@ mod editing_tests {
     }
 
     #[test]
+    fn editing_around_a_table_preserves_source_and_undo() {
+        let ctx = context();
+        let original = "Antes\n\n| Item | Definição |\n| --- | --- |\n| Texto | ação |\n\nDepois";
+        let mut tab = note(original);
+        tab.live.open_document(&tab.text, original.chars().count());
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        let _ = frame(&ctx, &mut tab, vec![Event::Text("!".into())], Modifiers::NONE);
+        assert_eq!(tab.text, format!("{original}!"));
+        assert_eq!(tab.live.buf, tab.text);
+        let command = Modifiers { command: true, mac_cmd: cfg!(target_os = "macos"), ctrl: !cfg!(target_os = "macos"), ..Modifiers::NONE };
+        let _ = frame(&ctx, &mut tab, vec![key(Key::Z, command)], command);
+        assert_eq!(tab.text, original);
+        // A click on a rendered cell must enter the source table without losing text.
+        let (g, origin) = tab.highlight.rendered.as_ref().unwrap();
+        let row = g.rows.iter().find(|r| r.rect.height() > 20.0 && r.min_y() > 40.0).unwrap();
+        let at = *origin + egui::vec2(120.0, row.rect.center().y);
+        let _ = frame(&ctx, &mut tab, vec![Event::PointerMoved(at), Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }], Modifiers::NONE);
+        let _ = frame(&ctx, &mut tab, vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }], Modifiers::NONE);
+        assert_eq!(tab.text, original);
+        let cursor = editor::char_to_byte(&tab.text, tab.cursor);
+        let table = tab.text.find("| Item").unwrap()..tab.text.find("\n\nDepois").unwrap();
+        assert!(table.contains(&cursor), "cursor {cursor} must enter {table:?}");
+    }
+
+    #[test]
     fn mouse_drag_selects_across_separate_rendered_paragraphs() {
         let ctx = context();
         let mut tab = note("Primeira linha.\n\nSegunda linha.\n\nTerceira linha.");

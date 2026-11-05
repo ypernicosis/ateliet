@@ -18,6 +18,7 @@ pub enum Cmd {
     CloseTab,
     Search,
     Find,
+    Replace,
     Switcher,
     InsertTemplate,
     NewFromTemplate,
@@ -81,6 +82,7 @@ pub(crate) const COMMANDS: &[(Cmd, &str, &str)] = &[
     (Cmd::Save, "editor:save-file", "Salvar arquivo"),
     (Cmd::CloseTab, "workspace:close", "Fechar aba"),
     (Cmd::Find, "editor:open-search", "Buscar na nota atual"),
+    (Cmd::Replace, "editor:open-replace", "Substituir na nota atual"),
     (Cmd::Search, "global-search:open", "Busca: Buscar em todos os arquivos"),
     (Cmd::Switcher, "switcher:open", "Navegação: Ir para arquivo"),
     (Cmd::InsertTemplate, "templater-obsidian:insert-templater", "Templater: Inserir modelo"),
@@ -149,6 +151,7 @@ pub(crate) fn default_shortcut(c: Cmd) -> Option<KeyboardShortcut> {
         Cmd::Save => KeyboardShortcut::new(cmd, Key::S),
         Cmd::CloseTab => KeyboardShortcut::new(cmd, Key::W),
         Cmd::Find => KeyboardShortcut::new(cmd, Key::F),
+        Cmd::Replace => KeyboardShortcut::new(cmd | Modifiers::ALT, Key::F),
         Cmd::Search => KeyboardShortcut::new(cmd | Modifiers::SHIFT, Key::F),
         Cmd::Switcher => KeyboardShortcut::new(cmd, Key::O),
         Cmd::InsertTemplate => KeyboardShortcut::new(Modifiers::ALT, Key::E),
@@ -334,10 +337,10 @@ pub fn run(app: &mut App, ctx: &egui::Context, c: Cmd) {
             let i = app.active;
             app.close_tab(i);
         }
-        Cmd::Find => {
+        Cmd::Find | Cmd::Replace => {
             if !app.images_mode && !app.journal_mode {
                 if let Some(tab) = app.tabs.get_mut(app.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none() && t.reader.is_none()) {
-                    tab.find.open();
+                    if c == Cmd::Replace { tab.find.open_replace(); } else { tab.find.open(); }
                 }
             }
         }
@@ -726,6 +729,8 @@ mod find_shortcut_tests {
     #[test]
     fn local_and_global_search_have_distinct_shortcuts() {
         assert_eq!(default_shortcut(Cmd::Find), Some(KeyboardShortcut::new(Modifiers::COMMAND, Key::F)));
+        assert_eq!(default_shortcut(Cmd::Replace), Some(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, Key::F)));
+        assert!(COMMANDS.iter().any(|(cmd, id, _)| *cmd == Cmd::Replace && *id == "editor:open-replace"));
         assert_eq!(default_shortcut(Cmd::Search), Some(KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::F)));
         assert!(COMMANDS.iter().any(|(cmd, id, _)| *cmd == Cmd::Find && *id == "editor:open-search"));
     }

@@ -1,4 +1,4 @@
-//! Literal, Unicode-aware search within one open note. No vault files change.
+//! Literal, Unicode-aware find and replace within one open note.
 
 use eframe::egui::{self, Color32, Key, Modifiers};
 use regex::{Regex, RegexBuilder};
@@ -10,6 +10,8 @@ pub struct Find {
     pub open: bool,
     pub query: String,
     focus: bool,
+    pub replace_open: bool,
+    pub replacement: String,
     pattern: Option<Regex>,
     text_key: Option<u64>,
     compiled: String,
@@ -24,6 +26,31 @@ impl Find {
         self.open = true;
         self.focus = true;
         self.pending = self.matches.get(self.current).cloned();
+    }
+
+    pub fn open_replace(&mut self) {
+        self.open();
+        self.replace_open = true;
+    }
+
+    /// Replace literal matches using byte ranges, in reverse order for replace-all.
+    fn replace(&mut self, text: &mut String, all: bool) -> bool {
+        self.refresh(text);
+        let ranges = if all { self.matches.clone() } else {
+            self.matches.get(self.current).cloned().into_iter().collect()
+        };
+        if ranges.is_empty() { return false; }
+        let next = ranges[0].start + self.replacement.len();
+        let changed = ranges.iter().any(|r| text[r.clone()] != self.replacement);
+        for range in ranges.into_iter().rev() {
+            text.replace_range(range, &self.replacement);
+        }
+        self.refresh(text);
+        if !all {
+            self.current = self.matches.iter().position(|r| r.start >= next).unwrap_or(0);
+        }
+        self.pending = self.matches.get(self.current).cloned();
+        changed
     }
 
     fn refresh(&mut self, text: &str) {
@@ -62,14 +89,16 @@ impl Find {
     }
 
     /// Drawn above the note's scroll area, so it stays visible while navigating.
-    pub fn bar(&mut self, ui: &mut egui::Ui, path: &str, text: &str) {
+    pub fn bar(&mut self, ui: &mut egui::Ui, path: &str, text: &mut String) -> bool {
         if !self.open {
-            return;
+            return false;
         }
+        let mut changed = false;
         let mut close = false;
         let mut field = None;
         ui.push_id(("note-find", path), |ui| {
             ui.horizontal_wrapped(|ui| {
+                ui.toggle_value(&mut self.replace_open, "Substituir");
                 ui.label("Buscar na nota");
                 let response = ui.add(egui::TextEdit::singleline(&mut self.query).id_source("query").hint_text("Palavra ou trecho…").desired_width(190.0));
                 field = Some(response.id);
@@ -104,12 +133,31 @@ impl Find {
                     ui.label("Nenhum resultado");
                 }
             });
+            if self.replace_open {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Substituir por");
+                    let response = ui.add(egui::TextEdit::singleline(&mut self.replacement).id_source("replacement").desired_width(190.0));
+                    let enter = (response.has_focus() || response.lost_focus())
+                        && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+                    if response.has_focus() || response.lost_focus() {
+                        close |= ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+                    }
+                    let enabled = !self.matches.is_empty();
+                    if ui.add_enabled(enabled, egui::Button::new("Substituir")).clicked() || enter {
+                        changed |= self.replace(text, false);
+                    }
+                    if ui.add_enabled(enabled, egui::Button::new("Substituir todas")).clicked() {
+                        changed |= self.replace(text, true);
+                    }
+                });
+            }
         });
         if close {
             self.close();
             if let Some(id) = field { ui.ctx().memory_mut(|m| m.surrender_focus(id)); }
         }
         ui.separator();
+        changed
     }
 }
 
@@ -230,6 +278,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replace_current_advances_past_inserted_text_and_all_is_literal() {
+        let mut find = Find { query: "ação".into(), replacement: "ação nova".into(), ..Default::default() };
+        let mut text = String::from("日本 ação, AÇÃO, ação");
+        find.refresh(&text);
+        find.step(false);
+        assert!(find.replace(&mut text, false));
+        assert_eq!(text, "日本 ação, ação nova, ação");
+        assert_eq!(&text[find.pending.clone().unwrap()], "ação");
+        assert_eq!(find.current, 2);
+        find.replacement = "$1 \\ fim".into();
+        assert!(find.replace(&mut text, true));
+        assert_eq!(text, "日本 $1 \\ fim, $1 \\ fim nova, $1 \\ fim");
+        assert!(find.matches.is_empty());
+    }
+
+    #[test]
+    fn replace_supports_deletion_empty_queries_and_identical_values() {
+        let mut find = Find { query: "é".into(), ..Default::default() };
+        let mut text = String::from("éé日本");
+        assert!(find.replace(&mut text, true));
+        assert_eq!(text, "日本");
+        find.query.clear();
+        find.replacement = "x".into();
+        assert!(!find.replace(&mut text, true));
+        assert_eq!(text, "日本");
+        find.query = "日本".into();
+        find.replacement = "日本".into();
+        assert!(!find.replace(&mut text, true));
+        assert_eq!(text, "日本");
+    }
+
+    #[test]
     fn literal_unicode_search_and_wraparound() {
         let mut find = Find { query: "AÇÃO".into(), ..Default::default() };
         let text = "日本 ação e AÇÃO";
@@ -267,15 +347,15 @@ mod tests {
         let ctx = egui::Context::default();
         let mut find = Find { query: "ação".into(), ..Default::default() };
         find.open();
-        let text = "ação, AÇÃO, ação";
-        let frame = |find: &mut Find, key: Option<(Key, Modifiers)>| {
+        let mut text = String::from("ação, AÇÃO, ação");
+        let mut frame = |find: &mut Find, key: Option<(Key, Modifiers)>| {
             let mut input = egui::RawInput::default();
             if let Some((key, modifiers)) = key {
                 input.modifiers = modifiers;
                 input.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
             }
             let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| find.bar(ui, "Nota.md", text));
+                egui::CentralPanel::default().show(ctx, |ui| { find.bar(ui, "Nota.md", &mut text); });
             });
         };
         frame(&mut find, None);
