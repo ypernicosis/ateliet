@@ -445,23 +445,30 @@ pub fn add_page(d: &mut BoardDoc, index: usize, layout: &str) -> usize {
     at
 }
 
-/// The facing page of page i in a spread (page 1 alone, then pairs), if any.
-pub fn facing(board: &Json, i: usize, n: usize) -> Option<usize> {
-    if !board["page"]["spreads"].as_bool().unwrap_or(false) || i == 0 {
-        return None;
+/// Which side holds the first page. Older documents start with a single
+/// outside page (right for Western books, left for manga).
+pub fn first_is_left(board: &Json) -> bool {
+    match board["page"]["firstSide"].as_str() {
+        Some("left") => true,
+        Some("right") => false,
+        _ => board["page"]["rtl"].as_bool().unwrap_or(false),
     }
-    let j = if i % 2 == 1 { i + 1 } else { i - 1 };
+}
+
+/// Facing pages follow binding direction and the first page's side.
+pub fn facing(board: &Json, i: usize, n: usize) -> Option<usize> {
+    if !board["page"]["spreads"].as_bool().unwrap_or(false) || i >= n { return None; }
+    let rtl = board["page"]["rtl"].as_bool().unwrap_or(false);
+    let first_alone = first_is_left(board) == rtl;
+    let offset = usize::from(first_alone);
+    if i < offset { return None; }
+    let j = if (i - offset) % 2 == 0 { i + 1 } else { i - 1 };
     (j < n).then_some(j)
 }
 
-/// Whether page i sits on the left of its spread (manga mirrors it).
+/// Whether page i sits on the left of its spread.
 pub fn is_left(board: &Json, i: usize) -> bool {
-    let even = (i + 1) % 2 == 0;
-    if board["page"]["rtl"].as_bool().unwrap_or(false) {
-        !even
-    } else {
-        even
-    }
+    first_is_left(board) != (i % 2 == 1)
 }
 
 pub fn new_balloon(kind: &str, r: R, vertical: bool, size: f32) -> Json {

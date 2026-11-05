@@ -1,8 +1,8 @@
 //! Spreads drawn as one: the two facing pages joined, brushes, fill, lasso
-//! and shapes reach across the spine. Each page keeps its own part: after a
-//! stroke, what went past this page's edge moves to the matching layer of
-//! the facing page, and undo takes both back together. Separated again,
-//! nothing drawn is lost.
+//! and shapes reach across the spine. Each page keeps its own part. Every
+//! brush dab reaches both pages immediately; region tools transfer their
+//! crossing pixels on commit. Undo takes both back together, and separating
+//! the pages preserves their pixels.
 
 use super::*;
 use ateliet_core::board::paint::{self, Mode, TileChange};
@@ -15,7 +15,13 @@ impl BoardEditor {
     }
 
     pub(super) fn is_joined(&self) -> bool {
-        self.spread_id().is_some_and(|id| self.doc.board["page"]["joined"].as_array().is_some_and(|a| a.iter().any(|x| x.as_str() == Some(&id))))
+        let Some((j, _)) = self.spread() else { return false };
+        let (a, b) = (self.doc.frame_id(self.frame.min(j)), self.doc.frame_id(self.frame.max(j)));
+        self.doc.board["page"]["joined"].as_array().is_some_and(|list| list.iter().any(|x| {
+            // Strings were written by the original editor. New joins keep
+            // both identities so a reorder cannot silently join a new page.
+            x.as_str() == Some(&a) || (x["first"].as_str() == Some(&a) && x["second"].as_str() == Some(&b))
+        }))
     }
 
     /// The facing page and its offset when this spread is drawn as one.
@@ -26,22 +32,23 @@ impl BoardEditor {
     pub(super) fn toggle_joined(&mut self) {
         let Some(id) = self.spread_id() else { return };
         let on = self.is_joined();
-        self.structure(|d| {
-            let mut list: Vec<Value> = d.board["page"]["joined"].as_array().cloned().unwrap_or_default();
-            list.retain(|x| x.as_str() != Some(&id));
-            if !on {
-                list.push(json!(id));
-            }
-            d.board["page"]["joined"] = json!(list);
-        });
-        self.spread_tex = None;
+        self.finish(None);
+        self.commit_float();
+        let before = self.doc.board.clone();
+        let j = self.spread().unwrap().0;
+        let second = self.doc.frame_id(self.frame.max(j));
+        let mut list: Vec<Value> = self.doc.board["page"]["joined"].as_array().cloned().unwrap_or_default();
+        list.retain(|x| x.as_str() != Some(&id) && x["first"].as_str() != Some(&id));
+        if !on { list.push(json!({ "first": id, "second": second })); }
+        self.doc.board["page"]["joined"] = json!(list);
+        self.commit_board(before);
         self.error = Some(if on { "Páginas separadas.".into() } else { "Páginas unidas: os pincéis passam pela lombada.".into() });
     }
 
     /// The layer on the facing page that receives what crosses the spine:
     /// the one with the same name, else that page's active one, else its top
     /// drawing layer. None for a layer that page also shows (shared).
-    fn spread_target(&self, layer: &str, j: usize) -> Option<String> {
+    pub(super) fn spread_target(&self, layer: &str, j: usize) -> Option<String> {
         let l = self.doc.layer(layer);
         let ids = self.doc.frame_layers(j);
         if ids.iter().any(|x| x == layer) {
@@ -50,7 +57,7 @@ impl BoardEditor {
         let raster: Vec<&String> = ids.iter().filter(|id| self.doc.layer(id)["kind"].as_str().unwrap_or("raster") == "raster").collect();
         let active = self.doc.active_layer(j);
         let t = raster.iter().find(|id| self.doc.layer(id)["name"] == l["name"]).or_else(|| raster.iter().find(|id| ***id == active)).or(raster.last())?;
-        (self.doc.layer(t)["locked"].as_bool() != Some(true)).then(|| (*t).clone())
+        (self.doc.layer(t)["locked"].as_bool() != Some(true) && self.doc.layer(t)["visible"].as_bool() != Some(false)).then(|| (*t).clone())
     }
 
     /// After a change to `layer`'s tiles on a joined spread: move what lies
@@ -100,7 +107,7 @@ impl BoardEditor {
         self.doc.mark_layer(&target);
         let fid = self.doc.frame_id(j);
         *self.versions.entry(fid).or_default() += 1;
-        self.spread_tex = None;
+        self.invalidate();
         Some((target, out))
     }
 

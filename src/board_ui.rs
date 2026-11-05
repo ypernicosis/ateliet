@@ -20,6 +20,8 @@ mod focus;
 mod pages;
 mod refs;
 mod spread;
+#[cfg(test)]
+mod spread_tests;
 mod timeline;
 mod tools;
 pub use pages::NewBoard;
@@ -47,16 +49,22 @@ enum Edit {
     Group(Vec<Edit>),
 }
 
-struct Active {
-    stroke: Stroke,
+struct StrokeSurface {
+    frame: usize,
     layer: String,
-    /// Layer offset (canvas = layer + offset).
+    /// Layer origin in the spread coordinate system.
     off: (f32, f32),
-    color: [u8; 3],
+    page_offset: f32,
+    bounds: Option<egui::Rect>,
     buffer: HashMap<(i32, i32), Tile>,
-    /// Tiles of the layer before the stroke (pencil paints the layer directly).
     before: HashMap<(i32, i32), Option<Tile>>,
     alpha_lock: bool,
+}
+
+struct Active {
+    stroke: Stroke,
+    color: [u8; 3],
+    surfaces: Vec<StrokeSurface>,
 }
 
 pub struct BoardEditor {
@@ -72,8 +80,8 @@ pub struct BoardEditor {
     pan: egui::Vec2,
     fit: bool,
     active: Option<Active>,
-    comp: HashMap<(i32, i32), egui::TextureHandle>,
-    stale: HashSet<(i32, i32)>,
+    comp: HashMap<(usize, i32, i32), egui::TextureHandle>,
+    stale: HashSet<(usize, i32, i32)>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
     pub dirty: bool,
@@ -81,6 +89,7 @@ pub struct BoardEditor {
     playing: Option<(Instant, usize)>,
     thumbs: HashMap<String, (u64, egui::TextureHandle)>,
     versions: HashMap<String, u64>,
+    thumb_job: Option<(String, u64, std::sync::mpsc::Receiver<egui::ColorImage>)>,
     pub error: Option<String>,
     /// A storyboard to open in a tab (vault path), made from this one.
     pub open: Option<String>,
@@ -94,8 +103,6 @@ pub struct BoardEditor {
     ts: tools::ToolState,
     xo: export::ExportOpts,
     fx: focus::FocusState,
-    /// The facing page's picture: its frame id, version and texture.
-    spread_tex: Option<(String, u64, egui::TextureHandle)>,
     /// The view mirrored (a check of proportions, not a change).
     mirror: bool,
 }
@@ -120,7 +127,18 @@ impl BoardEditor {
         Ok(Self::with(path, abs, doc))
     }
 
-    fn with(path: &str, abs: PathBuf, doc: BoardDoc) -> BoardEditor {
+    fn with(path: &str, abs: PathBuf, mut doc: BoardDoc) -> BoardEditor {
+        // Resolve legacy first-page-only joins while the original pairs are
+        // still intact. Subsequent reorders must keep both page identities.
+        if let Some(list) = doc.board["page"]["joined"].as_array().cloned() {
+            let pairs: Vec<_> = list.into_iter().map(|entry| {
+                let Some(id) = entry.as_str() else { return entry };
+                let pair = (0..doc.frame_count()).find(|&i| doc.frame_id(i) == id)
+                    .and_then(|i| ateliet_core::board::pages::facing(&doc.board, i, doc.frame_count()).map(|j| (i, j)));
+                pair.map(|(i, j)| json!({ "first": doc.frame_id(i.min(j)), "second": doc.frame_id(i.max(j)) })).unwrap_or(entry)
+            }).collect();
+            doc.board["page"]["joined"] = json!(pairs);
+        }
         let pg = pages::PageState::new(doc.kind());
         let settings = BrushKind::ALL.iter().map(|k| (*k, BrushSettings::defaults(*k))).collect();
         BoardEditor {
@@ -145,6 +163,7 @@ impl BoardEditor {
             playing: None,
             thumbs: HashMap::new(),
             versions: HashMap::new(),
+            thumb_job: None,
             error: None,
             open: None,
             tab_pressed: None,
@@ -155,7 +174,6 @@ impl BoardEditor {
             ts: tools::ToolState::default(),
             xo: export::ExportOpts::default(),
             fx: focus::FocusState::default(),
-            spread_tex: None,
             mirror: false,
         }
     }
@@ -185,12 +203,6 @@ impl BoardEditor {
 
     fn invalidate(&mut self) {
         self.stale.extend(self.comp.keys().copied());
-    }
-
-    fn invalidate_rect(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
-        for k in doc::tiles_in(x0, y0, x1, y1) {
-            self.stale.insert(k);
-        }
     }
 
     fn structure(&mut self, f: impl FnOnce(&mut BoardDoc)) {
@@ -255,7 +267,6 @@ impl BoardEditor {
                         *self.versions.entry(id).or_default() += 1;
                     }
                 }
-                self.spread_tex = None;
             }
             Edit::Structure { before, after, tiles } => {
                 self.doc.board = if undo { before.clone() } else { after.clone() };
@@ -321,98 +332,105 @@ impl BoardEditor {
         if l["visible"].as_bool() == Some(false) {
             return Err("This layer is hidden.".into());
         }
-        let off = (l["x"].as_f64().unwrap_or(0.0) as f32, l["y"].as_f64().unwrap_or(0.0) as f32);
-        let s = self.settings[&kind];
-        let mut a = Active { stroke: Stroke::new(kind, s), layer, off, color: self.color, buffer: HashMap::new(), before: HashMap::new(), alpha_lock: l["alphaLock"].as_bool() == Some(true) };
-        let dabs = a.stroke.add(Point { x: at.x - off.0, y: at.y - off.1, p: 1.0 });
+        let mut surfaces = vec![self.stroke_surface(self.frame, &layer, 0.0)];
+        if let Some((j, off)) = self.joined_facing() {
+            if let Some(target) = self.spread_target(&layer, j) {
+                surfaces.push(self.stroke_surface(j, &target, off));
+            }
+        }
+        let mut a = Active { stroke: Stroke::new(kind, self.settings[&kind]), color: self.color, surfaces };
+        let dabs = a.stroke.add(Point { x: at.x, y: at.y, p: 1.0 });
         self.active = Some(a);
         self.paint(dabs);
         Ok(())
     }
 
+    fn stroke_surface(&self, frame: usize, layer: &str, page_offset: f32) -> StrokeSurface {
+        let l = self.doc.layer(layer);
+        let off = (l["x"].as_f64().unwrap_or(0.0).round() as f32 + page_offset, l["y"].as_f64().unwrap_or(0.0).round() as f32);
+        let bounds = (!self.doc.infinite()).then(|| egui::Rect::from_min_size(egui::pos2(page_offset - off.0, -off.1), egui::vec2(self.doc.width() as f32, self.doc.height() as f32)));
+        StrokeSurface { frame, layer: layer.into(), off, page_offset, bounds, buffer: HashMap::new(), before: HashMap::new(), alpha_lock: l["alphaLock"].as_bool() == Some(true) }
+    }
+
     fn paint(&mut self, dabs: Vec<ateliet_core::board::brush::Dab>) {
         let Some(a) = &mut self.active else { return };
         let t = TILE as f32;
-        let mut touched = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for d in dabs {
-            for (tx, ty) in doc::tiles_in(d.x - d.radius - 1.0, d.y - d.radius - 1.0, d.x + d.radius + 1.0, d.y + d.radius + 1.0) {
-                let (lx, ly) = (d.x - tx as f32 * t, d.y - ty as f32 * t);
-                if a.stroke.kind.direct() {
-                    if !a.before.contains_key(&(tx, ty)) {
-                        let prev = self.doc.tile(&a.layer, tx, ty).cloned();
-                        a.before.insert((tx, ty), prev);
-                    }
-                    let tile = self.doc.tile_mut(&a.layer, tx, ty);
-                    if a.alpha_lock {
-                        let mut tmp = Tile::default();
-                        tmp.dab(lx, ly, d.radius, d.hardness, a.color, d.alpha, DabMode::Over);
-                        tile.merge(&tmp, 1.0, false, true);
+        for surface in &mut a.surfaces {
+            for d in &dabs {
+                let (x, y) = (d.x - surface.off.0, d.y - surface.off.1);
+                let mut area = egui::Rect::from_min_max(egui::pos2(x - d.radius - 1.0, y - d.radius - 1.0), egui::pos2(x + d.radius + 1.0, y + d.radius + 1.0));
+                if let Some(bounds) = surface.bounds { area = area.intersect(bounds); }
+                if !area.is_positive() { continue; }
+                for (tx, ty) in doc::tiles_in(area.min.x, area.min.y, area.max.x, area.max.y) {
+                    let tile_origin = egui::vec2(tx as f32 * t, ty as f32 * t);
+                    let clip = surface.bounds.map(|b| b.translate(-tile_origin)).unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(t, t)));
+                    let bounds = (clip.min.x as i32, clip.min.y as i32, clip.max.x as i32, clip.max.y as i32);
+                    let (lx, ly) = (x - tile_origin.x, y - tile_origin.y);
+                    if a.stroke.kind.direct() {
+                        surface.before.entry((tx, ty)).or_insert_with(|| self.doc.tile(&surface.layer, tx, ty).cloned());
+                        let tile = self.doc.tile_mut(&surface.layer, tx, ty);
+                        tile.dab_clipped(lx, ly, d.radius, d.hardness, a.color, d.alpha, if surface.alpha_lock { DabMode::Atop } else { d.mode }, bounds);
                     } else {
-                        tile.dab(lx, ly, d.radius, d.hardness, a.color, d.alpha, d.mode);
+                        surface.buffer.entry((tx, ty)).or_default().dab_clipped(lx, ly, d.radius, d.hardness, a.color, d.alpha, d.mode, bounds);
                     }
-                } else {
-                    let mode = if a.stroke.kind == BrushKind::Eraser { DabMode::Max } else { d.mode };
-                    a.buffer.entry((tx, ty)).or_default().dab(lx, ly, d.radius, d.hardness, a.color, d.alpha, mode);
+                }
+                // Composites use page coordinates, independent of the layer offset.
+                let page_off = surface.page_offset;
+                for (tx, ty) in doc::tiles_in(area.min.x + surface.off.0 - page_off, area.min.y + surface.off.1, area.max.x + surface.off.0 - page_off, area.max.y + surface.off.1) {
+                    self.stale.insert((surface.frame, tx, ty));
                 }
             }
-            touched = (touched.0.min(d.x - d.radius - 1.0), touched.1.min(d.y - d.radius - 1.0), touched.2.max(d.x + d.radius + 1.0), touched.3.max(d.y + d.radius + 1.0));
-        }
-        if touched.0 < touched.2 {
-            let off = a.off;
-            self.invalidate_rect(touched.0 + off.0, touched.1 + off.1, touched.2 + off.0, touched.3 + off.1);
         }
     }
 
     fn finish(&mut self, at: Option<egui::Pos2>) {
         let Some(mut a) = self.active.take() else { return };
-        let end = a.stroke.end(at.map(|p| Point { x: p.x - a.off.0, y: p.y - a.off.1, p: 1.0 }));
+        let end = a.stroke.end(at.map(|p| Point { x: p.x, y: p.y, p: 1.0 }));
         self.active = Some(a);
         self.paint(end);
         let a = self.active.take().unwrap();
-        let mut tiles = Vec::new();
-        if a.stroke.kind.direct() {
-            for (k, before) in a.before {
-                let after = self.doc.tile(&a.layer, k.0, k.1).cloned();
-                tiles.push((k, before, after));
-            }
-        } else {
-            let s = self.settings[&a.stroke.kind];
-            let erase = a.stroke.kind == BrushKind::Eraser;
-            for (k, buf) in &a.buffer {
-                let before = self.doc.tile(&a.layer, k.0, k.1).cloned();
-                if erase && before.is_none() {
-                    continue;
+        let mut edits = Vec::new();
+        for surface in a.surfaces {
+            let mut tiles = Vec::new();
+            if a.stroke.kind.direct() {
+                for (k, before) in surface.before {
+                    let after = self.doc.tile(&surface.layer, k.0, k.1).cloned();
+                    tiles.push((k, before, after));
                 }
-                self.doc.tile_mut(&a.layer, k.0, k.1).merge(buf, s.opacity, erase, a.alpha_lock);
-                let after = self.doc.tile(&a.layer, k.0, k.1).cloned();
-                tiles.push((*k, before, after));
+            } else {
+                for (k, buf) in surface.buffer {
+                    let before = self.doc.tile(&surface.layer, k.0, k.1).cloned();
+                    if a.stroke.kind == BrushKind::Eraser && before.is_none() { continue; }
+                    self.doc.tile_mut(&surface.layer, k.0, k.1).merge(&buf, a.stroke.s.opacity, a.stroke.kind == BrushKind::Eraser, surface.alpha_lock);
+                    let after = self.doc.tile(&surface.layer, k.0, k.1).cloned();
+                    tiles.push((k, before, after));
+                }
             }
-            let t = TILE as f32;
-            for k in a.buffer.keys() {
-                self.invalidate_rect(k.0 as f32 * t + a.off.0, k.1 as f32 * t + a.off.1, (k.0 + 1) as f32 * t + a.off.0, (k.1 + 1) as f32 * t + a.off.1);
+            if !tiles.is_empty() {
+                self.doc.mark_layer(&surface.layer);
+                *self.versions.entry(self.doc.frame_id(surface.frame)).or_default() += 1;
+                edits.push(Edit::Tiles { layer: surface.layer, tiles });
             }
         }
-        self.push_tiles(&a.layer, tiles);
-        if self.joined_facing().is_some() {
-            self.invalidate();
+        if !edits.is_empty() {
+            self.undo.push(Edit::Group(edits));
+            self.redo.clear();
+            self.changed();
         }
     }
 
     // ── drawing the canvas ─────────────────────────────────────────────────
 
-    fn composite(&mut self, ctx: &egui::Context, k: (i32, i32)) -> egui::TextureHandle {
+    fn composite(&mut self, ctx: &egui::Context, k: (usize, i32, i32)) -> egui::TextureHandle {
         let t = TILE as i32;
-        let overlay = self.active.as_ref().filter(|a| !a.stroke.kind.direct()).map(|a| Overlay { layer: &a.layer, tiles: &a.buffer, opacity: self.settings[&a.stroke.kind].opacity, erase: a.stroke.kind == BrushKind::Eraser, alpha_lock: a.alpha_lock });
-        let opts = Options { background: true, onion: self.playing.is_none(), overlay, exporting: false };
-        let px = compose::region(&mut self.doc, &mut self.pics, self.frame, k.0 * t, k.1 * t, TILE, TILE, &opts);
+        let overlay = self.active.as_ref().filter(|a| !a.stroke.kind.direct()).and_then(|a| a.surfaces.iter().find(|s| s.frame == k.0).map(|s| Overlay { layer: &s.layer, tiles: &s.buffer, opacity: a.stroke.s.opacity, erase: a.stroke.kind == BrushKind::Eraser, alpha_lock: s.alpha_lock }));
+        let opts = Options { background: true, onion: self.playing.is_none() && !self.is_pages(), overlay, exporting: false };
+        let px = compose::region(&mut self.doc, &mut self.pics, k.0, k.1 * t, k.2 * t, TILE, TILE, &opts);
         let img = egui::ColorImage::from_rgba_premultiplied([TILE, TILE], &px);
         match self.comp.get_mut(&k) {
-            Some(tex) => {
-                tex.set(img, TILE_TEX);
-                tex.clone()
-            }
+            Some(tex) => { tex.set(img, TILE_TEX); tex.clone() }
             None => {
-                let tex = ctx.load_texture(format!("board:{}:{}:{}", self.path, k.0, k.1), img, TILE_TEX);
+                let tex = ctx.load_texture(format!("board:{}:{}:{}:{}", self.path, k.0, k.1, k.2), img, TILE_TEX);
                 self.comp.insert(k, tex.clone());
                 tex
             }
@@ -431,30 +449,12 @@ impl BoardEditor {
     }
 
     fn draw_facing(&mut self, ui: &egui::Ui, painter: &egui::Painter, origin: egui::Pos2, j: usize, off: f32, p: crate::theme::Palette) {
-        let id = self.doc.frame_id(j);
-        let version = *self.versions.get(&id).unwrap_or(&0);
         let joined = self.is_joined();
-        if self.spread_tex.as_ref().is_none_or(|t| t.0 != id || t.1 != version) {
-            // the page as printed: panels, balloons and paper included (joined: no paper over the margins)
-            let db = crate::fonts::book_fonts();
-            let mask = self.doc.board["page"]["mask"].clone();
-            if joined {
-                self.doc.board["page"]["mask"] = json!(false);
-            }
-            let (w, h, px) = ateliet_core::board::pages::page_image(&mut self.doc, &mut self.pics, &db, j, 1.0, false);
-            if joined {
-                self.doc.board["page"]["mask"] = mask;
-            }
-            let img = image::RgbaImage::from_raw(w, h, px).unwrap_or_default();
-            let img = if img.width() > 1600 { image::DynamicImage::ImageRgba8(img).thumbnail(1600, 1600).to_rgba8() } else { img };
-            let img = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-            self.spread_tex = Some((id, version, ui.ctx().load_texture("board-facing", img, egui::TextureOptions::LINEAR)));
-        }
-        let r = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
+        let facing_origin = origin + egui::vec2(off * self.zoom, 0.0);
+        let r = egui::Rect::from_min_size(facing_origin, egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
         painter.add(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(if p.dark { 90 } else { 30 }) }.as_shape(r, 2.0));
-        if let Some((_, _, t)) = &self.spread_tex {
-            painter.image(t.id(), r, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-        }
+        self.draw_page_tiles(ui, painter, facing_origin, j, false);
+        self.page_decorations(ui, painter, facing_origin, j);
         // the other page is shown, not edited: a light veil (none when joined) and the spine
         if !joined {
             painter.rect_filled(r, 0.0, if p.dark { Color32::from_black_alpha(70) } else { Color32::from_white_alpha(70) });
@@ -463,6 +463,73 @@ impl BoardEditor {
         painter.vline(spine, r.y_range(), egui::Stroke::new(1.0_f32, Color32::from_black_alpha(60)));
         if !joined && ui.rect_contains_pointer(r) {
             painter.text(r.center_top() + egui::vec2(0.0, 10.0), egui::Align2::CENTER_TOP, "Clique para desenhar nesta página", egui::FontId::proportional(11.0), p.faint);
+        }
+    }
+
+    fn draw_page_tiles(&mut self, ui: &egui::Ui, clip: &egui::Painter, origin: egui::Pos2, frame: usize, mirror: bool) {
+        let stage = clip.clip_rect();
+        let (cw, ch) = (self.doc.width() as f32, self.doc.height() as f32);
+        let to_canvas = |pos: egui::Pos2| {
+            let x = (pos.x - origin.x) / self.zoom;
+            egui::pos2(if mirror { cw - x } else { x }, (pos.y - origin.y) / self.zoom)
+        };
+        let (a0, a1) = (to_canvas(stage.min), to_canvas(stage.max));
+        let view0 = egui::pos2(a0.x.min(a1.x), a0.y.min(a1.y));
+        let view1 = egui::pos2(a0.x.max(a1.x), a0.y.max(a1.y));
+        let (vx0, vy0, vx1, vy1) = if self.doc.infinite() { (view0.x, view0.y, view1.x, view1.y) } else { (view0.x.max(0.0), view0.y.max(0.0), view1.x.min(cw), view1.y.min(ch)) };
+        let mut budget = 6;
+        let mut pending = false;
+        if vx0 < vx1 && vy0 < vy1 {
+            let mut visible: Vec<_> = doc::tiles_in(vx0, vy0, vx1, vy1).map(|(x, y)| (frame, x, y)).collect();
+            // Existing dirty tiles first: a stroke must not wait for untouched paper.
+            visible.sort_by_key(|k| (!self.stale.contains(k), !self.comp.contains_key(k)));
+            for k in visible {
+                let need = !self.comp.contains_key(&k) || self.stale.contains(&k);
+                let tex = if need && budget > 0 {
+                    budget -= 1;
+                    self.stale.remove(&k);
+                    Some(self.composite(ui.ctx(), k))
+                } else {
+                    if need {
+                        pending = true;
+                    }
+                    self.comp.get(&k).cloned()
+                };
+                if let Some(tex) = tex {
+                    let t = TILE as f32;
+                    let r = egui::Rect::from_min_size(egui::pos2(origin.x + k.1 as f32 * t * self.zoom, origin.y + k.2 as f32 * t * self.zoom), egui::vec2(t, t) * self.zoom);
+                    // bounded pages: only the part inside the page
+                    let mut uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    let mut rr = r;
+                    if !self.doc.infinite() {
+                        let page = egui::Rect::from_min_size(origin, egui::vec2(cw, ch) * self.zoom);
+                        let inter = r.intersect(page);
+                        if inter.width() <= 0.0 || inter.height() <= 0.0 {
+                            continue;
+                        }
+                        uv = egui::Rect::from_min_max(egui::pos2((inter.min.x - r.min.x) / r.width(), (inter.min.y - r.min.y) / r.height()), egui::pos2((inter.max.x - r.min.x) / r.width(), (inter.max.y - r.min.y) / r.height()));
+                        rr = inter;
+                    }
+                    if mirror {
+                        // drawn as in a mirror: the tile's place and its picture flipped
+                        let pw = cw * self.zoom;
+                        let x0 = origin.x + pw - (rr.max.x - origin.x);
+                        rr = egui::Rect::from_min_size(egui::pos2(x0, rr.min.y), rr.size());
+                        let mut mesh = egui::Mesh::with_texture(tex.id());
+                        mesh.add_rect_with_uv(rr, uv, Color32::WHITE);
+                        // the picture's columns in reverse
+                        for v in mesh.vertices.iter_mut() {
+                            v.uv.x = uv.min.x + uv.max.x - v.uv.x;
+                        }
+                        clip.add(egui::Shape::mesh(mesh));
+                        continue;
+                    }
+                    clip.image(tex.id(), rr, uv, Color32::WHITE);
+                }
+            }
+        }
+        if pending {
+            ui.ctx().request_repaint();
         }
     }
 
@@ -522,47 +589,64 @@ impl BoardEditor {
             self.fit = false;
         }
         let origin = self.origin(stage);
-        // the facing page of a spread: a click there goes to it
-        if let Some((j, off)) = spread {
-            let fr = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
-            // joined pages are one surface: a click there paints (fill), except with the hand
-            let switch = !self.is_joined() || self.tool == Tool::Hand;
-            if switch && resp.clicked() && resp.interact_pointer_pos().is_some_and(|q| fr.contains(q)) {
-                self.finish_editing();
-                self.pg.sel_panel = None;
-                self.pg.sel_balloon = None;
-                self.frame = j;
-                // keep the pair where it is on screen
-                self.pan += egui::vec2(off * self.zoom, 0.0);
-                self.invalidate();
-                return toast;
+        // Switch at pen-down, preserving the spread's screen position. No extra click.
+        let mut origin = origin;
+        let presses: Vec<_> = ui.input(|i| i.events.iter().filter_map(|e| match e {
+            egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos), _ => None,
+        }).collect());
+        if !panning && self.active.is_none() && !matches!(self.tool, Tool::Brush(_)) {
+            if let Some((j, off)) = spread {
+                let fr = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
+                if (!self.is_joined() || matches!(self.tool, Tool::Panel | Tool::Balloon)) && presses.iter().any(|q| stage.contains(*q) && fr.contains(*q)) {
+                    self.finish_editing();
+                    self.commit_float();
+                    self.pg.sel_panel = None;
+                    self.pg.sel_balloon = None;
+                    self.frame = j;
+                    self.pan += egui::vec2(off * self.zoom, 0.0);
+                    origin = self.origin(stage);
+                }
             }
         }
         if !panning && self.playing.is_none() && matches!(self.tool, Tool::Panel | Tool::Balloon) && self.is_pages() {
             self.page_input(ui, &resp, origin);
         }
-        // strokes, from every pointer event of the frame
         if !panning && self.playing.is_none() {
-            if let Some(Tool::Brush(_)) = Some(self.tool) {
-                if resp.drag_started_by(egui::PointerButton::Primary) {
-                    if let Some(pos) = resp.interact_pointer_pos() {
-                        if let Err(e) = self.begin(to_canvas(pos, self.zoom, origin)) {
-                            toast = Some(e);
+            if matches!(self.tool, Tool::Brush(_)) && !ui.input(|i| i.modifiers.alt) {
+                let events = ui.input(|i| i.events.clone());
+                for event in events {
+                    match event {
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } if stage.contains(pos) => {
+                            if !self.is_joined() {
+                                if let Some((j, off)) = self.spread() {
+                                    let fr = egui::Rect::from_min_size(origin + egui::vec2(off * self.zoom, 0.0), egui::vec2(self.doc.width() as f32, self.doc.height() as f32) * self.zoom);
+                                    if fr.contains(pos) {
+                                        self.finish_editing();
+                                        self.commit_float();
+                                        self.pg.sel_panel = None;
+                                        self.pg.sel_balloon = None;
+                                        self.frame = j;
+                                        self.pan += egui::vec2(off * self.zoom, 0.0);
+                                        origin = self.origin(stage);
+                                    }
+                                }
+                            }
+                            let c = to_canvas(pos, self.zoom, origin);
+                            if self.doc.infinite() || self.draw_bounds().contains(c) {
+                                if let Err(e) = self.begin(c) { toast = Some(e); }
+                            }
                         }
+                        egui::Event::PointerMoved(pos) if self.active.is_some() => {
+                            let c = to_canvas(pos, self.zoom, origin);
+                            let dabs = self.active.as_mut().unwrap().stroke.add(Point { x: c.x, y: c.y, p: 1.0 });
+                            self.paint(dabs);
+                        }
+                        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } if self.active.is_some() => self.finish(Some(to_canvas(pos, self.zoom, origin))),
+                        _ => {}
                     }
                 }
-                if self.active.is_some() {
-                    let moves: Vec<egui::Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
-                    for m in moves {
-                        let c = to_canvas(m, self.zoom, origin);
-                        let off = self.active.as_ref().unwrap().off;
-                        let dabs = self.active.as_mut().unwrap().stroke.add(Point { x: c.x - off.0, y: c.y - off.1, p: 1.0 });
-                        self.paint(dabs);
-                    }
-                    if !ui.input(|i| i.pointer.primary_down()) {
-                        let last = ui.input(|i| i.pointer.latest_pos()).map(|p| to_canvas(p, self.zoom, origin));
-                        self.finish(last);
-                    }
+                if self.active.is_some() && !ui.input(|i| i.pointer.primary_down()) {
+                    self.finish(None);
                 }
             }
             let z = self.zoom;
@@ -586,6 +670,8 @@ impl BoardEditor {
                 }
             }
         }
+        // The active page may have changed during the ordered input events.
+        let spread = self.spread();
         // the page and its tiles
         let clip = ui.painter().with_clip_rect(stage);
         let (cw, ch) = (self.doc.width() as f32, self.doc.height() as f32);
@@ -601,57 +687,9 @@ impl BoardEditor {
         let view1 = egui::pos2(a0.x.max(a1.x), a0.y.max(a1.y));
         let (vx0, vy0, vx1, vy1) = if self.doc.infinite() { (view0.x, view0.y, view1.x, view1.y) } else { (view0.x.max(0.0), view0.y.max(0.0), view1.x.min(cw), view1.y.min(ch)) };
         self.ts.view = (vx0, vy0, vx1, vy1);
-        let mut budget = if self.active.is_some() { 8 } else { 6 };
-        let mut pending = false;
-        if vx0 < vx1 && vy0 < vy1 {
-            for k in doc::tiles_in(vx0, vy0, vx1, vy1).collect::<Vec<_>>() {
-                let need = !self.comp.contains_key(&k) || self.stale.contains(&k);
-                let tex = if need && budget > 0 {
-                    budget -= 1;
-                    self.stale.remove(&k);
-                    Some(self.composite(ui.ctx(), k))
-                } else {
-                    if need {
-                        pending = true;
-                    }
-                    self.comp.get(&k).cloned()
-                };
-                if let Some(tex) = tex {
-                    let t = TILE as f32;
-                    let r = egui::Rect::from_min_size(egui::pos2(origin.x + k.0 as f32 * t * self.zoom, origin.y + k.1 as f32 * t * self.zoom), egui::vec2(t, t) * self.zoom);
-                    // bounded pages: only the part inside the page
-                    let mut uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    let mut rr = r;
-                    if !self.doc.infinite() {
-                        let page = egui::Rect::from_min_size(origin, egui::vec2(cw, ch) * self.zoom);
-                        let inter = r.intersect(page);
-                        if inter.width() <= 0.0 || inter.height() <= 0.0 {
-                            continue;
-                        }
-                        uv = egui::Rect::from_min_max(egui::pos2((inter.min.x - r.min.x) / r.width(), (inter.min.y - r.min.y) / r.height()), egui::pos2((inter.max.x - r.min.x) / r.width(), (inter.max.y - r.min.y) / r.height()));
-                        rr = inter;
-                    }
-                    if mirror {
-                        // drawn as in a mirror: the tile's place and its picture flipped
-                        let pw = cw * self.zoom;
-                        let x0 = origin.x + pw - (rr.max.x - origin.x);
-                        rr = egui::Rect::from_min_size(egui::pos2(x0, rr.min.y), rr.size());
-                        let mut mesh = egui::Mesh::with_texture(tex.id());
-                        mesh.add_rect_with_uv(rr, uv, Color32::WHITE);
-                        // the picture's columns in reverse
-                        for v in mesh.vertices.iter_mut() {
-                            v.uv.x = uv.min.x + uv.max.x - v.uv.x;
-                        }
-                        clip.add(egui::Shape::mesh(mesh));
-                        continue;
-                    }
-                    clip.image(tex.id(), rr, uv, Color32::WHITE);
-                }
-            }
-        }
-        if pending {
-            ui.ctx().request_repaint();
-        }
+        self.comp.retain(|k, _| k.0 == self.frame || spread.is_some_and(|(j, _)| k.0 == j));
+        self.stale.retain(|k| k.0 == self.frame || spread.is_some_and(|(j, _)| k.0 == j));
+        self.draw_page_tiles(ui, &clip, origin, self.frame, mirror);
         if self.is_pages() {
             self.page_draw(ui, &clip, origin);
         }
@@ -896,24 +934,41 @@ impl BoardEditor {
         let mut go: Option<usize> = None;
         let mut swap: Option<(usize, usize)> = None;
         let mut clip_into: Option<(usize, bool)> = None;
-        let mut made_thumb = false;
+        if let Some((id, version, rx)) = &self.thumb_job {
+            match rx.try_recv() {
+                Ok(img) => {
+                    if self.versions.get(id).copied().unwrap_or(0) == *version {
+                        let tex = ui.ctx().load_texture(format!("frame:{id}"), img, egui::TextureOptions::LINEAR);
+                        self.thumbs.insert(id.clone(), (*version, tex));
+                    }
+                    self.thumb_job = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.thumb_job = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.ctx().request_repaint_after(Duration::from_millis(50)),
+            }
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for i in 0..n {
                 let id = self.doc.frame_id(i);
                 let version = *self.versions.get(&id).unwrap_or(&0);
                 let have = self.thumbs.get(&id).map(|(v, _)| *v);
-                if have != Some(version) && !made_thumb && self.active.is_none() {
-                    // one thumbnail per frame drawn, from the saved PNG or the picture
+                let idle = self.active.is_none() && self.last_change.is_none_or(|t| t.elapsed() > Duration::from_millis(250));
+                if have != Some(version) && self.thumb_job.is_none() && idle {
                     let png = if version == 0 { self.doc.thumbs.get(&id).cloned() } else { None };
-                    let img = png.and_then(|b| image::load_from_memory(&b).ok()).map(|i| i.to_rgba8()).unwrap_or_else(|| {
-                        let (w, h, px) = compose::frame_image(&mut self.doc, &mut self.pics, i, 200, false);
-                        image::RgbaImage::from_raw(w, h, px).unwrap_or_default()
+                    let mut snapshot = if png.is_none() { Some(self.doc.frame_snapshot(i)) } else { None };
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let img = png.and_then(|b| image::load_from_memory(&b).ok()).map(|i| i.to_rgba8()).unwrap_or_else(|| {
+                            let Some(snapshot) = snapshot.as_mut() else { return image::RgbaImage::new(1, 1) };
+                            let (w, h, px) = compose::frame_image(snapshot, &mut Pictures::default(), 0, 200, false);
+                            image::RgbaImage::from_raw(w, h, px).unwrap_or_default()
+                        });
+                        let _ = tx.send(egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw()));
+                        ctx.request_repaint();
                     });
-                    let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
-                    let tex = ui.ctx().load_texture(format!("frame:{id}"), ci, egui::TextureOptions::LINEAR);
-                    self.thumbs.insert(id.clone(), (version, tex));
-                    made_thumb = true;
-                    ui.ctx().request_repaint();
+                    self.thumb_job = Some((id.clone(), version, rx));
+                    ui.ctx().request_repaint_after(Duration::from_millis(50));
                 }
                 let sel = i == self.frame;
                 let w = ui.available_width() - 8.0;
@@ -933,6 +988,9 @@ impl BoardEditor {
                 }
                 let f = self.doc.frame(i);
                 let name = f["name"].as_str().filter(|s| !s.is_empty()).map(str::to_string).unwrap_or_else(|| format!("{}", i + 1));
+                let name = if self.is_pages() {
+                    ateliet_core::board::pages::facing(&self.doc.board, i, n).map(|j| format!("{name} · dupla {}–{}", i.min(j) + 1, i.max(j) + 1)).unwrap_or(name)
+                } else { name };
                 ui.painter().text(egui::pos2(img_rect.min.x + 1.0, img_rect.max.y + 6.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(11.5), if sel { p.text } else { p.faint });
                 if r.clicked() {
                     go = Some(i);
@@ -971,8 +1029,12 @@ impl BoardEditor {
                 self.finish_editing();
                 self.pg.sel_panel = None;
                 self.pg.sel_balloon = None;
+                self.finish(None);
+                self.commit_float();
+                if let Some((_, off)) = self.spread().filter(|(j, _)| *j == i) {
+                    self.pan += egui::vec2(off * self.zoom, 0.0);
+                }
                 self.frame = i;
-                self.invalidate();
             }
         }
     }
@@ -1207,10 +1269,12 @@ impl BoardEditor {
                 }
             }
             if k(egui::Key::ArrowRight) && self.frame + 1 < self.doc.frame_count() {
+                self.finish(None);
                 self.frame += 1;
                 self.invalidate();
             }
             if k(egui::Key::ArrowLeft) && self.frame > 0 {
+                self.finish(None);
                 self.frame -= 1;
                 self.invalidate();
             }
