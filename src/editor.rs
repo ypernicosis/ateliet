@@ -217,6 +217,7 @@ pub enum Deco {
     /// A line of a fenced code block (the fences included).
     Code,
     Rule,
+    Table { start: usize, end: usize },
 }
 
 /// The width of a list item's marker box, plus the gap after it, as the
@@ -234,6 +235,42 @@ fn markdown_rule(body: &str) -> bool {
     matches!(mark, '-' | '*' | '_') && chars.clone().count() >= 2 && chars.all(|c| c == mark)
 }
 
+/// Use the Markdown parser so pipes in code, escapes and fenced examples
+/// cannot accidentally turn ordinary text into a preview table.
+fn table_ranges(text: &str) -> Vec<std::ops::Range<usize>> {
+    use pulldown_cmark::{Event, Parser, Tag, TagEnd};
+    let mut tables = Vec::new();
+    let mut start = None;
+    for (event, range) in Parser::new_ext(text, ateliet_core::syntax::md_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Table(_)) => start = Some(range.start),
+            Event::End(TagEnd::Table) => {
+                if let Some(a) = start.take() { tables.push(a..range.end); }
+            }
+            _ => {}
+        }
+    }
+    tables
+}
+
+/// A preview row keeps its cells' source ranges and declared alignments.
+fn table_cells(text: &str) -> (Vec<Vec<std::ops::Range<usize>>>, Vec<pulldown_cmark::Alignment>) {
+    use pulldown_cmark::{Event, Parser, Tag};
+    let mut rows: Vec<Vec<std::ops::Range<usize>>> = Vec::new();
+    let mut align = Vec::new();
+    for (event, range) in Parser::new_ext(text, ateliet_core::syntax::md_options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Table(a)) => align = a,
+            Event::Start(Tag::TableHead | Tag::TableRow) => rows.push(Vec::new()),
+            Event::Start(Tag::TableCell) => {
+                if let Some(row) = rows.last_mut() { row.push(range); }
+            }
+            _ => {}
+        }
+    }
+    (rows, align)
+}
+
 /// The styled layout, and how each line sits in Live Preview.
 pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, Vec<LineInfo>) {
     let mut job = LayoutJob::default();
@@ -245,6 +282,8 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
     // the indentation of the open list items, for their levels
     let mut list_cols: Vec<usize> = Vec::new();
     let mut prev_list = false;
+    let tables = if st.live { table_ranges(text) } else { Vec::new() };
+    let mut table = 0;
     let mut at = 0;
     for (n, line) in text.split_inclusive('\n').enumerate() {
         let line_at = at;
@@ -260,6 +299,14 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
             list_cols.clear();
         }
         'line: {
+            while tables.get(table).is_some_and(|r| r.end <= line_at) { table += 1; }
+            if let Some(range) = tables.get(table).filter(|r| r.start < line_at + body.len() && r.end > line_at
+                && !reveal.touches(r.start, r.end.saturating_sub(1))) {
+                job.append(line, 0.0, hidden(&base));
+                info.align = LineAlign::Left;
+                info.deco = Deco::Table { start: range.start, end: range.end };
+                break 'line;
+            }
             // frontmatter
             if n == 0 && body.trim_end() == "---" {
                 in_fm = true;
@@ -585,6 +632,8 @@ pub enum DecoShape {
     Bar(f32, f32, f32),
     CodeBox(egui::Rect),
     Rule(egui::Rect),
+    TableRow(egui::Rect, bool, usize),
+    TableCell(egui::Pos2, std::sync::Arc<egui::Galley>),
 }
 
 /// The note's lines laid out one by one, each at its own indent and width,
@@ -609,8 +658,45 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
         }
         j
     };
+    let mut table_cache = std::collections::HashMap::new();
     for (li, line) in lines.iter().enumerate() {
         y += line.gap;
+        let mut table_height = None;
+        if let Deco::Table { start, end } = line.deco {
+            let (table_rows, alignments) = table_cache.entry(start)
+                .or_insert_with(|| table_cells(&job.text[start..end]));
+            // The delimiter has no cells, but remains one source row for cursor mapping.
+            let source_row = table_rows.iter().enumerate().find(|(_, cells)| cells.first()
+                .is_some_and(|r| start + r.start >= line.bytes.start && start + r.start <= line.bytes.end));
+            table_height = Some(1.0);
+            if let Some((row_index, cells)) = source_row {
+                let columns = alignments.len().max(1);
+                let col_width = width / columns as f32;
+                let padding = (st.size * 0.5).min(col_width * 0.2);
+                let mut height = st.size * st.typo.line + padding * 2.0;
+                let mut rendered = Vec::new();
+                for (col, cell) in cells.iter().take(columns).enumerate() {
+                    let mut cell_job = LayoutJob::default();
+                    let mut fmt = st.fmt(st.size, st.p.text);
+                    if row_index == 0 { fmt.font_id.family = bold_family(); }
+                    let raw = &job.text[start + cell.start..start + cell.end];
+                    inline(&mut cell_job, raw.trim(), start + cell.start, fmt, st, Reveal(None));
+                    let w = (col_width - padding * 2.0).max(1.0);
+                    cell_job.wrap.max_width = w;
+                    let alignment = match alignments.get(col) {
+                        Some(pulldown_cmark::Alignment::Center) => crate::align::TextAlign::Center,
+                        Some(pulldown_cmark::Alignment::Right) => crate::align::TextAlign::Right,
+                        _ => crate::align::TextAlign::Left,
+                    };
+                    let galley = crate::align::layout(fonts, cell_job, w, alignment);
+                    height = height.max(galley.rect.height() + padding * 2.0);
+                    rendered.push((egui::pos2(col as f32 * col_width + padding, y + padding), galley));
+                }
+                decos.push(DecoShape::TableRow(egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(width, height)), row_index == 0, columns));
+                for (at, galley) in rendered { decos.push(DecoShape::TableCell(at, galley)); }
+                table_height = Some(height);
+            }
+        }
         let align = match line.align {
             LineAlign::Note => note,
             LineAlign::List => crate::align::for_lists(note),
@@ -629,6 +715,10 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
         let wrap = (width - line.content_x).max(40.0);
         let mut j = sub(line.sections.clone(), &line.bytes);
         j.wrap.max_width = wrap;
+        if let Some(height) = table_height {
+            j.wrap.max_width = f32::INFINITY;
+            j.first_row_min_height = height;
+        }
         if line.deco == Deco::Rule { j.first_row_min_height = st.size * st.typo.line; }
         let g = crate::align::layout(fonts, j, wrap, align);
         ppp = g.pixels_per_point;
@@ -704,10 +794,21 @@ fn deco_shapes(clip: egui::Rect, at: egui::Pos2, decos: &[DecoShape], size: f32,
         let visible = match d {
             DecoShape::Bullet(c) | DecoShape::Check(c, _) => egui::Rect::from_center_size(*c + v, egui::vec2(size * 2.0, size * 2.0)),
             DecoShape::Bar(x, t, b) => egui::Rect::from_min_max(egui::pos2(at.x + x - 2.0, at.y + t), egui::pos2(at.x + x + 2.0, at.y + b)),
-            DecoShape::CodeBox(r) | DecoShape::Rule(r) => r.translate(v),
+            DecoShape::CodeBox(r) | DecoShape::Rule(r) | DecoShape::TableRow(r, _, _) => r.translate(v),
+            DecoShape::TableCell(pos, galley) => galley.rect.translate((*pos + v).to_vec2()),
         };
         if !visible.intersects(clip) { continue; }
         match d {
+            DecoShape::TableRow(r, header, columns) => {
+                let r = r.translate(v);
+                if *header { shapes.push(egui::Shape::rect_filled(r, 0.0, p.bg_active)); }
+                shapes.push(egui::Shape::rect_stroke(r, 0.0, Stroke::new(1.0_f32, p.border), egui::StrokeKind::Inside));
+                for col in 1..*columns {
+                    let x = r.left() + r.width() * col as f32 / *columns as f32;
+                    shapes.push(egui::Shape::line_segment([egui::pos2(x, r.top()), egui::pos2(x, r.bottom())], Stroke::new(1.0_f32, p.border)));
+                }
+            }
+            DecoShape::TableCell(pos, galley) => shapes.push(egui::Shape::galley(*pos + v, galley.clone(), p.text)),
             DecoShape::Rule(r) => {
                 let r = r.translate(v);
                 shapes.push(egui::Shape::line_segment([r.left_center(), r.right_center()], Stroke::new(1.0_f32, p.border_strong)));
@@ -1001,6 +1102,11 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         if let Some(slot) = deco_slot {
             let decos = &cache.live.as_ref().unwrap().1;
             ui.painter().set(slot, egui::Shape::Vec(deco_shapes(ui.clip_rect(), out.galley_pos, decos, st.size, &st.p)));
+            for deco in decos.iter() {
+                if let DecoShape::TableCell(pos, galley) = deco {
+                    crate::find::paint(ui, galley, out.galley_pos + pos.to_vec2());
+                }
+            }
         }
         crate::find::paint(ui, &out.galley, out.galley_pos);
         crate::find::scroll_editor(ui, id, &out);
@@ -1034,6 +1140,40 @@ mod tests {
 
     fn styles() -> Styles {
         Styles::live(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))
+    }
+
+    #[test]
+    fn tables_render_in_live_editor_and_reveal_source_only_when_entered() {
+        let st = styles();
+        let text = "Antes\n\n| Item | Definição |\n| :--- | ---: |\n| **Texto** | Uma definição longa que precisa quebrar dentro da célula |\n| 日本 | ação |\n\nDepois";
+        let ranges = table_ranges(text);
+        assert_eq!(ranges.len(), 1);
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let mut cache = HighlightCache::default();
+        let (galley, decos) = cache.live(&fonts, text, &st, Reveal(Some((0, 0))), 300.0);
+        assert_eq!(galley.job.text, text);
+        assert_eq!(galley.rows.iter().map(|r| r.char_count_including_newline()).sum::<usize>(), text.chars().count());
+        let cells: Vec<_> = decos.iter().filter_map(|d| match d { DecoShape::TableCell(_, g) => Some(g), _ => None }).collect();
+        assert_eq!(cells.len(), 6);
+        assert!(cells.iter().any(|g| g.rows.len() > 1));
+        assert!(cells.iter().any(|g| g.job.text == "日本"));
+        assert_eq!(decos.iter().filter(|d| matches!(d, DecoShape::TableRow(_, _, _))).count(), 3);
+        let inside = ranges[0].start + 2;
+        let (_, raw) = cache.live(&fonts, text, &st, Reveal(Some((inside, inside))), 300.0);
+        assert!(!raw.iter().any(|d| matches!(d, DecoShape::TableCell(..))));
+        let (_, rendered) = cache.live(&fonts, text, &st, Reveal(None), 300.0);
+        assert!(rendered.iter().any(|d| matches!(d, DecoShape::TableCell(..))));
+        let (_, source_lines) = highlight_lines(text, &Styles::source(16.0, st.p), Reveal(None));
+        assert!(!source_lines.iter().any(|l| matches!(l.deco, Deco::Table { .. })));
+    }
+
+    #[test]
+    fn table_parser_ignores_fenced_examples_and_respects_escaped_pipes() {
+        assert!(table_ranges("```md\n| a | b |\n| --- | --- |\n| c | d |\n```").is_empty());
+        let (rows, align) = table_cells("| a | b |\n| --- | --- |\n| x\\|y | z |");
+        assert_eq!(align.len(), 2);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].len(), 2);
     }
 
     #[test]

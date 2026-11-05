@@ -2320,7 +2320,11 @@ impl App {
             let active = self.active;
             let Some(vault) = self.vault.as_ref() else { return };
             let tab = &mut self.tabs[active];
-            tab.find.bar(ui, &tab.path, &tab.text);
+            if tab.find.bar(ui, &tab.path, &mut tab.text) {
+                tab.last_edit = Some(std::time::Instant::now());
+                tab.live.buf.clone_from(&tab.text);
+                tab.live.buf_end = tab.text.split('\n').count().saturating_sub(1);
+            }
             crate::find::set_highlight(&tab.find);
             tab.live.spots.clear();
             crate::align::set_current(crate::align::TextAlign::of_note(&tab.text));
