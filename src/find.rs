@@ -54,10 +54,7 @@ impl Find {
     }
 
     fn refresh(&mut self, text: &str) {
-        use std::hash::{Hash, Hasher};
-        let mut hash = std::collections::hash_map::DefaultHasher::new();
-        text.hash(&mut hash);
-        let key = hash.finish();
+        let key = crate::editor::text_hash(text);
         let changed = self.compiled != self.query;
         if !changed && self.text_key == Some(key) { return; }
         self.text_key = Some(key);

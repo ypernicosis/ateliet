@@ -154,34 +154,64 @@ pub fn for_lists(a: TextAlign) -> TextAlign {
 /// it between letters), the last row of a paragraph keeps its trailing
 /// spaces in view (so the caret stays inside the column while typing), and
 /// rows set entirely in monospace (code, frontmatter) stay flush left.
-pub fn layout(fonts: &egui::text::Fonts, mut job: LayoutJob, width: f32, a: TextAlign) -> Arc<Galley> {
+pub fn layout(fonts: &egui::text::Fonts, job: LayoutJob, width: f32, a: TextAlign) -> Arc<Galley> {
     if a == TextAlign::Left || !width.is_finite() {
         return fonts.layout_job(job);
     }
+    let galley = fonts.layout_job(flush(job, width));
+    let mut g = (*galley).clone();
+    place(&mut g, width, a);
+    Arc::new(g)
+}
+
+/// As [`layout`], but laid out apart from egui's cache of galleys and owned:
+/// for the editor, which keeps its own layout of every line and would
+/// otherwise hold each one twice (and copy it once more).
+pub fn layout_owned(fonts: &egui::text::Fonts, job: LayoutJob, width: f32, a: TextAlign) -> Galley {
+    let plain = |mut job: LayoutJob| {
+        // as egui's cache does, so both lay a text out alike
+        if job.wrap.max_width.is_finite() {
+            job.wrap.max_width = job.wrap.max_width.round();
+        }
+        egui::epaint::text::layout(&mut fonts.lock().fonts, Arc::new(job))
+    };
+    if a == TextAlign::Left || !width.is_finite() {
+        return plain(job);
+    }
+    let mut g = plain(flush(job, width));
+    place(&mut g, width, a);
+    g
+}
+
+/// The job set flush left at `width`; the rows are moved by [`place`].
+fn flush(mut job: LayoutJob, width: f32) -> LayoutJob {
     job.wrap.max_width = width;
     job.halign = egui::Align::LEFT;
     job.justify = false;
-    let galley = fonts.layout_job(job);
-    let mut g = (*galley).clone();
+    job
+}
+
+/// Moves the flush-left rows of `g` to the alignment, paragraph by paragraph.
+fn place(g: &mut Galley, width: f32, a: TextAlign) {
     let n_rows = g.rows.len();
     let mut bounds = egui::Rect::NOTHING;
     let mut para_align = a;
     let mut para_start = true;
+    let job = g.job.clone();
     for (i, row) in g.rows.iter_mut().enumerate() {
         if para_start {
             let first = row.glyphs.first().map(|gl| gl.section_index).unwrap_or(row.section_index_at_start);
-            let flush = galley.job.sections.get(first as usize).is_some_and(|s| s.format.extra_letter_spacing == FLUSH_LEFT);
+            let flush = job.sections.get(first as usize).is_some_and(|s| s.format.extra_letter_spacing == FLUSH_LEFT);
             para_align = if flush { for_lists(a) } else { a };
         }
         let para_end = row.ends_with_newline || i + 1 == n_rows;
         para_start = row.ends_with_newline;
-        align_row(row, &galley.job, width, para_align, para_end);
+        align_row(row, &job, width, para_align, para_end);
         bounds = bounds.union(row.visuals.mesh_bounds);
     }
     g.mesh_bounds = bounds;
     // the whole width, so the space beside short rows belongs to the text
     g.rect = egui::Rect::from_min_max(egui::pos2(0.0, g.rect.min.y), egui::pos2(width.max(g.rect.max.x), g.rect.max.y));
-    Arc::new(g)
 }
 
 /// Moves one flush-left row into place: an offset per glyph, applied to the

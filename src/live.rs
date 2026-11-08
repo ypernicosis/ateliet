@@ -7,8 +7,6 @@ use crate::markdown::{self, Doc};
 use ateliet_core::syntax;
 use ateliet_core::text::LineIndex;
 use pulldown_cmark::{Event, Parser};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -101,9 +99,7 @@ pub struct LiveState {
 
 impl LiveState {
     pub fn refresh(&mut self, text: &str) {
-        let mut h = DefaultHasher::new();
-        text.hash(&mut h);
-        let k = h.finish();
+        let k = editor::text_hash(text);
         if k != self.key || self.segs.is_empty() {
             self.segs = segments(text);
             self.key = k;
@@ -684,6 +680,94 @@ mod editing_tests {
             assert!(Arc::ptr_eq(&first, &tab.highlight.rendered.as_ref().unwrap().0));
             assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20));
         }
+    }
+
+    /// The layout the editor shows must be the one a fresh layout of its text makes.
+    fn assert_fresh(ctx: &egui::Context, tab: &Tab, what: &str) {
+        let (g, _) = tab.highlight.rendered.as_ref().unwrap();
+        let reveal = editor::selection(ctx, tab.editor_id()).map(|(a, b)| (editor::char_to_byte(&tab.text, a), editor::char_to_byte(&tab.text, b)));
+        let st = editor::Styles::live(16.0, TestHost.palette());
+        // the context's fonts: their atlas places the glyphs the editor's galley uses
+        let (fresh, _) = ctx.fonts(|f| editor::HighlightCache::default().live(f, &tab.text, &st, editor::Reveal(reveal), g.rect.width()));
+        editor::assert_same_layout(g, &fresh, what);
+    }
+
+    #[test]
+    fn typing_and_selecting_in_a_long_note_rework_its_layout_without_copying_it() {
+        let ctx = context();
+        let original = "# Capítulo\n\nUm parágrafo com **ênfase** e [[ligação]].\n\n- um item\n\n".repeat(60);
+        let mut tab = note(&original);
+        let start = original.find("ênfase").unwrap();
+        tab.live.open_document(&tab.text, original[..start].chars().count());
+        for _ in 0..2 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        assert_fresh(&ctx, &tab, "opened");
+        for (what, events) in [
+            ("a letter", vec![Event::Text("x".into())]),
+            ("another", vec![Event::Text("y".into())]),
+            ("a new line", vec![key(Key::Enter, Modifiers::NONE)]),
+            ("bold", vec![Event::Text("**".into())]),
+            ("deleted", vec![key(Key::Backspace, Modifiers::NONE), key(Key::Backspace, Modifiers::NONE)]),
+        ] {
+            let _ = frame(&ctx, &mut tab, events, Modifiers::NONE);
+            assert_fresh(&ctx, &tab, what);
+        }
+        // a selection grows over several rows: egui paints it into the layout it was lent
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        // (the cursor's span changes too, so the two layouts kept take turns)
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..6 {
+            let _ = frame(&ctx, &mut tab, vec![key(Key::ArrowDown, shift)], shift);
+            seen.insert(tab.highlight.rendered.as_ref().unwrap().0.rows.as_ptr() as usize);
+        }
+        assert!(seen.len() <= 2, "the layout must not be copied to paint a selection: {} copies", seen.len());
+        let (a, b) = editor::selection(&ctx, tab.editor_id()).unwrap();
+        assert!(b > a);
+        // typing over the selection replaces it
+        let _ = frame(&ctx, &mut tab, vec![Event::Text("z".into())], Modifiers::NONE);
+        assert!(tab.text.contains("ênz") || tab.text.contains('z'));
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        assert_fresh(&ctx, &tab, "after the selection was replaced");
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_frames"]
+    fn long_note_frames() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let mid = text[text.len() / 2..].find("Uma nota").unwrap() + text.len() / 2 + 4;
+        tab.live.open_document(&tab.text, text[..mid].chars().count());
+        let time = |tab: &mut Tab, events: Vec<Event>, modifiers: Modifiers| {
+            let t = std::time::Instant::now();
+            let _ = frame(&ctx, tab, events, modifiers);
+            t.elapsed()
+        };
+        eprintln!("{} bytes, first frame: {:?}", tab.text.len(), time(&mut tab, vec![], Modifiers::NONE));
+        let _ = time(&mut tab, vec![], Modifiers::NONE);
+        let idle: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], Modifiers::NONE)).sum();
+        eprintln!("idle frame: {:?}", idle / 10);
+        let typing: std::time::Duration = "palavra".chars().map(|c| time(&mut tab, vec![Event::Text(c.into())], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
+        eprintln!("a letter typed (its frame and the next): {:?}", typing / 7);
+        let moves: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![key(Key::ArrowRight, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
+        eprintln!("cursor moved (its frame and the next): {:?}", moves / 10);
+        let enter = time(&mut tab, vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE);
+        eprintln!("a new line (its frame and the next): {enter:?}");
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        let select: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![key(Key::ArrowDown, shift)], shift) + time(&mut tab, vec![], shift)).sum();
+        eprintln!("selection grown a line (its frame and the next): {:?}", select / 10);
+        let held: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], shift)).sum();
+        eprintln!("idle frame with a selection: {:?}", held / 10);
+        let t = std::time::Instant::now();
+        let _ = crate::markdown::parse(&tab.text);
+        eprintln!("parsing the note (the outline, on each change): {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = ateliet_core::scriptorium::count_words(&tab.text);
+        eprintln!("counting its words (the status bar, on each change): {:?}", t.elapsed());
     }
 
     #[test]

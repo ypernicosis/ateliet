@@ -81,9 +81,7 @@ impl Tab {
     }
 
     pub fn doc(&mut self) -> Arc<Doc> {
-        let mut h = DefaultHasher::new();
-        self.text.hash(&mut h);
-        let k = h.finish();
+        let k = editor::text_hash(&self.text);
         match &self.doc {
             Some((key, d)) if *key == k => d.clone(),
             _ => {
@@ -92,6 +90,33 @@ impl Tab {
                 d
             }
         }
+    }
+
+    /// The parsed note for what can show it a moment late (the outline):
+    /// while the note is being typed, the last parse, so a long note is not
+    /// parsed again at every key; parsed again once the typing pauses.
+    pub fn doc_settled(&mut self, ctx: &egui::Context) -> Arc<Doc> {
+        const PAUSE: Duration = Duration::from_millis(600);
+        let typing = self.last_edit.is_some_and(|t| t.elapsed() < PAUSE);
+        match &self.doc {
+            Some((_, d)) if typing => {
+                ctx.request_repaint_after(PAUSE);
+                d.clone()
+            }
+            _ => self.doc(),
+        }
+    }
+
+    /// The note's words for what shows them every frame (the status bar, the
+    /// focus panel): while it is being typed, the count from before the last
+    /// keys; counted again once the typing pauses.
+    pub fn words(&self, ctx: &egui::Context) -> usize {
+        const PAUSE: Duration = Duration::from_millis(600);
+        let typing = self.last_edit.is_some_and(|t| t.elapsed() < PAUSE);
+        if typing {
+            ctx.request_repaint_after(PAUSE);
+        }
+        crate::writing::word_count(&self.text, self.uid, typing)
     }
 
     pub fn editor_id(&self) -> egui::Id {

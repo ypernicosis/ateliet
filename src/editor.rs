@@ -7,6 +7,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 static INLINE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(concat!(
@@ -185,8 +186,6 @@ impl Marks {
 pub struct LineInfo {
     /// The line's sections in the note's job (its newline included).
     pub sections: std::ops::Range<usize>,
-    /// The line's bytes, without the newline.
-    pub bytes: std::ops::Range<usize>,
     pub content_x: f32,
     /// How many of the first sections hang left of `content_x`.
     pub lead: usize,
@@ -271,53 +270,63 @@ fn table_cells(text: &str) -> (Vec<Vec<std::ops::Range<usize>>>, Vec<pulldown_cm
     (rows, align)
 }
 
-/// The styled layout, and how each line sits in Live Preview.
-pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, Vec<LineInfo>) {
+/// What a line takes from the lines above it: whether it is in the
+/// frontmatter or in a code block, the indentation of the open list items,
+/// and whether the line before was a list item.
+#[derive(Clone, Default, Hash, PartialEq, Eq, Debug)]
+struct Carry {
+    in_fm: bool,
+    in_code: bool,
+    list_cols: Vec<usize>,
+    prev_list: bool,
+}
+
+/// The cursor or selection as one line sees it: the part of it on the line,
+/// counted from the line's start (`end` is where its text ends).
+fn local_reveal(reveal: Reveal, at: usize, end: usize) -> Reveal {
+    match reveal.0 {
+        Some((x, y)) if x <= end && y >= at => Reveal(Some((x.max(at) - at, y.min(end) - at))),
+        _ => Reveal(None),
+    }
+}
+
+/// One line of the note, styled: its sections, their bytes counted from the
+/// line's start, and how it sits. `line` holds its newline, if it has one;
+/// `reveal` is counted from the line's start too; `table`: the line is a row
+/// of a table drawn as a table (its deco then holds no position).
+fn highlight_line(st: &Styles, carry: &mut Carry, first: bool, line: &str, table: bool, reveal: Reveal) -> (Vec<egui::text::LayoutSection>, LineInfo) {
     let mut job = LayoutJob::default();
-    let mut lines: Vec<LineInfo> = Vec::new();
     let p = &st.p;
     let base = st.fmt(st.size, p.text);
-    let mut in_fm = false;
-    let mut in_code = false;
-    // the indentation of the open list items, for their levels
-    let mut list_cols: Vec<usize> = Vec::new();
-    let mut prev_list = false;
-    let tables = if st.live { table_ranges(text) } else { Vec::new() };
-    let mut table = 0;
-    let mut at = 0;
-    for (n, line) in text.split_inclusive('\n').enumerate() {
-        let line_at = at;
-        at += line.len();
-        let body = line.trim_end_matches(['\n', '\r']);
-        let s0 = job.sections.len();
-        let mut info = LineInfo { sections: 0..0, bytes: line_at..line_at + body.len(), content_x: 0.0, lead: 0, align: LineAlign::Note, deco: Deco::None, gap: 0.0, newline: line.ends_with('\n') };
-        // in Live Preview, line marks (#, >, -) show on the cursor's line only
-        let on_line = !st.live || reveal.touches(line_at, line_at + body.len());
-        let trimmed = body.trim_start();
-        let is_list = !in_fm && !in_code && LIST.is_match(body);
-        if !is_list && !body.trim().is_empty() && !body.starts_with([' ', '\t']) {
-            list_cols.clear();
-        }
+    let line_at = 0;
+    let Carry { in_fm, in_code, list_cols, prev_list } = carry;
+    let body = line.trim_end_matches(['\n', '\r']);
+    let mut info = LineInfo { sections: 0..0, content_x: 0.0, lead: 0, align: LineAlign::Note, deco: Deco::None, gap: 0.0, newline: line.ends_with('\n') };
+    // in Live Preview, line marks (#, >, -) show on the cursor's line only
+    let on_line = !st.live || reveal.touches(line_at, line_at + body.len());
+    let trimmed = body.trim_start();
+    let is_list = !*in_fm && !*in_code && LIST.is_match(body);
+    if !is_list && !body.trim().is_empty() && !body.starts_with([' ', '\t']) {
+        list_cols.clear();
+    }
         'line: {
-            while tables.get(table).is_some_and(|r| r.end <= line_at) { table += 1; }
-            if let Some(range) = tables.get(table).filter(|r| r.start < line_at + body.len() && r.end > line_at
-                && !reveal.touches(r.start, r.end.saturating_sub(1))) {
+            if table {
                 job.append(line, 0.0, hidden(&base));
                 info.align = LineAlign::Left;
-                info.deco = Deco::Table { start: range.start, end: range.end };
+                info.deco = Deco::Table { start: 0, end: 0 };
                 break 'line;
             }
             // frontmatter
-            if n == 0 && body.trim_end() == "---" {
-                in_fm = true;
+            if first && body.trim_end() == "---" {
+                *in_fm = true;
                 job.append(line, 0.0, st.mono(p.faint));
                 info.align = LineAlign::Left;
                 break 'line;
             }
-            if in_fm {
+            if *in_fm {
                 info.align = LineAlign::Left;
                 if body.trim_end() == "---" {
-                    in_fm = false;
+                    *in_fm = false;
                     job.append(line, 0.0, st.mono(p.faint));
                     break 'line;
                 }
@@ -332,14 +341,14 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
             }
             // fenced code
             if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                in_code = !in_code;
+                *in_code = !*in_code;
                 job.append(line, 0.0, st.code(p.faint));
                 info.align = LineAlign::Left;
                 info.deco = Deco::Code;
                 info.content_x = if st.live { 16.0 } else { 0.0 };
                 break 'line;
             }
-            if in_code {
+            if *in_code {
                 let mut f = st.code(p.text);
                 if !st.live {
                     f.background = p.code_bg;
@@ -366,11 +375,11 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
                 mark.color = p.faint;
                 job.append(&line[..h[0].len()], 0.0, if on_line { mark } else { hidden(&f) });
                 info.lead = 1;
-                inline(&mut job, &line[h[0].len()..], line_at + h[0].len(), f, st, reveal);
+                inline(&mut job, &line[h[0].len()..], h[0].len(), f, st, reveal);
                 break 'line;
             }
             let mut rest = line;
-            let mut rest_at = line_at;
+            let mut rest_at = 0;
             let mut fmt = base.clone();
             if let Some(q) = QUOTE.find(body).filter(|_| trimmed.starts_with('>')) {
                 let n = q.end();
@@ -408,7 +417,7 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
                     None if !show => Deco::Bullet(level),
                     _ => Deco::None,
                 };
-                if prev_list {
+                if *prev_list {
                     // the reading view's room between items, with the item spacing of its layout
                     info.gap = st.size * 0.2 + 6.0;
                 }
@@ -438,20 +447,57 @@ pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, V
             }
             inline(&mut job, rest, rest_at, fmt, st, reveal);
         }
-        prev_list = is_list || (prev_list && !body.trim().is_empty() && body.starts_with([' ', '\t']));
-        if job.sections.len() == s0 {
-            job.append("", 0.0, base.clone());
-        }
-        info.sections = s0..job.sections.len();
-        lines.push(info);
+        *prev_list = is_list || (*prev_list && !body.trim().is_empty() && body.starts_with([' ', '\t']));
+    if job.sections.is_empty() {
+        job.append("", 0.0, base);
     }
-    // the empty line after a final newline (or of an empty note)
+    info.sections = 0..job.sections.len();
+    (job.sections, info)
+}
+
+/// The empty line after a final newline (or of an empty note).
+fn final_line(st: &Styles) -> (Vec<egui::text::LayoutSection>, LineInfo) {
+    let mut job = LayoutJob::default();
+    job.append("", 0.0, st.fmt(st.size, st.p.text));
+    (job.sections, LineInfo { sections: 0..1, content_x: 0.0, lead: 0, align: LineAlign::Note, deco: Deco::None, gap: 0.0, newline: false })
+}
+
+/// The styled layout of a whole note, and how each line sits in Live Preview.
+#[cfg(test)]
+pub fn highlight_lines(text: &str, st: &Styles, reveal: Reveal) -> (LayoutJob, Vec<LineInfo>) {
+    let mut job = LayoutJob { text: text.to_owned(), ..Default::default() };
+    let mut lines = Vec::new();
+    let tables = if st.live { table_ranges(text) } else { Vec::new() };
+    let mut carry = Carry::default();
+    let mut at = 0;
+    for (n, line) in text.split_inclusive('\n').enumerate() {
+        let end = at + line.trim_end_matches(['\n', '\r']).len();
+        let table = tables.iter().find(|r| r.start < end && r.end > at && !reveal.touches(r.start, r.end.saturating_sub(1)));
+        let local = if st.live { local_reveal(reveal, at, end) } else { Reveal(None) };
+        let (sections, mut info) = highlight_line(st, &mut carry, n == 0, line, table.is_some(), local);
+        if let Some(r) = table {
+            info.deco = Deco::Table { start: r.start, end: r.end };
+        }
+        push_line(&mut job, &mut lines, sections, info, at);
+        at += line.len();
+    }
     if text.is_empty() || text.ends_with('\n') {
-        let s0 = job.sections.len();
-        job.append("", 0.0, base.clone());
-        lines.push(LineInfo { sections: s0..s0 + 1, bytes: text.len()..text.len(), content_x: 0.0, lead: 0, align: LineAlign::Note, deco: Deco::None, gap: 0.0, newline: false });
+        let (sections, info) = final_line(st);
+        push_line(&mut job, &mut lines, sections, info, text.len());
     }
     (job, lines)
+}
+
+/// Adds one line, styled on its own, to the note's job at byte `at`.
+#[cfg(test)]
+fn push_line(job: &mut LayoutJob, lines: &mut Vec<LineInfo>, sections: Vec<egui::text::LayoutSection>, mut info: LineInfo, at: usize) {
+    let s0 = job.sections.len();
+    for mut sec in sections {
+        sec.byte_range = sec.byte_range.start + at..sec.byte_range.end + at;
+        job.sections.push(sec);
+    }
+    info.sections = s0..job.sections.len();
+    lines.push(info);
 }
 
 /// A hidden mark that keeps the flags of `f` (the list's flush left).
@@ -565,201 +611,712 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
     }
 }
 
-/// Layout cache: rebuilding the styled job only when the text, the theme or
-/// (in Live Preview) the cursor's span change; and the composed Live
-/// Preview galley, also by width and alignment.
+/// The editor's layout of a note, kept from frame to frame and redone line by
+/// line: an edit, or the cursor moving into a span whose marks it shows, lays
+/// out again only the lines it changed; the others keep their rows, moved down
+/// or up when the lines above them grow or shrink.
+///
+/// Two layouts are kept: egui's text edit lays the note out once before the
+/// keys of a frame and once after them, and still holds the first while the
+/// second is made, so the second is made by reworking the other one.
+///
+/// While a text edit holds the layout (`lend`), the cache keeps no strong
+/// reference to it: egui paints a selection into the galley itself and copies
+/// a shared galley first, which for a long note is the whole layout, every
+/// frame. The editor gives it back after the frame ([`HighlightCache::give_back`])
+/// and the selection is taken out of it before it is used again.
 #[derive(Default)]
 pub struct HighlightCache {
+    pub(crate) rendered: Option<(Arc<egui::Galley>, egui::Pos2)>,
+    cur: Option<Layout>,
+    spare: Option<Layout>,
+    lend: bool,
+    /// The tables of the last text, by its hash.
+    tables: (u64, Vec<std::ops::Range<usize>>),
+}
+
+/// One layout of the note.
+struct Layout {
+    galley: Option<Arc<egui::Galley>>,
+    /// The galley while a text edit holds it.
+    lent: std::sync::Weak<egui::Galley>,
+    lines: Vec<Placed>,
+    /// Each row's vertices as laid out (a painted selection adds some).
+    verts: Vec<u32>,
+    /// The width, alignment and styles it was laid out with.
+    params: u64,
+    /// `params`, the text and what the cursor reveals.
     key: u64,
-    job: Option<LayoutJob>,
-    lines: Vec<LineInfo>,
-    pub(crate) rendered: Option<(std::sync::Arc<egui::Galley>, egui::Pos2)>,
-    live_key: u64,
-    live: Option<(std::sync::Arc<egui::Galley>, std::sync::Arc<Vec<DecoShape>>)>,
+    decos: Arc<Vec<DecoShape>>,
+}
+
+/// A line of the layout.
+struct Placed {
+    /// What the line's look depends on besides its text: what it takes from
+    /// the lines above, whether it is the first, its table, the cursor on it.
+    ctx: u64,
+    /// Neither the cursor nor a drawn table is on it: its look depends on its
+    /// text and the lines above only.
+    quiet: bool,
+    /// What it passes on to the line below.
+    carry: Carry,
+    /// Its bytes, its newline included.
+    len: usize,
+    newline: bool,
+    sections: usize,
+    rows: usize,
+    gap: f32,
+    /// Where its rows start (after the gap) and how tall they are.
+    top: f32,
+    height: f32,
+    /// Its first row, from `top`.
+    first: egui::Rect,
+    deco: Deco,
+    fence: bool,
+    /// A table row: its height, whether it is the header, its columns, and
+    /// its cells (from `top`).
+    table: Option<(f32, bool, usize)>,
+    cells: Vec<(egui::Pos2, Arc<egui::Galley>)>,
+}
+
+/// One line laid out at the top of its own room: rows set across, from y = 0,
+/// their sections counted from the line's first.
+struct LineLayout {
+    rows: Vec<egui::epaint::text::Row>,
+    height: f32,
+    first: egui::Rect,
+    table: Option<(f32, bool, usize)>,
+    cells: Vec<(egui::Pos2, Arc<egui::Galley>)>,
+}
+
+fn ahash_of(v: impl Hash) -> u64 {
+    egui::ahash::RandomState::with_seeds(0x41, 0x74, 0x65, 0x6c).hash_one(v)
+}
+
+/// The bytes `a` and `b` share at their start and, after those, at their end.
+fn common_affixes(a: &str, b: &str) -> (usize, usize) {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    let n = x.len().min(y.len());
+    let mut p = 0;
+    while p + 64 <= n && x[p..p + 64] == y[p..p + 64] {
+        p += 64;
+    }
+    while p < n && x[p] == y[p] {
+        p += 1;
+    }
+    let m = n - p;
+    let mut s = 0;
+    while s + 64 <= m && x[x.len() - s - 64..x.len() - s] == y[y.len() - s - 64..y.len() - s] {
+        s += 64;
+    }
+    while s < m && x[x.len() - 1 - s] == y[y.len() - 1 - s] {
+        s += 1;
+    }
+    (p, s)
+}
+
+impl Layout {
+    fn empty(params: u64) -> Layout {
+        Layout { galley: None, lent: std::sync::Weak::new(), lines: Vec::new(), verts: Vec::new(), params, key: 0, decos: Arc::default() }
+    }
+
+    /// A copy, rows and all.
+    fn duplicate(&self) -> Layout {
+        Layout {
+            galley: self.galley.as_ref().map(|g| Arc::new((**g).clone())),
+            lent: std::sync::Weak::new(),
+            lines: self.lines.iter().map(Placed::copy).collect(),
+            verts: self.verts.clone(),
+            params: self.params,
+            key: self.key,
+            decos: self.decos.clone(),
+        }
+    }
+
+    /// Whether the cache alone holds the galley, so it can be reworked in place.
+    fn unique(&self) -> bool {
+        self.galley.as_ref().is_some_and(|g| Arc::strong_count(g) == 1 && Arc::weak_count(g) == 0)
+    }
+
+    /// Takes a selection egui painted into the rows out of them again.
+    fn clean(&mut self) {
+        let Some(g) = self.galley.as_mut() else { return };
+        let dirty = |g: &egui::Galley| g.rows.iter().zip(&self.verts).any(|(r, &n)| r.visuals.mesh.vertices.len() != n as usize);
+        if !dirty(g) {
+            return;
+        }
+        let g = Arc::make_mut(g);
+        for (row, &n) in g.rows.iter_mut().zip(&self.verts) {
+            let mesh = &mut row.visuals.mesh;
+            let n = n as usize;
+            if mesh.vertices.len() > n {
+                // a rectangle is four vertices, and its two triangles were put first among the glyphs'
+                let rects = (mesh.vertices.len() - n) / 4;
+                let at = row.visuals.glyph_index_start;
+                mesh.indices.drain(at..(at + 6 * rects).min(mesh.indices.len()));
+                mesh.vertices.truncate(n);
+                row.visuals.mesh_bounds = mesh.calc_bounds();
+            }
+        }
+    }
 }
 
 impl HighlightCache {
-    fn key(text: &str, st: &Styles, reveal: Reveal) -> u64 {
-        let mut h = DefaultHasher::new();
-        text.hash(&mut h);
-        st.size.to_bits().hash(&mut h);
-        st.p.dark.hash(&mut h);
-        st.p.accent.hash(&mut h);
-        st.live.hash(&mut h);
-        st.typo_key.hash(&mut h);
-        if st.live {
-            reveal.hash(&mut h);
+    /// The note laid out at `width`, and what to draw with it.
+    pub fn live(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
+        let note = crate::align::current();
+        let params = ahash_of((st.size.to_bits(), st.p.dark, st.p.accent, st.live, st.typo_key, width.to_bits(), note as u8));
+        let reveal = if st.live { reveal } else { Reveal(None) };
+        let hash = text_hash(text);
+        let key = ahash_of((params, hash, text.len(), reveal));
+        if let Some(cur) = self.cur.as_mut() {
+            if cur.galley.is_none() {
+                cur.galley = cur.lent.upgrade();
+                cur.lent = std::sync::Weak::new();
+            }
         }
-        h.finish()
+        if self.cur.as_ref().is_some_and(|c| c.key == key && c.galley.is_some()) {
+            let cur = self.cur.as_mut().unwrap();
+            cur.clean();
+            return self.hand_out();
+        }
+        // a layout to rework: the spare, else the current one if nothing else holds it
+        let old = self.cur.take().filter(|o| o.params == params && o.galley.is_some());
+        let mut spare = self.spare.take().filter(|s| s.params == params);
+        let mut work = if spare.as_ref().is_some_and(|s| s.unique()) {
+            self.spare = old;
+            spare.take().unwrap()
+        } else {
+            match old {
+                Some(o) if o.unique() => {
+                    self.spare = spare;
+                    o
+                }
+                Some(o) => {
+                    // held elsewhere (by the text edit): rework a copy, keep it as the spare
+                    let copy = o.duplicate();
+                    self.spare = Some(o);
+                    copy
+                }
+                None => Layout::empty(params),
+            }
+        };
+        let whole = work.galley.is_none();
+        work.clean();
+        self.update_tables(text, hash, st);
+        work.update(fonts, text, st, reveal, width, note, &self.tables.1);
+        work.key = key;
+        if whole && self.lend && self.spare.is_none() {
+            // the text edit will hold this one when the first key is typed: the spare is
+            // made now, with the whole layout, rather than then
+            self.spare = Some(work.duplicate());
+        }
+        self.cur = Some(work);
+        self.hand_out()
     }
 
-    pub fn get(&mut self, text: &str, st: &Styles, reveal: Reveal) -> LayoutJob {
-        let key = Self::key(text, st, reveal);
-        if self.key != key || self.job.is_none() {
-            let (job, lines) = highlight_lines(text, st, reveal);
-            self.job = Some(job);
-            self.lines = lines;
-            self.key = key;
+    fn hand_out(&mut self) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
+        let cur = self.cur.as_mut().unwrap();
+        let g = cur.galley.clone().unwrap();
+        if self.lend {
+            cur.lent = Arc::downgrade(&g);
+            cur.galley = None;
         }
-        self.job.clone().unwrap()
+        (g, cur.decos.clone())
     }
 
-    /// The Live Preview galley at `width`, and what to draw with it.
-    pub fn live(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32) -> (std::sync::Arc<egui::Galley>, std::sync::Arc<Vec<DecoShape>>) {
-        // Cache hits must not clone the complete document and its sections.
-        let key = Self::key(text, st, reveal);
-        let a = crate::align::current();
-        let mut h = DefaultHasher::new();
-        key.hash(&mut h);
-        width.to_bits().hash(&mut h);
-        (a as u8).hash(&mut h);
-        let k = h.finish();
-        if self.live_key != k || self.live.is_none() {
-            let job = self.get(text, st, reveal);
-            let (g, d) = compose(fonts, job, &self.lines, width, a, st);
-            self.live = Some((std::sync::Arc::new(g), std::sync::Arc::new(d)));
-            self.live_key = k;
+    fn update_tables(&mut self, text: &str, hash: u64, st: &Styles) {
+        if !st.live {
+            self.tables = (0, Vec::new());
+            return;
         }
-        self.live.clone().unwrap()
+        let k = ahash_of((hash, text.len()));
+        if self.tables.0 != k || k == 0 {
+            // a table needs a delimiter row, and that a pipe
+            self.tables = (k, if text.contains('|') { table_ranges(text) } else { Vec::new() });
+        }
+    }
+
+    /// The galley a text edit used this frame, given back to the cache.
+    pub(crate) fn give_back(&mut self, galley: &Arc<egui::Galley>) {
+        self.lend = false;
+        if let Some(cur) = self.cur.as_mut().filter(|c| c.galley.is_none()) {
+            cur.galley = Some(galley.clone());
+            cur.lent = std::sync::Weak::new();
+        }
+    }
+
+    /// What the current layout draws around the text.
+    pub(crate) fn decos(&self) -> Arc<Vec<DecoShape>> {
+        self.cur.as_ref().map(|c| c.decos.clone()).unwrap_or_default()
     }
 }
 
-/// Something the reading view draws around the text, in galley coordinates.
-#[derive(Clone, Debug)]
-pub enum DecoShape {
-    Bullet(egui::Pos2),
-    Check(egui::Pos2, bool),
-    Bar(f32, f32, f32),
-    CodeBox(egui::Rect),
-    Rule(egui::Rect),
-    TableRow(egui::Rect, bool, usize),
-    TableCell(egui::Pos2, std::sync::Arc<egui::Galley>),
+impl Placed {
+    fn copy(&self) -> Placed {
+        Placed { carry: self.carry.clone(), cells: self.cells.clone(), deco: self.deco, ..*self }
+    }
 }
 
-/// The note's lines laid out one by one, each at its own indent and width,
-/// with its own alignment, and joined into one galley for the text editor.
-fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width: f32, note: crate::align::TextAlign, st: &Styles) -> (egui::Galley, Vec<DecoShape>) {
-    use egui::epaint::text::Row;
-    let job = std::sync::Arc::new(job);
-    let mut rows: Vec<Row> = Vec::new();
-    let mut decos = Vec::new();
-    let mut y = 0.0_f32;
-    let mut bounds = egui::Rect::NOTHING;
-    let (mut verts, mut idx) = (0, 0);
-    let mut ppp = 1.0;
-    let mut code_top: Option<f32> = None;
-    let mut quote: Vec<(f32, f32)> = Vec::new(); // the open bars: top, x
-    let sub = |range: std::ops::Range<usize>, bytes: &std::ops::Range<usize>| -> LayoutJob {
-        let mut j = LayoutJob { text: job.text[bytes.clone()].to_string(), ..Default::default() };
-        for sec in &job.sections[range] {
-            let a = sec.byte_range.start.clamp(bytes.start, bytes.end) - bytes.start;
-            let b = sec.byte_range.end.clamp(bytes.start, bytes.end) - bytes.start;
+impl Layout {
+    /// Lays out `text`, keeping the rows of the lines that did not change.
+    ///
+    /// First what each line becomes is worked out, laying out again only the
+    /// lines whose text or look changed. Then, if every line kept its count
+    /// of rows and sections (a letter typed, the cursor moved), the rows are
+    /// rewritten where they are; otherwise the rows and sections are moved
+    /// into new vectors around the lines laid out again.
+    #[allow(clippy::too_many_arguments)]
+    fn update(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32, note: crate::align::TextAlign, tables: &[std::ops::Range<usize>]) {
+        let Layout { galley, lines: old_lines, verts, decos, .. } = self;
+        let galley = galley.get_or_insert_with(|| {
+            Arc::new(egui::Galley {
+                job: Arc::new(LayoutJob::default()),
+                rows: Vec::new(),
+                elided: false,
+                rect: egui::Rect::ZERO,
+                mesh_bounds: egui::Rect::NOTHING,
+                num_vertices: 0,
+                num_indices: 0,
+                pixels_per_point: fonts.pixels_per_point(),
+            })
+        });
+        let g = Arc::get_mut(galley).expect("the layout being reworked is the cache's alone");
+        let job = Arc::make_mut(&mut g.job);
+        let old_text = std::mem::take(&mut job.text);
+
+        // the lines the edit did not touch, at the start and at the end
+        let (pre, suf) = common_affixes(&old_text, text);
+        let (old_len, new_len) = (old_text.len(), text.len());
+        let (mut a, mut head) = (0, 0);
+        while a < old_lines.len() && old_lines[a].newline && head + old_lines[a].len <= pre {
+            head += old_lines[a].len;
+            a += 1;
+        }
+        let (mut b, mut tail) = (old_lines.len(), old_len);
+        while b > a {
+            let start = tail - old_lines[b - 1].len;
+            if start + suf < old_len || start < head {
+                break;
+            }
+            // where it starts now, which must still be a line's start
+            let new_start = start + new_len - old_len;
+            let boundary = start + suf > old_len || new_start == 0 || text.as_bytes()[new_start - 1] == b'\n';
+            if !boundary || new_start < head {
+                break;
+            }
+            tail = start;
+            b -= 1;
+        }
+        let mid_end = tail + new_len - old_len;
+        let mut srcs: Vec<(Option<usize>, usize)> = Vec::with_capacity(old_lines.len() + 8);
+        srcs.extend((0..a).map(|i| (Some(i), old_lines[i].len)));
+        srcs.extend(text[head..mid_end].split_inclusive('\n').map(|l| (None, l.len())));
+        if b == old_lines.len() && (text.is_empty() || text.ends_with('\n')) {
+            srcs.push((None, 0));
+        }
+        srcs.extend((b..old_lines.len()).map(|i| (Some(i), old_lines[i].len)));
+
+        // what each line becomes, and where it now starts
+        enum Fate {
+            Keep(usize),
+            Fresh(Box<(LineLayout, Vec<egui::text::LayoutSection>, Placed)>),
+        }
+        let table_keys: Vec<u64> = tables.iter().map(|r| ahash_of(&text[r.clone()])).collect();
+        let mut table_cells_cache = std::collections::HashMap::new();
+        let mut fates = Vec::with_capacity(srcs.len());
+        let mut tops = Vec::with_capacity(srcs.len());
+        // what the line above passes on: `carry`, or that of an old line kept
+        let mut carry = Carry::default();
+        let mut carry_of: Option<usize> = None;
+        let mut prev_kept: Option<usize> = None;
+        let (mut at, mut y, mut ti) = (0, 0.0_f32, 0);
+        let n_lines = srcs.len();
+        for (k, &(src, len)) in srcs.iter().enumerate() {
+            let line = &text[at..at + len];
+            let pseudo = len == 0 && k + 1 == n_lines;
+            let end = at + line.trim_end_matches(['\n', '\r']).len();
+            while tables.get(ti).is_some_and(|r| r.end <= at) {
+                ti += 1;
+            }
+            let table = tables.get(ti).filter(|r| !pseudo && r.start < end && r.end > at && !reveal.touches(r.start, r.end.saturating_sub(1)));
+            let local = local_reveal(reveal, at, end);
+            let quiet = local.0.is_none() && table.is_none();
+            // an untouched line under the old line above it, as plain as it was: as it was
+            let fast = src.is_some_and(|i| i > 0 && k > 0 && prev_kept == Some(i - 1) && quiet && old_lines[i].quiet);
+            let mut ctx = 0;
+            if !fast {
+                if let Some(j) = carry_of.take() {
+                    carry.clone_from(&old_lines[j].carry);
+                }
+                ctx = ahash_of((&carry, k == 0, pseudo, table.map(|r| (table_keys[ti], at - r.start)), local));
+            }
+            let keep = src.filter(|&i| fast || old_lines[i].ctx == ctx);
+            if let Some(i) = keep {
+                let o = &old_lines[i];
+                y += o.gap;
+                tops.push(y);
+                y += o.height;
+                carry_of = Some(i);
+                fates.push(Fate::Keep(i));
+            } else {
+                let (sections, mut info) = if pseudo { final_line(st) } else { highlight_line(st, &mut carry, k == 0, line, table.is_some(), local) };
+                if !st.live {
+                    info.gap = 0.0;
+                    info.lead = 0;
+                }
+                let table_src = table.map(|r| {
+                    let cells = table_cells_cache.entry(r.start).or_insert_with(|| table_cells(&text[r.clone()]));
+                    (&text[r.clone()], &*cells, at - r.start)
+                });
+                let laid = layout_line(fonts, &line[..end - at], &sections, &info, table_src, width, note, st);
+                y += info.gap;
+                tops.push(y);
+                y += laid.height;
+                let placed = Placed {
+                    ctx,
+                    quiet,
+                    carry: carry.clone(),
+                    len,
+                    newline: info.newline,
+                    sections: sections.len(),
+                    rows: laid.rows.len(),
+                    gap: info.gap,
+                    top: 0.0,
+                    height: laid.height,
+                    first: laid.first,
+                    deco: info.deco,
+                    fence: matches!(line.trim_start().get(..3), Some("```") | Some("~~~")),
+                    table: laid.table,
+                    cells: laid.cells.clone(),
+                };
+                fates.push(Fate::Fresh(Box::new((laid, sections, placed))));
+            }
+            prev_kept = keep;
+            at += len;
+        }
+
+        // a fresh line's rows, moved to its place in the note
+        let place = |row: &mut egui::epaint::text::Row, top: f32, s0: usize| {
+            let d = egui::vec2(0.0, top.round());
+            for gl in &mut row.glyphs {
+                gl.pos += d;
+                gl.section_index += s0 as u32;
+            }
+            row.section_index_at_start += s0 as u32;
+            row.rect = row.rect.translate(d);
+            row.visuals.mesh.translate(d);
+            row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
+        };
+        let shift_rows = |rows: &mut [egui::epaint::text::Row], dy: f32| {
+            let d = egui::vec2(0.0, dy);
+            for row in rows {
+                for gl in &mut row.glyphs {
+                    gl.pos += d;
+                }
+                row.rect = row.rect.translate(d);
+                row.visuals.mesh.translate(d);
+                row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
+            }
+        };
+        let shift_secs = |secs: &mut [egui::text::LayoutSection], d: i64| {
+            for sec in secs {
+                sec.byte_range = (sec.byte_range.start as i64 + d) as usize..(sec.byte_range.end as i64 + d) as usize;
+            }
+        };
+        let in_place = fates.len() == old_lines.len()
+            && fates.iter().enumerate().all(|(k, f)| match f {
+                Fate::Keep(i) => *i == k,
+                Fate::Fresh(f) => old_lines[k].rows == f.2.rows && old_lines[k].sections == f.2.sections,
+            });
+        if in_place {
+            let (mut r, mut s, mut at, mut old_at) = (0, 0, 0, 0);
+            for (k, fate) in fates.into_iter().enumerate() {
+                let o = &mut old_lines[k];
+                let (rows_n, secs_n, old_line_len) = (o.rows, o.sections, o.len);
+                let top = tops[k];
+                match fate {
+                    Fate::Keep(_) => {
+                        let dy = top.round() - o.top.round();
+                        if dy != 0.0 {
+                            shift_rows(&mut g.rows[r..r + rows_n], dy);
+                        }
+                        if at != old_at {
+                            shift_secs(&mut job.sections[s..s + secs_n], at as i64 - old_at as i64);
+                        }
+                        o.top = top;
+                    }
+                    Fate::Fresh(f) => {
+                        let (laid, sections, mut placed) = *f;
+                        for (j, mut row) in laid.rows.into_iter().enumerate() {
+                            place(&mut row, top, s);
+                            verts[r + j] = row.visuals.mesh.vertices.len() as u32;
+                            g.rows[r + j] = row;
+                        }
+                        for (j, mut sec) in sections.into_iter().enumerate() {
+                            sec.byte_range = sec.byte_range.start + at..sec.byte_range.end + at;
+                            job.sections[s + j] = sec;
+                        }
+                        placed.top = top;
+                        *o = placed;
+                    }
+                }
+                at += o.len;
+                old_at += old_line_len;
+                r += rows_n;
+                s += secs_n;
+            }
+        } else {
+            // the stretches of old lines replaced by fresh ones, and what moves for the lines kept
+            struct Edit {
+                old: std::ops::Range<usize>,
+                rows: std::ops::Range<usize>,
+                secs: std::ops::Range<usize>,
+                fresh: Vec<(LineLayout, Vec<egui::text::LayoutSection>, Placed)>,
+            }
+            let mut edits: Vec<Edit> = Vec::new();
+            let mut moves = Vec::with_capacity(fates.len()); // per line kept: dy, dsec, dbyte
+            let (mut oi, mut o_row, mut o_sec, mut o_at) = (0, 0, 0, 0);
+            let (mut n_row, mut n_sec, mut at) = (0, 0, 0);
+            let mut open: Option<Edit> = None;
+            for (k, fate) in fates.into_iter().enumerate() {
+                let top = tops[k];
+                match fate {
+                    Fate::Keep(i) => {
+                        let e = open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() });
+                        while oi < i {
+                            let o = &old_lines[oi];
+                            (o_row, o_sec, o_at) = (o_row + o.rows, o_sec + o.sections, o_at + o.len);
+                            oi += 1;
+                        }
+                        (e.old.end, e.rows.end, e.secs.end) = (oi, o_row, o_sec);
+                        if let Some(e) = open.take().filter(|e| !e.old.is_empty() || !e.fresh.is_empty()) {
+                            edits.push(e);
+                        }
+                        let o = &old_lines[i];
+                        moves.push(Some((top.round() - o.top.round(), n_sec as i64 - o_sec as i64, at as i64 - o_at as i64, top)));
+                        (n_row, n_sec, at) = (n_row + o.rows, n_sec + o.sections, at + o.len);
+                        (o_row, o_sec, o_at) = (o_row + o.rows, o_sec + o.sections, o_at + o.len);
+                        oi = i + 1;
+                    }
+                    Fate::Fresh(f) => {
+                        let (mut laid, mut sections, mut placed) = *f;
+                        for row in &mut laid.rows {
+                            place(row, top, n_sec);
+                        }
+                        for sec in &mut sections {
+                            sec.byte_range = sec.byte_range.start + at..sec.byte_range.end + at;
+                        }
+                        placed.top = top;
+                        (n_row, n_sec, at) = (n_row + placed.rows, n_sec + placed.sections, at + placed.len);
+                        moves.push(None);
+                        open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() }).fresh.push((laid, sections, placed));
+                    }
+                }
+            }
+            // the old lines after the last one kept go too
+            let mut e = open.take().unwrap_or(Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() });
+            (e.old.end, e.rows.end, e.secs.end) = (old_lines.len(), g.rows.len(), job.sections.len());
+            if !e.old.is_empty() || !e.fresh.is_empty() {
+                edits.push(e);
+            }
+            // from the end, so the ranges before stay where they are
+            for e in edits.into_iter().rev() {
+                let mut new_rows = Vec::new();
+                let mut new_verts = Vec::new();
+                let mut new_secs = Vec::new();
+                let mut new_lines = Vec::new();
+                for (laid, sections, placed) in e.fresh {
+                    new_verts.extend(laid.rows.iter().map(|r| r.visuals.mesh.vertices.len() as u32));
+                    new_rows.extend(laid.rows);
+                    new_secs.extend(sections);
+                    new_lines.push(placed);
+                }
+                verts.splice(e.rows.clone(), new_verts);
+                g.rows.splice(e.rows, new_rows);
+                job.sections.splice(e.secs, new_secs);
+                old_lines.splice(e.old, new_lines);
+            }
+            // the lines kept move down or up, and their sections and bytes on
+            let (mut r, mut s) = (0, 0);
+            for (line, mv) in old_lines.iter_mut().zip(moves) {
+                if let Some((dy, dsec, dbyte, top)) = mv {
+                    if dy != 0.0 || dsec != 0 {
+                        let d = egui::vec2(0.0, dy);
+                        for row in &mut g.rows[r..r + line.rows] {
+                            for gl in &mut row.glyphs {
+                                gl.pos += d;
+                                gl.section_index = (gl.section_index as i64 + dsec) as u32;
+                            }
+                            row.section_index_at_start = (row.section_index_at_start as i64 + dsec) as u32;
+                            if dy != 0.0 {
+                                row.rect = row.rect.translate(d);
+                                row.visuals.mesh.translate(d);
+                                row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
+                            }
+                        }
+                    }
+                    if dbyte != 0 {
+                        shift_secs(&mut job.sections[s..s + line.sections], dbyte);
+                    }
+                    line.top = top;
+                }
+                r += line.rows;
+                s += line.sections;
+            }
+        }
+
+        job.text = text.to_owned();
+        let mut bounds = egui::Rect::NOTHING;
+        let (mut nv, mut ni) = (0, 0);
+        for row in &g.rows {
+            bounds = bounds.union(row.visuals.mesh_bounds);
+            nv += row.visuals.mesh.vertices.len();
+            ni += row.visuals.mesh.indices.len();
+        }
+        g.rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(width, y));
+        g.mesh_bounds = bounds;
+        g.num_vertices = nv;
+        g.num_indices = ni;
+        g.elided = false;
+        g.pixels_per_point = fonts.pixels_per_point();
+        *decos = Arc::new(if st.live { decos_of(old_lines, width, st) } else { Vec::new() });
+    }
+}
+
+/// One line laid out on its own, at the top of its room.
+#[allow(clippy::too_many_arguments)]
+fn layout_line(
+    fonts: &egui::text::Fonts,
+    body: &str,
+    sections: &[egui::text::LayoutSection],
+    line: &LineInfo,
+    table: Option<(&str, &(Vec<Vec<std::ops::Range<usize>>>, Vec<pulldown_cmark::Alignment>), usize)>,
+    width: f32,
+    note: crate::align::TextAlign,
+    st: &Styles,
+) -> LineLayout {
+    let sub = |range: std::ops::Range<usize>, len: usize| -> LayoutJob {
+        let mut j = LayoutJob { text: body[..len].to_string(), ..Default::default() };
+        for sec in &sections[range] {
+            let a = sec.byte_range.start.min(len);
+            let b = sec.byte_range.end.min(len);
             j.sections.push(egui::text::LayoutSection { leading_space: 0.0, byte_range: a..b, format: sec.format.clone() });
         }
         j
     };
-    let mut table_cache = std::collections::HashMap::new();
-    for (li, line) in lines.iter().enumerate() {
-        y += line.gap;
-        let mut table_height = None;
-        if let Deco::Table { start, end } = line.deco {
-            let (table_rows, alignments) = table_cache.entry(start)
-                .or_insert_with(|| table_cells(&job.text[start..end]));
-            // The delimiter has no cells, but remains one source row for cursor mapping.
-            let source_row = table_rows.iter().enumerate().find(|(_, cells)| cells.first()
-                .is_some_and(|r| start + r.start >= line.bytes.start && start + r.start <= line.bytes.end));
-            table_height = Some(1.0);
-            if let Some((row_index, cells)) = source_row {
-                let columns = alignments.len().max(1);
-                let col_width = width / columns as f32;
-                let padding = (st.size * 0.5).min(col_width * 0.2);
-                let mut height = st.size * st.typo.line + padding * 2.0;
-                let mut rendered = Vec::new();
-                for (col, cell) in cells.iter().take(columns).enumerate() {
-                    let mut cell_job = LayoutJob::default();
-                    let mut fmt = st.fmt(st.size, st.p.text);
-                    if row_index == 0 { fmt.font_id.family = bold_family(); }
-                    let raw = &job.text[start + cell.start..start + cell.end];
-                    inline(&mut cell_job, raw.trim(), start + cell.start, fmt, st, Reveal(None));
-                    let w = (col_width - padding * 2.0).max(1.0);
-                    cell_job.wrap.max_width = w;
-                    let alignment = match alignments.get(col) {
-                        Some(pulldown_cmark::Alignment::Center) => crate::align::TextAlign::Center,
-                        Some(pulldown_cmark::Alignment::Right) => crate::align::TextAlign::Right,
-                        _ => crate::align::TextAlign::Left,
-                    };
-                    let galley = crate::align::layout(fonts, cell_job, w, alignment);
-                    height = height.max(galley.rect.height() + padding * 2.0);
-                    rendered.push((egui::pos2(col as f32 * col_width + padding, y + padding), galley));
+    let mut table_height = None;
+    let mut table_row = None;
+    let mut cells = Vec::new();
+    if let Some((src, (table_rows, alignments), offset)) = table {
+        // The delimiter has no cells, but remains one source row for cursor mapping.
+        let source_row = table_rows.iter().enumerate().find(|(_, cells)| cells.first().is_some_and(|r| r.start >= offset && r.start <= offset + body.len()));
+        table_height = Some(1.0);
+        if let Some((row_index, row_cells)) = source_row {
+            let columns = alignments.len().max(1);
+            let col_width = width / columns as f32;
+            let padding = (st.size * 0.5).min(col_width * 0.2);
+            let mut height = st.size * st.typo.line + padding * 2.0;
+            for (col, cell) in row_cells.iter().take(columns).enumerate() {
+                let mut cell_job = LayoutJob::default();
+                let mut fmt = st.fmt(st.size, st.p.text);
+                if row_index == 0 {
+                    fmt.font_id.family = bold_family();
                 }
-                decos.push(DecoShape::TableRow(egui::Rect::from_min_size(egui::pos2(0.0, y), egui::vec2(width, height)), row_index == 0, columns));
-                for (at, galley) in rendered { decos.push(DecoShape::TableCell(at, galley)); }
-                table_height = Some(height);
+                let raw = &src[cell.clone()];
+                inline(&mut cell_job, raw.trim(), cell.start, fmt, st, Reveal(None));
+                let w = (col_width - padding * 2.0).max(1.0);
+                cell_job.wrap.max_width = w;
+                let alignment = match alignments.get(col) {
+                    Some(pulldown_cmark::Alignment::Center) => crate::align::TextAlign::Center,
+                    Some(pulldown_cmark::Alignment::Right) => crate::align::TextAlign::Right,
+                    _ => crate::align::TextAlign::Left,
+                };
+                let galley = crate::align::layout(fonts, cell_job, w, alignment);
+                height = height.max(galley.rect.height() + padding * 2.0);
+                cells.push((egui::pos2(col as f32 * col_width + padding, padding), galley));
             }
+            table_row = Some((height, row_index == 0, columns));
+            table_height = Some(height);
         }
-        let align = match line.align {
-            LineAlign::Note => note,
-            LineAlign::List => crate::align::for_lists(note),
-            LineAlign::Left => crate::align::TextAlign::Left,
-        };
-        // the hanging mark: its width, from the line's start to the text
-        let lead_w = if line.lead > 0 {
-            let lead = line.sections.start..line.sections.start + line.lead;
-            let end = job.sections[lead.end - 1].byte_range.end.min(line.bytes.end);
-            let mut j = sub(lead, &(line.bytes.start..end.max(line.bytes.start)));
-            j.wrap.max_width = f32::INFINITY;
-            fonts.layout_job(j).rect.width()
-        } else {
-            0.0
-        };
-        let wrap = (width - line.content_x).max(40.0);
-        let mut j = sub(line.sections.clone(), &line.bytes);
-        j.wrap.max_width = wrap;
-        if let Some(height) = table_height {
-            j.wrap.max_width = f32::INFINITY;
-            j.first_row_min_height = height;
-        }
-        if line.deco == Deco::Rule { j.first_row_min_height = st.size * st.typo.line; }
-        let g = crate::align::layout(fonts, j, wrap, align);
-        ppp = g.pixels_per_point;
-        let x0 = line.content_x - lead_w;
-        let n = g.rows.len();
-        let top = y;
-        for (ri, row) in g.rows.iter().enumerate() {
-            let mut row = row.clone();
-            // whole pixels, or the text blurs
-            let d = egui::vec2(if ri == 0 { x0 } else { x0 + lead_w }, y).round();
+    }
+    let align = match line.align {
+        LineAlign::Note => note,
+        LineAlign::List => crate::align::for_lists(note),
+        LineAlign::Left => crate::align::TextAlign::Left,
+    };
+    // the hanging mark: its width, from the line's start to the text
+    let lead_w = if line.lead > 0 {
+        let end = sections[line.lead - 1].byte_range.end.min(body.len());
+        let mut j = sub(0..line.lead, end);
+        j.wrap.max_width = f32::INFINITY;
+        crate::align::layout_owned(fonts, j, f32::INFINITY, crate::align::TextAlign::Left).rect.width()
+    } else {
+        0.0
+    };
+    let wrap = (width - line.content_x).max(40.0);
+    let mut j = sub(0..sections.len(), body.len());
+    j.wrap.max_width = wrap;
+    if let Some(height) = table_height {
+        j.wrap.max_width = f32::INFINITY;
+        j.first_row_min_height = height;
+    }
+    if line.deco == Deco::Rule {
+        j.first_row_min_height = st.size * st.typo.line;
+    }
+    let g = crate::align::layout_owned(fonts, j, wrap, align);
+    let x0 = line.content_x - lead_w;
+    let n = g.rows.len();
+    let height = g.rect.height();
+    let mut rows = g.rows;
+    for (ri, row) in rows.iter_mut().enumerate() {
+        // whole pixels, or the text blurs
+        let d = egui::vec2(if ri == 0 { x0 } else { x0 + lead_w }, 0.0).round();
+        if d.x != 0.0 {
             for gl in &mut row.glyphs {
                 gl.pos += d;
-                gl.section_index += line.sections.start as u32;
             }
-            row.section_index_at_start += line.sections.start as u32;
             row.rect = row.rect.translate(d);
             row.visuals.mesh.translate(d);
             row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
-            if ri + 1 == n {
-                row.ends_with_newline = line.newline;
-            }
-            bounds = bounds.union(row.visuals.mesh_bounds);
-            verts += row.visuals.mesh.vertices.len();
-            idx += row.visuals.mesh.indices.len();
-            rows.push(row);
         }
-        let first = rows[rows.len() - n].rect;
-        y = top + g.rect.height().max(first.height());
-        let step = list_step(st.size);
+        if ri + 1 == n {
+            row.ends_with_newline = line.newline;
+        }
+    }
+    let first = rows.first().map(|r| r.rect).unwrap_or(egui::Rect::ZERO);
+    LineLayout { height: height.max(first.height()), first, table: table_row, cells, rows }
+}
+
+/// What the reading view draws around the lines: bullets, check boxes, quote
+/// bars, code boxes, rules and tables, in galley coordinates.
+fn decos_of(lines: &[Placed], width: f32, st: &Styles) -> Vec<DecoShape> {
+    let mut decos = Vec::new();
+    let mut code_top: Option<f32> = None;
+    let mut quote: Vec<(f32, f32)> = Vec::new(); // the open bars: top, x
+    let step = list_step(st.size);
+    let mut y = 0.0;
+    for (li, line) in lines.iter().enumerate() {
+        let top = line.top;
+        y = top + line.height;
+        if let Some((height, header, columns)) = line.table {
+            decos.push(DecoShape::TableRow(egui::Rect::from_min_size(egui::pos2(0.0, top), egui::vec2(width, height)), header, columns));
+            for (at, galley) in &line.cells {
+                decos.push(DecoShape::TableCell(*at + egui::vec2(0.0, top), galley.clone()));
+            }
+        }
+        let first_y = line.first.center().y + top.round();
         match line.deco {
             Deco::Rule => decos.push(DecoShape::Rule(egui::Rect::from_min_max(egui::pos2(0.0, top), egui::pos2(width, y)))),
-            Deco::Bullet(level) => decos.push(DecoShape::Bullet(egui::pos2(step * level as f32 + st.size * 0.65, first.center().y))),
-            Deco::Task(level, done) => decos.push(DecoShape::Check(egui::pos2(step * level as f32 + st.size * 0.65, first.center().y), done)),
+            Deco::Bullet(level) => decos.push(DecoShape::Bullet(egui::pos2(step * level as f32 + st.size * 0.65, first_y))),
+            Deco::Task(level, done) => decos.push(DecoShape::Check(egui::pos2(step * level as f32 + st.size * 0.65, first_y), done)),
             _ => {}
         }
         // code: one box from the opening fence to the closing one
         let next_code = lines.get(li + 1).is_some_and(|l| l.deco == Deco::Code);
         if line.deco == Deco::Code {
             let t = *code_top.get_or_insert(top);
-            let fence = matches!(job.text[line.bytes.clone()].trim_start().get(..3), Some("```") | Some("~~~"));
-            if !next_code || (fence && t != top) {
+            if !next_code || (line.fence && t != top) {
                 decos.push(DecoShape::CodeBox(egui::Rect::from_min_max(egui::pos2(0.0, t), egui::pos2(width, y))));
                 code_top = None;
             }
@@ -779,9 +1336,19 @@ fn compose(fonts: &egui::text::Fonts, job: LayoutJob, lines: &[LineInfo], width:
     for (t, x) in quote.drain(..) {
         decos.push(DecoShape::Bar(x, t, y));
     }
-    let rect = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(width, y));
-    let galley = egui::Galley { job, rows, elided: false, rect, mesh_bounds: bounds, num_vertices: verts, num_indices: idx, pixels_per_point: ppp };
-    (galley, decos)
+    decos
+}
+
+/// Something the reading view draws around the text, in galley coordinates.
+#[derive(Clone, Debug)]
+pub enum DecoShape {
+    Bullet(egui::Pos2),
+    Check(egui::Pos2, bool),
+    Bar(f32, f32, f32),
+    CodeBox(egui::Rect),
+    Rule(egui::Rect),
+    TableRow(egui::Rect, bool, usize),
+    TableCell(egui::Pos2, std::sync::Arc<egui::Galley>),
 }
 
 /// Draw what the reading view draws around the text: list bullets and check
@@ -837,9 +1404,32 @@ fn deco_shapes(clip: egui::Rect, at: egui::Pos2, decos: &[DecoShape], size: f32,
     shapes
 }
 
+/// A fast hash of a note's text, for the caches that must notice when it
+/// changes: they ask every frame, and a long note is megabytes.
+pub fn text_hash(text: &str) -> u64 {
+    egui::ahash::RandomState::with_seeds(0x41, 0x74, 0x65, 0x6c).hash_one(text)
+}
+
 /// Character index ↔ byte offset helpers for the editor's cursor.
 pub fn char_to_byte(s: &str, ci: usize) -> usize {
-    s.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(s.len())
+    // whole blocks first: counting the bytes that start a character is fast
+    let (mut seen, mut at) = (0, 0);
+    for block in s.as_bytes().chunks(4096) {
+        let n = block.iter().filter(|&&b| (b as i8) >= -64).count();
+        if seen + n > ci {
+            break;
+        }
+        seen += n;
+        at += block.len();
+    }
+    // a block may end inside a character it already counted: start at that character
+    if !s.is_char_boundary(at) {
+        while !s.is_char_boundary(at) {
+            at -= 1;
+        }
+        seen -= 1;
+    }
+    s[at..].char_indices().nth(ci - seen).map(|(b, _)| at + b).unwrap_or(s.len())
 }
 
 pub fn byte_to_char(s: &str, b: usize) -> usize {
@@ -1019,12 +1609,7 @@ fn reveal_of(ctx: &egui::Context, id: egui::Id, text: &str) -> Reveal {
 
 /// The galley an editor shows for `text` at `width`, as the layouter makes it.
 pub fn galley(ui: &egui::Ui, text: &str, cache: &mut HighlightCache, st: &Styles, reveal: Reveal, width: f32) -> std::sync::Arc<egui::Galley> {
-    if st.live {
-        return ui.fonts(|f| cache.live(f, text, st, reveal, width).0);
-    }
-    let mut job = cache.get(text, st, reveal);
-    job.wrap.max_width = width;
-    ui.fonts(|f| crate::align::layout(f, job, width, crate::align::current()))
+    ui.fonts(|f| cache.live(f, text, st, reveal, width).0)
 }
 
 /// The cursor of an editor, as tall as the font of the letter beside it (the
@@ -1077,7 +1662,12 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let reveal = if st.live { reveal_of(ui.ctx(), id, text) } else { Reveal(None) };
         // Reserve the background slot; layout only at TextEdit's actual wrap width.
         let deco_slot = st.live.then(|| ui.painter().add(egui::Shape::Noop));
-        let before_text = text.clone();
+        // without input the text cannot change here: idle frames skip copying it
+        let busy = ui.input(|i| !i.events.is_empty() || i.pointer.any_down());
+        let before_text = busy.then(|| text.clone());
+        // the text edit has the layout to itself while it runs (see HighlightCache)
+        cache.rendered = None;
+        cache.lend = true;
         let mut layouter = |ui: &egui::Ui, s: &str, wrap: f32| galley(ui, s, cache, st, reveal, wrap);
         // a right click must not move the caret: the menu acts on the selection
         let prev = selection(ui.ctx(), id);
@@ -1098,9 +1688,10 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let cursor_stroke = ui.visuals().text_cursor.stroke;
         ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
+        cache.give_back(&out.galley);
         cache.rendered = Some((out.galley.clone(), out.galley_pos));
         if let Some(slot) = deco_slot {
-            let decos = &cache.live.as_ref().unwrap().1;
+            let decos = &cache.decos();
             ui.painter().set(slot, egui::Shape::Vec(deco_shapes(ui.clip_rect(), out.galley_pos, decos, st.size, &st.p)));
             for deco in decos.iter() {
                 if let DecoShape::TableCell(pos, galley) = deco {
@@ -1123,7 +1714,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let before = text.len();
         editing_extras(text, &resp, ui, id, &st.p);
         // the cursor moved into or out of a span: show its marks next frame
-        if st.live && (reveal_of(ui.ctx(), id, text) != reveal || *text != before_text) {
+        if st.live && (reveal_of(ui.ctx(), id, text) != reveal || before_text.is_some_and(|b| b != *text)) {
             ui.ctx().request_repaint();
         }
         let mut resp = resp;
@@ -1134,12 +1725,181 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
     }
 }
 
+/// Fails unless two galleys hold the same text, sections, rows, glyphs and meshes.
+#[cfg(test)]
+pub(crate) fn assert_same_layout(a: &egui::Galley, b: &egui::Galley, what: &str) {
+    assert_eq!(a.job.text, b.job.text, "{what}: text");
+    assert_eq!(a.job.sections.len(), b.job.sections.len(), "{what}: sections");
+    for (i, (x, y)) in a.job.sections.iter().zip(&b.job.sections).enumerate() {
+        assert_eq!(x.byte_range, y.byte_range, "{what}: section {i}");
+        assert!(x.format == y.format, "{what}: format of section {i}");
+    }
+    assert_eq!(a.rows.len(), b.rows.len(), "{what}: rows");
+    for (i, (x, y)) in a.rows.iter().zip(&b.rows).enumerate() {
+        assert_eq!(x.rect, y.rect, "{what}: rect of row {i}");
+        assert_eq!(x.section_index_at_start, y.section_index_at_start, "{what}: row {i}");
+        assert_eq!(x.ends_with_newline, y.ends_with_newline, "{what}: newline of row {i}");
+        assert_eq!(x.glyphs.len(), y.glyphs.len(), "{what}: glyphs of row {i}");
+        for (g, h) in x.glyphs.iter().zip(&y.glyphs) {
+            assert_eq!((g.chr, g.pos, g.section_index), (h.chr, h.pos, h.section_index), "{what}: row {i}");
+        }
+        assert_eq!(x.visuals.mesh.indices, y.visuals.mesh.indices, "{what}: indices of row {i}");
+        assert_eq!(x.visuals.mesh.vertices.len(), y.visuals.mesh.vertices.len(), "{what}: vertices of row {i}");
+        assert!(x.visuals.mesh.vertices.iter().zip(&y.visuals.mesh.vertices).all(|(v, w)| v.pos == w.pos && v.uv == w.uv && v.color == w.color), "{what}: vertices of row {i}");
+        // an empty mesh has no bounds (infinite, or not a number once moved)
+        let (p, q) = (x.visuals.mesh_bounds, y.visuals.mesh_bounds);
+        assert!(p == q || (!p.is_finite() && !q.is_finite()), "{what}: bounds of row {i}: {p:?} {q:?}");
+    }
+    assert_eq!(a.rect, b.rect, "{what}: rect");
+    assert_eq!((a.num_vertices, a.num_indices), (b.num_vertices, b.num_indices), "{what}: mesh size");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn styles() -> Styles {
         Styles::live(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))
+    }
+
+    /// A long manuscript: paragraphs, headings, lists, quotes and code.
+    fn manuscript(min_bytes: usize) -> String {
+        // numbered, so lines do not repeat (and no layout is reused for that)
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < min_bytes {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n  - um item dentro {n}\n\n> uma citação curta {n}\n\n```\nlet codigo = {n};\n```\n\nMais um parágrafo {n} com `código`, ==marca== e #tag no fim da frase.\n\n");
+        }
+        text
+    }
+
+    /// Times one Live Preview layout after `edit`, with the cache warm.
+    fn time_live(cache: &mut HighlightCache, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal) -> std::time::Duration {
+        let start = std::time::Instant::now();
+        let _ = cache.live(fonts, text, st, reveal, 700.0);
+        start.elapsed()
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture large_note"]
+    fn large_note_typing_and_cursor_moves() {
+        let st = styles();
+        let mut text = manuscript(2_000_000);
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let mut cache = HighlightCache::default();
+        let mid = text.len() / 2;
+        let line = text[mid..].find("Uma nota").unwrap() + mid;
+        let t = time_live(&mut cache, &fonts, &text, &st, Reveal(Some((line, line))));
+        eprintln!("{} bytes, first layout: {t:?}", text.len());
+        {
+            let (g, _) = cache.live(&fonts, &text, &st, Reveal(Some((line, line))), 700.0);
+            let glyphs: usize = g.rows.iter().map(|r| r.glyphs.len()).sum();
+            eprintln!("{} rows, {glyphs} glyphs, {} vertices, {} indices", g.rows.len(), g.num_vertices, g.num_indices);
+            // what egui does each frame a selection is painted on a shared galley
+            let start = std::time::Instant::now();
+            let copy = (*g).clone();
+            eprintln!("cloning the galley: {:?}", start.elapsed());
+            drop(copy);
+        }
+        // the cursor walks along plain text in a paragraph
+        let mut moves = std::time::Duration::ZERO;
+        for k in 1..=10 {
+            moves += time_live(&mut cache, &fonts, &text, &st, Reveal(Some((line + k, line + k))));
+        }
+        eprintln!("cursor move inside a paragraph: {:?}", moves / 10);
+        // the cursor goes into the bold span and out again
+        let bold = text[line..].find("**").unwrap() + line;
+        let t = time_live(&mut cache, &fonts, &text, &st, Reveal(Some((bold + 3, bold + 3))));
+        eprintln!("cursor enters a bold span: {t:?}");
+        // typing in the middle of the note
+        let mut typing = std::time::Duration::ZERO;
+        let mut at = line + 4;
+        for c in "palavra".chars() {
+            text.insert(at, c);
+            at += 1;
+            typing += time_live(&mut cache, &fonts, &text, &st, Reveal(Some((at, at))));
+        }
+        eprintln!("typing a letter: {:?}", typing / 7);
+        // a new line
+        text.insert(at, '\n');
+        at += 1;
+        let t = time_live(&mut cache, &fonts, &text, &st, Reveal(Some((at, at))));
+        eprintln!("a new line: {t:?}");
+    }
+
+    /// A note with a bit of everything that carries from line to line.
+    fn mixed_note() -> String {
+        "---\ntitulo: Nota\ntags: [a, b]\n---\n# Título\n\nUm parágrafo com **negrito**, *itálico*, `código`, [[link|apelido]] e #tag.\n\n- item um\n  - item dentro\n- [ ] tarefa\n- [x] feita\n\n> uma citação\n> > dentro\n\n```\nlet x = 1;\n```\n\n| A | B |\n| :- | -: |\n| **c** | d |\n\n---\n\nFim do texto, que é longo o bastante para quebrar em mais de uma linha na largura do editor de teste.".into()
+    }
+
+    #[test]
+    fn incremental_layout_matches_a_fresh_one_after_every_edit() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        for st in [styles(), Styles::source(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))] {
+            let mut text = mixed_note();
+            let mut cache = HighlightCache::default();
+            let check = |cache: &mut HighlightCache, text: &str, reveal: Reveal, what: &str| {
+                let (g, d) = cache.live(&fonts, text, &st, reveal, 320.0);
+                let (fresh, fd) = HighlightCache::default().live(&fonts, text, &st, reveal, 320.0);
+                assert_same_layout(&g, &fresh, what);
+                assert_eq!(format!("{d:?}").len(), format!("{fd:?}").len(), "{what}: decorations");
+            };
+            check(&mut cache, &text, Reveal(None), "first");
+            let at = |text: &str, s: &str| text.find(s).unwrap();
+            // the cursor walks into spans, a list, the table and out again
+            for probe in ["negrito", "link", "item dentro", "tarefa", "citação", "let x", "| A", "**c**", "Fim"] {
+                let p = at(&text, probe) + 1;
+                check(&mut cache, &text, Reveal(Some((p, p))), probe);
+            }
+            // a selection over several lines
+            let (a, b) = (at(&text, "Um parágrafo"), at(&text, "feita"));
+            check(&mut cache, &text, Reveal(Some((a, b))), "selection");
+            let edits: Vec<(&str, Box<dyn Fn(&mut String)>)> = vec![
+                ("a letter", Box::new(|t: &mut String| { let p = t.find("parágrafo").unwrap(); t.insert(p, 'x'); })),
+                ("a new line", Box::new(|t: &mut String| { let p = t.find("com **").unwrap(); t.insert(p, '\n'); })),
+                ("bold made", Box::new(|t: &mut String| { let p = t.find("Fim").unwrap(); t.insert_str(p, "**"); })),
+                ("a fence opened", Box::new(|t: &mut String| { let p = t.find("- item um").unwrap(); t.insert_str(p, "```\n"); })),
+                ("the fence closed", Box::new(|t: &mut String| { let p = t.find("```\n- item").unwrap(); t.replace_range(p..p + 4, ""); })),
+                ("a heading", Box::new(|t: &mut String| { let p = t.find("Fim").unwrap(); t.insert_str(p, "## "); })),
+                ("a table cell", Box::new(|t: &mut String| { let p = t.find("| d |").unwrap(); t.insert_str(p + 2, "longo "); })),
+                ("lines deleted", Box::new(|t: &mut String| { let (a, b) = (t.find("> uma").unwrap(), t.find("```\nlet").unwrap()); t.replace_range(a..b, ""); })),
+                ("frontmatter broken", Box::new(|t: &mut String| { t.remove(0); })),
+                ("frontmatter back", Box::new(|t: &mut String| { t.insert(0, '-'); })),
+                ("text appended", Box::new(|t: &mut String| { t.push_str("\nmais\n"); })),
+                ("the end trimmed", Box::new(|t: &mut String| { t.pop(); })),
+                ("a line at the start", Box::new(|t: &mut String| { t.insert_str(0, "antes\n"); })),
+                ("all gone", Box::new(|t: &mut String| t.clear())),
+                ("all back", Box::new(|t: &mut String| *t = mixed_note())),
+            ];
+            for (what, edit) in edits {
+                edit(&mut text);
+                let p = text.len() / 2;
+                let p = (0..=p).rev().find(|&i| text.is_char_boundary(i)).unwrap();
+                check(&mut cache, &text, Reveal(Some((p, p))), what);
+                check(&mut cache, &text, Reveal(None), what);
+            }
+        }
+    }
+
+    #[test]
+    fn a_selection_painted_into_a_lent_layout_is_taken_out_again() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = styles();
+        let text = mixed_note();
+        let mut cache = HighlightCache::default();
+        cache.lend = true;
+        let (mut g, _) = cache.live(&fonts, &text, &st, Reveal(None), 320.0);
+        let glyphs = g.rows[0].glyphs.as_ptr();
+        // as the text edit paints a selection of its rows 2 to 9
+        let range = egui::text::CursorRange::two(g.from_ccursor(egui::text::CCursor::new(30)), g.from_ccursor(egui::text::CCursor::new(200)));
+        egui::text_selection::visuals::paint_text_selection(&mut g, &egui::Visuals::default(), &range, None);
+        assert_eq!(g.rows[0].glyphs.as_ptr(), glyphs, "the layout was lent, not copied");
+        cache.give_back(&g);
+        drop(g);
+        let (again, _) = cache.live(&fonts, &text, &st, Reveal(None), 320.0);
+        let (fresh, _) = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 320.0);
+        assert_same_layout(&again, &fresh, "after the selection");
     }
 
     #[test]
@@ -1211,6 +1971,18 @@ mod tests {
             assert!(std::sync::Arc::ptr_eq(&decos, &next_decos));
         }
         eprintln!("8 idle cache hits, {} bytes: {:?}", text.len(), start.elapsed());
+    }
+
+    #[test]
+    fn char_to_byte_matches_char_indices_across_blocks() {
+        let text = "ação 日本 🎭 texto\n".repeat(900);
+        let naive = |ci: usize| text.char_indices().nth(ci).map(|(b, _)| b).unwrap_or(text.len());
+        let n = text.chars().count();
+        for ci in (0..n + 3).step_by(7).chain(n.saturating_sub(10)..n + 3) {
+            assert_eq!(char_to_byte(&text, ci), naive(ci), "char {ci}");
+        }
+        assert_eq!(char_to_byte("", 0), 0);
+        assert_eq!(char_to_byte("é", 1), 2);
     }
 
     #[test]

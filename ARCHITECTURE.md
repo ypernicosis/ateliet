@@ -59,6 +59,12 @@ somente ao solicitar YouTube. Fechar o player libera mídia e preserva a posiç�
 
 `build.rs` grava no binário o commit (`ATELIET_GIT_COMMIT`), o caminho do clone (`ATELIET_SOURCE_DIR`) e as features usadas (`ATELIET_FEATURES`). O app roda `git fetch` no clone e compara o upstream com o commit gravado; para atualizar, roda `git pull --ff-only` e `cargo build -p ateliet --release` com as mesmas features, copia `target/release/ateliet` para o lado do executável em uso (`.ateliet-update`), troca os dois por renomeação e, no macOS, reassina o `.app` ad hoc. Um binário que está no próprio `target/` do clone é recompilado no lugar, com o mesmo perfil.
 
+## Layout do editor (`src/editor.rs`)
+
+O editor (Live Preview e código-fonte) é um único `TextEdit` com a nota inteira, para que a seleção atravesse qualquer número de linhas. O layout é refeito por linha: `HighlightCache` guarda, para cada linha, o que ela herda das de cima (frontmatter, bloco de código, níveis de lista), se o cursor ou uma tabela desenhada está nela, e as suas linhas visuais. Uma edição compara o texto novo com o anterior pelo começo e pelo fim, refaz o realce e o layout só das linhas que mudaram (ou cujo contexto mudou, como o resto do texto depois de abrir um bloco de código) e desloca as demais; quando nenhuma linha muda de número de linhas visuais e de seções (uma letra digitada, o cursor andando), tudo é reescrito no lugar.
+
+São guardados dois layouts, porque o `TextEdit` monta o layout uma vez antes das teclas do quadro e outra depois delas, segurando o primeiro enquanto o segundo é feito. Enquanto o `TextEdit` roda, o cache não mantém referência forte ao layout que emprestou: o egui pinta a seleção dentro da galley e, se ela é compartilhada, copia a galley inteira antes. O editor devolve a galley depois do quadro e a seleção pintada é retirada antes do próximo uso. Os testes comparam o resultado incremental com um layout feito do zero depois de cada tipo de edição.
+
 ## Resolução de links
 
 A ordem de tentativa é a mesma do Obsidian:
