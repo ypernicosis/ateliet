@@ -918,6 +918,20 @@ impl HighlightCache {
         self.hand_out()
     }
 
+    /// The format a line of the current layout starts with, by one of its
+    /// rows: what a letter typed on an empty line would look like.
+    pub(crate) fn format_of_row(&self, row: usize) -> Option<TextFormat> {
+        let cur = self.cur.as_ref()?;
+        let mut r = 0;
+        for line in &cur.lines {
+            if row < r + line.rows {
+                return line.secs.first().map(|s| s.format.clone());
+            }
+            r += line.rows;
+        }
+        None
+    }
+
     /// Whether lines are still to be laid out by [`Self::advance`].
     pub(crate) fn incomplete(&self) -> bool {
         self.cur.as_ref().is_some_and(|c| c.incomplete)
@@ -1954,13 +1968,11 @@ pub fn galley(ui: &egui::Ui, text: &str, cache: &mut HighlightCache, st: &Styles
 /// The cursor of an editor, as tall as the font of the letter beside it (the
 /// one before it, or after it at the start of a row), blinking as egui's does.
 /// Marks set out of sight (a font of half a point) do not count as a letter.
-fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutput, stroke: Stroke) {
-    let Some(range) = out.cursor_range else { return };
-    if !out.response.has_focus() || stroke.is_empty() {
-        return;
-    }
-    let galley = &out.galley;
-    let at = galley.pos_from_cursor(&range.primary);
+/// Where the caret goes in `galley`: its x and how high it reaches, as tall
+/// as the letter beside it rather than the whole row. On a row with no letter
+/// (an empty line), as a letter of `format` (the line's) would sit there.
+fn caret_span(galley: &egui::Galley, cursor: &egui::epaint::text::cursor::Cursor, fonts: &egui::text::Fonts, format: impl FnOnce() -> Option<TextFormat>) -> (f32, f32, f32) {
+    let at = galley.pos_from_cursor(cursor);
     let (x, mid) = (at.center().x, at.center().y);
     let seen = |g: &&egui::epaint::text::Glyph| g.font_height >= 2.0;
     // (a row standing in for a line not laid out yet has no letter heights to go by)
@@ -1968,11 +1980,34 @@ fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutpu
         let before = r.glyphs.iter().rev().filter(|g| g.pos.x < x - 0.01).find(seen);
         before.or_else(|| r.glyphs.iter().filter(|g| g.pos.x >= x - 0.01).find(seen))
     });
-    let (top, bottom) = match glyph {
-        Some(g) => (g.pos.y - g.font_ascent, g.pos.y - g.font_ascent + g.font_height),
-        None => (at.min.y, at.max.y),
+    let (top, bottom) = match (glyph, glyph.is_none().then(format).flatten()) {
+        (Some(g), _) => (g.pos.y - g.font_ascent, g.pos.y - g.font_ascent + g.font_height),
+        (None, Some(format)) => {
+            // a space of the line's format, laid out alone: where its box sits in its row
+            let mut probe = LayoutJob::default();
+            probe.append(" ", 0.0, format);
+            let p = fonts.layout_job(probe);
+            match p.rows.first().and_then(|r| r.glyphs.first().map(|g| (r, g))) {
+                Some((r, g)) => {
+                    let top = at.min.y + (g.pos.y - g.font_ascent - r.rect.min.y);
+                    (top, top + g.font_height)
+                }
+                None => (at.min.y, at.max.y),
+            }
+        }
+        (None, None) => (at.min.y, at.max.y),
     };
-    let (top, bottom) = (top.max(at.min.y), bottom.min(at.max.y).max(top.max(at.min.y)));
+    (x, top.max(at.min.y), bottom.min(at.max.y).max(top.max(at.min.y)))
+}
+
+fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutput, stroke: Stroke, cache: &HighlightCache) {
+    let Some(range) = out.cursor_range else { return };
+    if !out.response.has_focus() || stroke.is_empty() {
+        return;
+    }
+    let galley = &out.galley;
+    let row = range.primary.rcursor.row;
+    let (x, top, bottom) = ui.fonts(|f| caret_span(galley, &range.primary, f, || cache.format_of_row(row)));
     let ctx = ui.ctx();
     let (now, key) = (ctx.input(|i| i.time), (range.primary.ccursor.index, galley.job.text.len()));
     let slot = id.with("caret-since");
@@ -2046,7 +2081,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         crate::find::paint(ui, &out.galley, out.galley_pos);
         crate::find::scroll_editor(ui, id, &out);
         ui.visuals_mut().text_cursor.stroke = cursor_stroke;
-        paint_caret(ui, id, &out, cursor_stroke);
+        paint_caret(ui, id, &out, cursor_stroke, cache);
         let resp = out.response.clone();
         let wrote = crate::writing::after(ui, id, text, &out, st.p);
         if resp.hovered() && ui.input(|i| i.pointer.secondary_pressed()) {
@@ -2432,6 +2467,26 @@ mod tests {
             }).collect();
             let got: Vec<(&str, usize, usize)> = spans(line).map(|(k, a, b)| (names[SPANS.iter().position(|(s, _)| *s == k).unwrap()], a, b)).collect();
             assert_eq!(got, want, "{line}");
+        }
+    }
+
+    #[test]
+    fn the_caret_on_an_empty_line_is_as_tall_as_on_the_text_around_it() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let text = "Texto aqui\n\nmais texto";
+        for st in [styles(), Styles::source(16.0, crate::theme::Palette::new(&crate::config::Appearance::default()))] {
+            let mut cache = HighlightCache::default();
+            let span = |cache: &mut HighlightCache, ci: usize| {
+                let b = char_to_byte(text, ci);
+                let (g, _) = cache.live(&fonts, text, &st, Reveal(Some((b, b))), 400.0);
+                let cur = g.from_ccursor(egui::text::CCursor::new(ci));
+                let row_top = g.pos_from_cursor(&cur).min.y;
+                let (_, top, bottom) = caret_span(&g, &cur, &fonts, || cache.format_of_row(cur.rcursor.row));
+                (top - row_top, bottom - top)
+            };
+            let on_text = span(&mut cache, 3);
+            let on_empty = span(&mut cache, 11);
+            assert!((on_text.0 - on_empty.0).abs() < 0.5 && (on_text.1 - on_empty.1).abs() < 0.5, "live={}: text {on_text:?}, empty line {on_empty:?}", st.live);
         }
     }
 
