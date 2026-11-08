@@ -16,6 +16,37 @@ thread_local! {
     pub static CHAPTER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
 }
 
+/// The words of a note, as `count_words` counts them, remembered per note
+/// (`slot`): the status bar and the focus panel ask every frame, and counting
+/// a long note runs several passes over all of it. With `stale_ok` (the note
+/// is being typed) the last count of the note stands until it is asked again
+/// without it.
+pub fn word_count(text: &str, slot: u64, stale_ok: bool) -> usize {
+    thread_local! {
+        static SEEN: RefCell<Vec<(u64, (usize, u64), usize)>> = const { RefCell::new(Vec::new()) };
+    }
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        let at = seen.iter().position(|(s, _, _)| *s == slot);
+        if stale_ok {
+            if let Some(i) = at {
+                return seen[i].2;
+            }
+        }
+        let key = (text.len(), crate::editor::text_hash(text));
+        if let Some(i) = at.filter(|&i| seen[i].1 == key) {
+            return seen[i].2;
+        }
+        let n = ateliet_core::scriptorium::count_words(text);
+        if let Some(i) = at {
+            seen.remove(i);
+        }
+        seen.insert(0, (slot, key, n));
+        seen.truncate(32);
+        n
+    })
+}
+
 pub fn set_chapter(chars: Option<Vec<String>>) {
     CHAPTER.with(|c| *c.borrow_mut() = chars);
 }

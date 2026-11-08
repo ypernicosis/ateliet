@@ -937,7 +937,7 @@ fn outline(app: &mut App, ui: &mut egui::Ui) {
         ui.label(RichText::new("Sem títulos.").color(p.faint));
         return;
     }
-    let doc = tab.doc();
+    let doc = tab.doc_settled(ui.ctx());
     if doc.headings.is_empty() {
         ui.label(RichText::new("Sem títulos.").color(p.faint));
     }
@@ -1403,7 +1403,7 @@ pub fn status_bar(app: &mut App, ctx: &egui::Context) {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
                 }
                 if let Some(t) = app.tabs.get(app.active).filter(|t| t.view.is_none() && t.board.is_none() && t.quadro.is_none()) {
-                    let words = ateliet_core::scriptorium::count_words(&t.text);
+                    let words = t.words(ui.ctx());
                     let chars = t.text.chars().count();
                     let back = app.vault.as_ref().map(|v| v.index.read().map(|ix| ix.inlinks(&t.path).len()).unwrap_or(0)).unwrap_or(0);
                     ui.label(small(format!("{back} {}", if back == 1 { "backlink" } else { "backlinks" })));

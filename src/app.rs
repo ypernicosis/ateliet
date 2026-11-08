@@ -81,9 +81,7 @@ impl Tab {
     }
 
     pub fn doc(&mut self) -> Arc<Doc> {
-        let mut h = DefaultHasher::new();
-        self.text.hash(&mut h);
-        let k = h.finish();
+        let k = editor::text_hash(&self.text);
         match &self.doc {
             Some((key, d)) if *key == k => d.clone(),
             _ => {
@@ -92,6 +90,33 @@ impl Tab {
                 d
             }
         }
+    }
+
+    /// The parsed note for what can show it a moment late (the outline):
+    /// while the note is being typed, the last parse, so a long note is not
+    /// parsed again at every key; parsed again once the typing pauses.
+    pub fn doc_settled(&mut self, ctx: &egui::Context) -> Arc<Doc> {
+        const PAUSE: Duration = Duration::from_millis(600);
+        let typing = self.last_edit.is_some_and(|t| t.elapsed() < PAUSE);
+        match &self.doc {
+            Some((_, d)) if typing => {
+                ctx.request_repaint_after(PAUSE);
+                d.clone()
+            }
+            _ => self.doc(),
+        }
+    }
+
+    /// The note's words for what shows them every frame (the status bar, the
+    /// focus panel): while it is being typed, the count from before the last
+    /// keys; counted again once the typing pauses.
+    pub fn words(&self, ctx: &egui::Context) -> usize {
+        const PAUSE: Duration = Duration::from_millis(600);
+        let typing = self.last_edit.is_some_and(|t| t.elapsed() < PAUSE);
+        if typing {
+            ctx.request_repaint_after(PAUSE);
+        }
+        crate::writing::word_count(&self.text, self.uid, typing)
     }
 
     pub fn editor_id(&self) -> egui::Id {
@@ -1529,6 +1554,10 @@ impl eframe::App for App {
         // tabs of the same note (one note in two panes) keep the same text
         self.sync_clones();
         // autosave a second after the last keystroke
+        // the editors' spare layouts go when they have long been out of use
+        for t in &mut self.tabs {
+            t.highlight.trim();
+        }
         let due: Vec<usize> = self.tabs.iter().enumerate().filter(|(_, t)| t.dirty() && t.last_edit.is_some_and(|e| e.elapsed() > Duration::from_millis(900))).map(|(i, _)| i).collect();
         for i in due {
             self.save_tab(i);
@@ -2331,7 +2360,20 @@ impl App {
             let max_w = if readable && centered { crate::typo::get().line_width.unwrap_or(46.0 * size) } else { f32::INFINITY };
             // a narrow pane (the centre divided) keeps its room for the text
             let pad = if centered && ui.available_width() > 420.0 { 32.0 } else { 14.0 };
-            egui::ScrollArea::vertical().id_salt(("note", &tab.path, tab.mode == Mode::Read, centered)).auto_shrink([false, false]).show(ui, |ui| {
+            let salt = ("note", tab.path.clone(), tab.mode == Mode::Read, centered);
+            // the editor's lines left for later (a long note just opened, or another width)
+            let editing = tab.mode == Mode::Edit && (!self.live_preview || tab.live.active.is_some());
+            let grown = if editing && tab.highlight.incomplete() {
+                let st = if self.live_preview { editor::Styles::live(size, p) } else { editor::Styles::source(size, p) };
+                let reveal = editor::reveal_of(ui.ctx(), tab.editor_id(), &tab.text);
+                let busy = ui.input(|i| !i.events.is_empty() || i.pointer.any_down() || i.smooth_scroll_delta != egui::Vec2::ZERO);
+                ui.ctx().fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy))
+            } else {
+                0.0
+            };
+            // what the rendered note measured out of view last frame moves the view with it
+            let area = crate::heights::keep_view(ui, egui::ScrollArea::vertical().id_salt(&salt), &salt, &mut tab.live.heights, grown);
+            area.auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
                 let w = avail.min(max_w + 2.0 * pad);
                 let side = ((avail - w) / 2.0).max(0.0);
@@ -2423,9 +2465,13 @@ impl App {
                                 let target = tab.find.pending.take();
                                 let line = target.as_ref().map(|r| tab.text[..r.start].bytes().filter(|b| *b == b'\n').count());
                                 let mut host = RenderHost { vault, palette: p, size, source: &tab.path, caches: &mut self.caches, settings: &self.dv_settings };
+                                let gap = size * crate::typo::get().gap;
+                                let width = ui.available_width();
+                                // only the segments in view (and the one searched for) are drawn
+                                let mut heights = std::mem::take(&mut tab.live.heights);
+                                let mut pass = heights.pass(ui);
                                 for (i, seg) in tab.live.segs.iter().enumerate() {
-                                    if i > 0 { ui.add_space(size * crate::typo::get().gap); }
-                                    let top = ui.cursor().min;
+                                    if i > 0 { ui.add_space(gap); }
                                     let is_target = line.is_some_and(|l| seg.start <= l && l <= seg.end);
                                     if is_target {
                                         let offset: usize = tab.text.split_inclusive('\n').take(seg.start).map(str::len).sum();
@@ -2433,25 +2479,47 @@ impl App {
                                             crate::find::begin_target(&seg.text, range.start.saturating_sub(offset).min(seg.text.len()));
                                         }
                                     }
-                                    let mut r = Renderer::new(&mut host);
-                                    if seg.frontmatter {
-                                        crate::find::plain(ui, &seg.text, egui::FontId::monospace(size), p.muted);
-                                    } else {
-                                        r.blocks(ui, &seg.doc.blocks);
-                                    }
-                                    actions.append(&mut r.actions);
+                                    let rect = pass.piece(ui, seg.hash ^ 0x5eed_0f_f1d, || crate::heights::estimate(&seg.text, size, width), is_target, |ui| {
+                                        let mut r = Renderer::new(&mut host);
+                                        if seg.frontmatter {
+                                            crate::find::plain(ui, &seg.text, egui::FontId::monospace(size), p.muted);
+                                        } else {
+                                            r.blocks(ui, &seg.doc.blocks);
+                                        }
+                                        actions.append(&mut r.actions);
+                                    });
                                     if is_target && !crate::find::end_target() {
-                                        let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
                                         ui.scroll_to_rect(rect, Some(egui::Align::Center));
                                     }
                                 }
+                                pass.finish(ui);
+                                tab.live.heights = heights;
                             }
                             Mode::Read => {
                                 let doc = tab.doc();
+                                let doc_key = editor::text_hash(&tab.text);
                                 let mut host = RenderHost { vault, palette: p, size, source: &tab.path, caches: &mut self.caches, settings: &self.dv_settings };
                                 let mut r = Renderer::new(&mut host);
                                 r.scroll_to = tab.scroll_to.take();
-                                r.blocks(ui, &doc.blocks);
+                                // only the blocks in view (and a heading scrolled to) are drawn
+                                let mut heights = std::mem::take(&mut tab.live.heights);
+                                let mut pass = heights.pass(ui);
+                                let line = r.typo.line;
+                                for (i, b) in doc.blocks.iter().enumerate() {
+                                    if i > 0 {
+                                        // as Renderer::blocks spaces them
+                                        let gap = match b {
+                                            markdown::Block::Space(_) => 0.0,
+                                            markdown::Block::Heading { level, .. } => size * if *level <= 2 { 1.5 } else { 1.1 },
+                                            _ => size * r.typo.gap,
+                                        };
+                                        ui.add_space(gap);
+                                    }
+                                    let target = matches!(b, markdown::Block::Heading { line, .. } if r.scroll_to == Some(*line));
+                                    pass.piece(ui, doc_key ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15), || size * line * 2.0, target, |ui| r.block(ui, b));
+                                }
+                                pass.finish(ui);
+                                tab.live.heights = heights;
                                 actions.append(&mut r.actions);
                             }
                         }

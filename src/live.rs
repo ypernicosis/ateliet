@@ -7,8 +7,6 @@ use crate::markdown::{self, Doc};
 use ateliet_core::syntax;
 use ateliet_core::text::LineIndex;
 use pulldown_cmark::{Event, Parser};
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -19,6 +17,11 @@ pub struct Segment {
     pub text: String,
     pub doc: Arc<Doc>,
     pub frontmatter: bool,
+    /// A hash of its text, naming its drawn height.
+    pub hash: u64,
+    /// It has controls of its own (links, tasks, callouts, queries): a
+    /// simple click on it does not open the editor.
+    pub interactive: bool,
 }
 
 /// Top-level blocks of a note with their source lines.
@@ -70,7 +73,9 @@ pub fn segments(text: &str) -> Vec<Segment> {
             let e = e.min(lines.len().saturating_sub(1));
             let t = lines[s..=e].join("\n");
             let doc = Arc::new(if fm { markdown::Doc { blocks: Vec::new(), headings: Vec::new() } } else { markdown::parse(&t) });
-            Segment { start: s, end: e, text: t, doc, frontmatter: fm }
+            let hash = editor::text_hash(&t) ^ fm as u64;
+            let interactive = ["[[", "](", "[ ]", "[x]", "[X]", "[!", "```dataview"].iter().any(|m| t.contains(m));
+            Segment { start: s, end: e, text: t, doc, frontmatter: fm, hash, interactive }
         })
         .collect()
 }
@@ -97,13 +102,13 @@ pub struct LiveState {
     edit_targets: Vec<(egui::Rect, usize)>,
     /// A press begun on rendered text must keep its anchor through editor activation.
     drag_anchor: Option<usize>,
+    /// The drawn heights of the segments, to draw only those in view.
+    pub heights: crate::heights::Heights,
 }
 
 impl LiveState {
     pub fn refresh(&mut self, text: &str) {
-        let mut h = DefaultHasher::new();
-        text.hash(&mut h);
-        let k = h.finish();
+        let k = editor::text_hash(text);
         if k != self.key || self.segs.is_empty() {
             self.segs = segments(text);
             self.key = k;
@@ -416,9 +421,16 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     let mut actions = Vec::new();
     let mut prop_edit = None;
     tab.live.refresh(&tab.text);
-    let segs = tab.live.segs.clone();
+    // out of the tab while drawing (not copied: a long note has thousands)
+    let segs = std::mem::take(&mut tab.live.segs);
+    let mut heights = std::mem::take(&mut tab.live.heights);
+    let mut pass = heights.pass(ui);
     tab.live.edit_targets.clear();
     let size = host.size();
+    let width = ui.available_width();
+    // the pointer, asked once: thousands of segments are laid out each frame
+    let click = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     for (i, seg) in segs.iter().enumerate() {
         if i > 0 {
             let gap = match seg.doc.blocks.first() {
@@ -427,42 +439,45 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
             };
             ui.add_space(gap);
         }
-        let top = ui.cursor().min;
         let before = actions.len();
-        if seg.frontmatter {
-            if !crate::sc::focus::ON.with(|f| f.get()) {
-                prop_edit = properties(ui, &seg.text, host);
+        let rect = pass.piece(ui, seg.hash, || crate::heights::estimate(&seg.text, size, width), false, |ui| {
+            if seg.frontmatter {
+                if !crate::sc::focus::ON.with(|f| f.get()) {
+                    if let Some(edit) = properties(ui, &seg.text, host) {
+                        prop_edit = Some(edit);
+                    }
+                }
+            } else {
+                let mut renderer = Renderer::new(host);
+                renderer.blocks(ui, &seg.doc.blocks);
+                for action in renderer.actions.drain(..) {
+                    actions.push(match action {
+                        Action::ToggleTask(line, checked) => Action::ToggleTask(line + seg.start, checked),
+                        other => other,
+                    });
+                }
             }
-        } else {
-            let mut renderer = Renderer::new(host);
-            renderer.blocks(ui, &seg.doc.blocks);
-            for action in renderer.actions.drain(..) {
-                actions.push(match action {
-                    Action::ToggleTask(line, checked) => Action::ToggleTask(line + seg.start, checked),
-                    other => other,
-                });
-            }
-        }
-        let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
+        });
         tab.live.spots.push((rect.top(), rect.bottom(), seg.start, seg.end));
         if !seg.frontmatter {
-            if !tab.live.edit_targets.iter().any(|(r, _)| *r == rect)
-                && ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)))
+            if click.is_some_and(|p| rect.contains(p))
+                && !tab.live.edit_targets.iter().any(|(r, _)| *r == rect)
                 && actions.len() == before {
                 let offset = tab.text.split_inclusive('\n').take(seg.start).map(|l| l.chars().count()).sum();
                 tab.live.open_document(&tab.text, offset);
                 ui.ctx().request_repaint();
             }
             // Interactive blocks keep their own controls on a simple click.
-            let interactive = seg.text.contains("[[") || seg.text.contains("](")
-                || seg.text.contains("[ ]") || seg.text.contains("[x]") || seg.text.contains("[X]")
-                || seg.text.contains("[!") || seg.text.contains("```dataview");
+            let interactive = seg.interactive;
             if !interactive { tab.live.edit_targets.push((rect, seg.start)); }
-            if !interactive && ui.rect_contains_pointer(rect) && actions.len() == before {
+            if !interactive && hover.is_some_and(|p| rect.contains(p)) && ui.rect_contains_pointer(rect) && actions.len() == before {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
             }
         }
     }
+    pass.finish(ui);
+    tab.live.segs = segs;
+    tab.live.heights = heights;
     let below = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(160.0, 4000.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), below), egui::Sense::click());
     tab.live.edit_targets.push((rect, usize::MAX));
@@ -575,6 +590,7 @@ mod editing_tests {
     }
 
     fn frame(ctx: &egui::Context, tab: &mut Tab, events: Vec<Event>, modifiers: Modifiers) -> egui::FullOutput {
+        let busy = !events.is_empty();
         ctx.run(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 1000.0))),
             events, modifiers, ..Default::default()
@@ -582,6 +598,11 @@ mod editing_tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 tab.live.spots.clear();
                 let st = editor::Styles::live(16.0, TestHost.palette());
+                // as the app does before the note's scroll area
+                if tab.highlight.incomplete() {
+                    let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                    ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy));
+                }
                 show(ui, tab, &mut TestHost, &st);
             });
         })
@@ -594,6 +615,8 @@ mod editing_tests {
     fn context() -> egui::Context {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::fonts::definitions());
+        // a blinking caret asks for frames by the clock, which a test cannot count on
+        ctx.style_mut(|s| s.visuals.text_cursor.blink = false);
         ctx
     }
 
@@ -678,12 +701,247 @@ mod editing_tests {
         let mut tab = note(&"Um parágrafo de planejamento.\n\n".repeat(400));
         tab.live.open_document(&tab.text, 0);
         for _ in 0..4 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        // the lines below the view are laid out over the first frames
+        for _ in 0..200 {
+            if !tab.highlight.incomplete() { break; }
+            let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        }
+        assert!(!tab.highlight.incomplete());
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
         let first = tab.highlight.rendered.as_ref().unwrap().0.clone();
         for _ in 0..5 {
             let out = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
             assert!(Arc::ptr_eq(&first, &tab.highlight.rendered.as_ref().unwrap().0));
-            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20));
+            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20), "{:?}", ctx.repaint_causes());
         }
+    }
+
+    /// The layout the editor shows must be the one a fresh layout of its text makes.
+    fn assert_fresh(ctx: &egui::Context, tab: &mut Tab, what: &str) {
+        // the lines left for later are laid out first
+        for _ in 0..2000 {
+            if !tab.highlight.incomplete() {
+                break;
+            }
+            let _ = frame(ctx, tab, vec![], Modifiers::NONE);
+        }
+        assert!(!tab.highlight.incomplete(), "{what}: the layout never completed");
+        let (g, _) = tab.highlight.rendered.as_ref().unwrap();
+        let reveal = editor::selection(ctx, tab.editor_id()).map(|(a, b)| (editor::char_to_byte(&tab.text, a), editor::char_to_byte(&tab.text, b)));
+        let st = editor::Styles::live(16.0, TestHost.palette());
+        // the context's fonts: their atlas places the glyphs the editor's galley uses
+        let (fresh, _) = ctx.fonts(|f| editor::HighlightCache::default().live(f, &tab.text, &st, editor::Reveal(reveal), g.rect.width()));
+        editor::assert_same_layout(g, &fresh, what);
+    }
+
+    #[test]
+    fn typing_and_selecting_in_a_long_note_rework_its_layout_without_copying_it() {
+        let ctx = context();
+        let original = "# Capítulo\n\nUm parágrafo com **ênfase** e [[ligação]].\n\n- um item\n\n".repeat(60);
+        let mut tab = note(&original);
+        let start = original.find("ênfase").unwrap();
+        tab.live.open_document(&tab.text, original[..start].chars().count());
+        for _ in 0..2 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        assert_fresh(&ctx, &mut tab, "opened");
+        for (what, events) in [
+            ("a letter", vec![Event::Text("x".into())]),
+            ("another", vec![Event::Text("y".into())]),
+            ("a new line", vec![key(Key::Enter, Modifiers::NONE)]),
+            ("bold", vec![Event::Text("**".into())]),
+            ("deleted", vec![key(Key::Backspace, Modifiers::NONE), key(Key::Backspace, Modifiers::NONE)]),
+        ] {
+            let _ = frame(&ctx, &mut tab, events, Modifiers::NONE);
+            assert_fresh(&ctx, &mut tab, what);
+        }
+        // a selection grows over several rows: egui paints it into the layout it was lent
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        // (the cursor's span changes too, so the two layouts kept take turns)
+        let mut seen = std::collections::HashSet::new();
+        for _ in 0..6 {
+            let _ = frame(&ctx, &mut tab, vec![key(Key::ArrowDown, shift)], shift);
+            seen.insert(tab.highlight.rendered.as_ref().unwrap().0.rows.as_ptr() as usize);
+        }
+        assert!(seen.len() <= 2, "the layout must not be copied to paint a selection: {} copies", seen.len());
+        let (a, b) = editor::selection(&ctx, tab.editor_id()).unwrap();
+        assert!(b > a);
+        // typing over the selection replaces it
+        let _ = frame(&ctx, &mut tab, vec![Event::Text("z".into())], Modifiers::NONE);
+        assert!(tab.text.contains("ênz") || tab.text.contains('z'));
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        assert_fresh(&ctx, &mut tab, "after the selection was replaced");
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_frames"]
+    fn long_note_frames() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let mid = text[text.len() / 2..].find("Uma nota").unwrap() + text.len() / 2 + 4;
+        tab.live.open_document(&tab.text, text[..mid].chars().count());
+        let time = |tab: &mut Tab, events: Vec<Event>, modifiers: Modifiers| {
+            let t = std::time::Instant::now();
+            let _ = frame(&ctx, tab, events, modifiers);
+            t.elapsed()
+        };
+        eprintln!("{} bytes, first frame: {:?}", tab.text.len(), time(&mut tab, vec![], Modifiers::NONE));
+        let _ = time(&mut tab, vec![], Modifiers::NONE);
+        // as a person does, between opening the note and typing (the rest is laid out meanwhile)
+        let mut frames = 0;
+        let rest: std::time::Duration = std::iter::from_fn(|| (tab.highlight.incomplete() && frames < 500).then(|| { frames += 1; time(&mut tab, vec![], Modifiers::NONE) })).sum();
+        eprintln!("the rest laid out while idle: {frames} frames, {rest:?}");
+        let idle: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], Modifiers::NONE)).sum();
+        eprintln!("idle frame: {:?}", idle / 10);
+        let each: Vec<std::time::Duration> = "palavra".chars().map(|c| time(&mut tab, vec![Event::Text(c.into())], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).collect();
+        eprintln!("a letter typed (its frame and the next): {:?} on average; the first {:?}, the others at most {:?}", each.iter().sum::<std::time::Duration>() / 7, each[0], each[1..].iter().max().unwrap());
+        let moves: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![key(Key::ArrowRight, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
+        eprintln!("cursor moved (its frame and the next): {:?}", moves / 10);
+        if std::env::var("ATELIET_PROFILE").is_ok() { eprintln!("ENTER"); }
+        let enter = time(&mut tab, vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE);
+        eprintln!("a new line (its frame and the next): {enter:?}");
+        let shift = Modifiers { shift: true, ..Modifiers::NONE };
+        let select: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![key(Key::ArrowDown, shift)], shift) + time(&mut tab, vec![], shift)).sum();
+        eprintln!("selection grown a line (its frame and the next): {:?}", select / 10);
+        let held: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], shift)).sum();
+        eprintln!("idle frame with a selection: {:?}", held / 10);
+        let t = std::time::Instant::now();
+        let _ = crate::markdown::parse(&tab.text);
+        eprintln!("parsing the note (the outline, on each change): {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = ateliet_core::scriptorium::count_words(&tab.text);
+        eprintln!("counting its words (the status bar, on each change): {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn scrolling_far_into_lines_left_for_later_shows_them_laid_out() {
+        let ctx = context();
+        let text = "## Parte\n\nUm parágrafo com **ênfase** e texto corrido que quebra em mais de uma linha no editor de teste.\n\n".repeat(400);
+        let mut tab = note(&text);
+        tab.live.open_document(&tab.text, 0);
+        let run = |tab: &mut Tab, offset: Option<f32>| {
+            let mut clip = egui::Rect::NOTHING;
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 800.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let st = editor::Styles::live(16.0, TestHost.palette());
+                    // busy: nothing is laid out for later in these frames
+                    if tab.highlight.incomplete() {
+                        let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                        ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, true));
+                    }
+                    let mut area = egui::ScrollArea::vertical();
+                    if let Some(y) = offset {
+                        area = area.vertical_scroll_offset(y);
+                    }
+                    area.show(ui, |ui| {
+                        clip = ui.clip_rect();
+                        show(ui, tab, &mut TestHost, &st);
+                    });
+                });
+            });
+            clip
+        };
+        let _ = run(&mut tab, None);
+        assert!(tab.highlight.incomplete(), "the lines below the view wait");
+        // a jump far down, as dragging the scroll bar does
+        let total = tab.highlight.rendered.as_ref().unwrap().0.rect.height();
+        let clip = run(&mut tab, Some(total * 0.6));
+        let (g, origin) = tab.highlight.rendered.as_ref().unwrap();
+        let in_view: Vec<_> = g.rows.iter().filter(|r| r.rect.translate(origin.to_vec2()).intersects(clip)).collect();
+        assert!(!in_view.is_empty());
+        assert!(in_view.iter().all(|r| editor::drawn(r)), "every row in view is laid out and drawn");
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_resized"]
+    fn long_note_resized() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let mid = text[text.len() / 2..].find("Uma nota").unwrap() + text.len() / 2 + 4;
+        tab.live.open_document(&tab.text, text[..mid].chars().count());
+        // `busy`: the window is being dragged (the app lays nothing out for later then)
+        let run = |tab: &mut Tab, width: f32, busy: bool| {
+            let t = std::time::Instant::now();
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 1000.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tab.live.spots.clear();
+                    let st = editor::Styles::live(16.0, TestHost.palette());
+                    if tab.highlight.incomplete() {
+                        let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                        ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy));
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| { show(ui, tab, &mut TestHost, &st); });
+                });
+            });
+            t.elapsed()
+        };
+        eprintln!("{} bytes, opened at the start: first frame {:?}", tab.text.len(), run(&mut tab, 700.0, false));
+        let mut frames = 0;
+        let mut worst = std::time::Duration::ZERO;
+        while tab.highlight.incomplete() && frames < 2000 {
+            worst = worst.max(run(&mut tab, 700.0, false));
+            frames += 1;
+        }
+        eprintln!("completed in {frames} frames, the slowest {worst:?}");
+        let mut worst = std::time::Duration::ZERO;
+        let mut total = std::time::Duration::ZERO;
+        for k in 0..30 {
+            let d = run(&mut tab, 700.0 - 4.0 * k as f32, true);
+            worst = worst.max(d);
+            total += d;
+        }
+        eprintln!("window dragged narrower over 30 frames: {:?} a frame, the slowest {worst:?}", total / 30);
+        // the pause after the drag, then what is left
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut frames = 0;
+        let mut worst = std::time::Duration::ZERO;
+        while tab.highlight.incomplete() && frames < 4000 {
+            worst = worst.max(run(&mut tab, 584.0, false));
+            frames += 1;
+        }
+        eprintln!("then completed in {frames} frames, the slowest {worst:?}");
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_at_rest"]
+    fn long_note_at_rest() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let time = |tab: &mut Tab| {
+            let t = std::time::Instant::now();
+            let _ = frame(&ctx, tab, vec![], Modifiers::NONE);
+            t.elapsed()
+        };
+        eprintln!("rendered, not edited: first frame {:?}", time(&mut tab));
+        let idle: std::time::Duration = (0..5).map(|_| time(&mut tab)).sum();
+        eprintln!("rendered, not edited: next frames {:?}", idle / 5);
+        let t = std::time::Instant::now();
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = editor::Styles::live(16.0, TestHost.palette());
+        let _ = editor::highlight_lines(&text, &st, editor::Reveal(None));
+        eprintln!("styling every line, no layout: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = editor::HighlightCache::default().live(&fonts, &text, &st, editor::Reveal(None), 640.0);
+        eprintln!("styling and laying out every line: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = query_blocks(&text);
+        eprintln!("query blocks: {:?}", t.elapsed());
     }
 
     #[test]
