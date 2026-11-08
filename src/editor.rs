@@ -851,7 +851,8 @@ impl Layout {
 }
 
 impl HighlightCache {
-    /// The note laid out at `width`, and what to draw with it.
+    /// The note laid out at `width`, and what to draw with it (all of it at once).
+    #[cfg(test)]
     pub fn live(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
         self.layout(fonts, text, st, reveal, width, None)
     }
