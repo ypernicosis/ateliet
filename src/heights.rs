@@ -108,10 +108,11 @@ impl Pass<'_> {
 }
 
 /// The note's scroll area, moved by what the pieces above the view grew or
-/// shrank when they were measured on the frame before, so what is in view
-/// stays put. `salt` is the scroll area's id salt; call before showing it.
-pub fn keep_view(ui: &egui::Ui, area: egui::ScrollArea, salt: impl std::hash::Hash, heights: &mut Heights) -> egui::ScrollArea {
-    let shift = std::mem::take(&mut heights.shift);
+/// shrank when they were measured on the frame before (and by `more`, what
+/// the editor's lines above the view grew), so what is in view stays put.
+/// `salt` is the scroll area's id salt; call before showing it.
+pub fn keep_view(ui: &egui::Ui, area: egui::ScrollArea, salt: impl std::hash::Hash, heights: &mut Heights, more: f32) -> egui::ScrollArea {
+    let shift = std::mem::take(&mut heights.shift) + more;
     if shift == 0.0 {
         return area;
     }
@@ -142,7 +143,7 @@ mod tests {
         for frame in 0..4 {
             let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 600.0))), ..Default::default() }, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut area = keep_view(ui, egui::ScrollArea::vertical().id_salt("note"), "note", &mut heights);
+                    let mut area = keep_view(ui, egui::ScrollArea::vertical().id_salt("note"), "note", &mut heights, 0.0);
                     if frame == 0 {
                         area = area.vertical_scroll_offset(1000.0);
                     }

@@ -691,6 +691,12 @@ pub struct HighlightCache {
     focused_at: Option<std::time::Instant>,
     /// The tables of the last text, by its hash.
     tables: (u64, Vec<std::ops::Range<usize>>),
+    /// The part of the note in view at the last layout, from its top, and
+    /// the width it was laid out at.
+    view: Option<(f32, f32)>,
+    width: f32,
+    /// When the person last typed, pointed or scrolled (see `advance`).
+    busy_at: Option<std::time::Instant>,
 }
 
 /// One layout of the note.
@@ -701,9 +707,14 @@ struct Layout {
     lines: Vec<Placed>,
     /// Each row's vertices as laid out (a painted selection adds some).
     verts: Vec<u32>,
-    /// The width, alignment and styles it was laid out with.
-    params: u64,
-    /// `params`, the text and what the cursor reveals.
+    /// The styles it was styled with.
+    style: u64,
+    /// The width and alignment its lines are laid out for; lines laid out for
+    /// another (or roughly, out of view) are laid out again a few at a time.
+    geo: u64,
+    /// Some line is not laid out for `geo` yet.
+    incomplete: bool,
+    /// The styles, the width, the text and what the cursor reveals.
     key: u64,
     decos: Arc<Vec<DecoShape>>,
 }
@@ -721,7 +732,11 @@ struct Placed {
     /// Its bytes, its newline included.
     len: usize,
     newline: bool,
-    sections: usize,
+    /// Its styled sections, bytes counted from its start. (The note's galley
+    /// keeps one section for all its text: nothing reads its sections or its
+    /// glyphs' section numbers once laid out, and a long note has hundreds of
+    /// thousands, which an edit would otherwise move.)
+    secs: Vec<egui::text::LayoutSection>,
     rows: usize,
     gap: f32,
     /// Where its rows start (after the gap) and how tall they are.
@@ -735,6 +750,11 @@ struct Placed {
     /// its cells (from `top`).
     table: Option<(f32, bool, usize)>,
     cells: Vec<(egui::Pos2, Arc<egui::Galley>)>,
+    /// The width and alignment it was laid out for (see `Layout::geo`); 0 for
+    /// a stand-in laid out roughly, out of view.
+    laid: u64,
+    /// How it sits, kept to lay it out again at another width.
+    info: LineInfo,
 }
 
 /// One line laid out at the top of its own room: rows set across, from y = 0,
@@ -774,21 +794,32 @@ fn common_affixes(a: &str, b: &str) -> (usize, usize) {
 }
 
 impl Layout {
-    fn empty(params: u64) -> Layout {
-        Layout { galley: None, lent: std::sync::Weak::new(), lines: Vec::new(), verts: Vec::new(), params, key: 0, decos: Arc::default() }
+    fn empty(style: u64) -> Layout {
+        Layout { galley: None, lent: std::sync::Weak::new(), lines: Vec::new(), verts: Vec::new(), style, geo: 0, incomplete: false, key: 0, decos: Arc::default() }
     }
 
     /// A copy, rows and all.
     fn duplicate(&self) -> Layout {
         Layout {
-            galley: self.galley.as_ref().map(|g| Arc::new((**g).clone())),
+            galley: self.galley.as_ref().map(|g| Arc::new(copy_galley(g))),
             lent: std::sync::Weak::new(),
             lines: self.lines.iter().map(Placed::copy).collect(),
             verts: self.verts.clone(),
-            params: self.params,
+            style: self.style,
+            geo: self.geo,
+            incomplete: self.incomplete,
             key: self.key,
             decos: self.decos.clone(),
         }
+    }
+
+    /// Whether a line left for later is in (or just below) `view`.
+    fn waiting_in(&self, view: (f32, f32)) -> bool {
+        if !self.incomplete {
+            return false;
+        }
+        let first = self.lines.partition_point(|l| l.top + l.height <= view.0);
+        self.lines[first..].iter().take_while(|l| l.top <= view.1 + 400.0).any(|l| l.laid != self.geo)
     }
 
     /// Whether the cache alone holds the galley, so it can be reworked in place.
@@ -822,27 +853,39 @@ impl Layout {
 impl HighlightCache {
     /// The note laid out at `width`, and what to draw with it.
     pub fn live(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
+        self.layout(fonts, text, st, reveal, width, None)
+    }
+
+    /// As [`Self::live`], knowing which part of the note is in view (from
+    /// its top): only that part has to be laid out exactly at once; the
+    /// lines below it, and the lines out of view when the width changes, are
+    /// laid out by [`Self::advance`] over the next frames.
+    pub(crate) fn layout(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32, view: Option<(f32, f32)>) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
         let note = crate::align::current();
-        let params = ahash_of((st.size.to_bits(), st.p.dark, st.p.accent, st.live, st.typo_key, width.to_bits(), note as u8));
+        let style = ahash_of((st.size.to_bits(), st.p.dark, st.p.accent, st.live, st.typo_key));
+        let geo = ahash_of((width.to_bits(), note as u8)) | 1;
         let reveal = if st.live { reveal } else { Reveal(None) };
         let hash = text_hash(text);
-        let key = ahash_of((params, hash, text.len(), reveal));
+        let key = ahash_of((style, geo, hash, text.len(), reveal));
+        self.view = view;
+        self.width = width;
         if let Some(cur) = self.cur.as_mut() {
             if cur.galley.is_none() {
                 cur.galley = cur.lent.upgrade();
                 cur.lent = std::sync::Weak::new();
             }
         }
-        if self.cur.as_ref().is_some_and(|c| c.key == key && c.galley.is_some()) {
+        // the same text, cursor and width: as it is, unless lines left for later came into view
+        if self.cur.as_ref().is_some_and(|c| c.key == key && c.galley.is_some() && !view.is_some_and(|v| c.waiting_in(v))) {
             let cur = self.cur.as_mut().unwrap();
             cur.clean();
             return self.hand_out();
         }
         // a layout to rework: the spare, else the current one if nothing else holds it
-        // the spare copied out of the frame, if it is still on its way
+        // (the spare copied out of the frame, if it is still on its way)
         self.settle_copy(true);
-        let old = self.cur.take().filter(|o| o.params == params && o.galley.is_some());
-        let mut spare = self.spare.take().filter(|s| s.params == params);
+        let old = self.cur.take().filter(|o| o.style == style && o.galley.is_some());
+        let mut spare = self.spare.take().filter(|s| s.style == style);
         let mut work = if spare.as_ref().is_some_and(|s| s.unique()) {
             self.spare = old;
             spare.take().unwrap()
@@ -858,13 +901,13 @@ impl HighlightCache {
                     self.spare = Some(o);
                     copy
                 }
-                None => Layout::empty(params),
+                None => Layout::empty(style),
             }
         };
         let whole = work.galley.is_none();
         work.clean();
         self.update_tables(text, hash, st);
-        work.update(fonts, text, st, reveal, width, note, &self.tables.1);
+        work.update(fonts, text, st, reveal, width, note, &self.tables.1, geo, view, None);
         work.key = key;
         self.cur = Some(work);
         if whole && self.lend {
@@ -874,6 +917,62 @@ impl HighlightCache {
         self.hand_out()
     }
 
+    /// Whether lines are still to be laid out by [`Self::advance`].
+    pub(crate) fn incomplete(&self) -> bool {
+        self.cur.as_ref().is_some_and(|c| c.incomplete)
+    }
+
+    /// Lays out lines the editor left for later (below the view when the
+    /// note was opened, out of view when its width changed), once the person
+    /// has paused (`busy`: keys, pointer or scrolling this frame): a batch
+    /// costs moving the rows below it, so few large batches are laid out
+    /// while nothing else happens. Call before the note's scroll area: what
+    /// the lines above the view grew or shrank is returned, to move the view
+    /// by it.
+    pub(crate) fn advance(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, busy: bool) -> f32 {
+        const PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
+        const BUDGET: std::time::Duration = std::time::Duration::from_millis(25);
+        if !self.incomplete() {
+            return 0.0;
+        }
+        let now = std::time::Instant::now();
+        if busy {
+            self.busy_at = Some(now);
+        }
+        if self.busy_at.is_some_and(|t| now - t < PAUSE) {
+            return 0.0;
+        }
+        self.rendered = None;
+        let Some(cur) = self.cur.as_mut() else { return 0.0 };
+        if !cur.unique() {
+            return 0.0;
+        }
+        let note = crate::align::current();
+        let style = ahash_of((st.size.to_bits(), st.p.dark, st.p.accent, st.live, st.typo_key));
+        let geo = ahash_of((self.width.to_bits(), note as u8)) | 1;
+        let reveal = if st.live { reveal } else { Reveal(None) };
+        let hash = text_hash(text);
+        if cur.style != style || cur.geo != geo || cur.key != ahash_of((style, geo, hash, text.len(), reveal)) {
+            // the next layout will take the text as it is now
+            return 0.0;
+        }
+        cur.clean();
+        let tables = std::mem::take(&mut self.tables);
+        let shift = cur.update(fonts, text, st, reveal, self.width, note, &tables.1, geo, self.view, Some(std::time::Instant::now() + BUDGET));
+        self.tables = tables;
+        if let Some(v) = self.view.as_mut() {
+            *v = (v.0 + shift, v.1 + shift);
+        }
+        if !self.incomplete() {
+            // the spare, if made before, has those lines still to do: it is copied anew
+            if self.spare.as_ref().is_some_and(|s| s.incomplete) {
+                self.spare = None;
+            }
+            self.copy_spare();
+        }
+        shift
+    }
+
     /// Starts copying the current layout into a spare, on another thread:
     /// a long note's layout takes a moment to copy.
     fn copy_spare(&mut self) {
@@ -881,10 +980,14 @@ impl HighlightCache {
             return;
         }
         let Some(cur) = self.cur.as_ref() else { return };
+        // a layout with lines left for later is completed first: copied, they would be done twice
+        if cur.incomplete {
+            return;
+        }
         let Some(galley) = cur.galley.clone().or_else(|| cur.lent.upgrade()) else { return };
-        let mut copy = Layout { galley: None, lent: std::sync::Weak::new(), lines: cur.lines.iter().map(Placed::copy).collect(), verts: cur.verts.clone(), params: cur.params, key: cur.key, decos: cur.decos.clone() };
+        let mut copy = Layout { galley: None, lent: std::sync::Weak::new(), lines: cur.lines.iter().map(Placed::copy).collect(), verts: cur.verts.clone(), style: cur.style, geo: cur.geo, incomplete: cur.incomplete, key: cur.key, decos: cur.decos.clone() };
         self.copying = Some(std::thread::spawn(move || {
-            copy.galley = Some(Arc::new((*galley).clone()));
+            copy.galley = Some(Arc::new(copy_galley(&galley)));
             copy
         }));
     }
@@ -955,7 +1058,7 @@ impl HighlightCache {
 
 impl Placed {
     fn copy(&self) -> Placed {
-        Placed { carry: self.carry.clone(), cells: self.cells.clone(), deco: self.deco, ..*self }
+        Placed { carry: self.carry.clone(), cells: self.cells.clone(), deco: self.deco, info: self.info.clone(), secs: self.secs.clone(), ..*self }
     }
 }
 
@@ -968,8 +1071,16 @@ impl Layout {
     /// rewritten where they are; otherwise the rows and sections are moved
     /// into new vectors around the lines laid out again.
     #[allow(clippy::too_many_arguments)]
-    fn update(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32, note: crate::align::TextAlign, tables: &[std::ops::Range<usize>]) {
-        let Layout { galley, lines: old_lines, verts, decos, .. } = self;
+    ///
+    /// With `view` (the part of the note in view, from its top), lines below
+    /// it whose text or look changed are laid out roughly, as stand-ins, and
+    /// lines laid out for another width keep their rows (without their
+    /// meshes) unless they are in view: both are laid out properly later,
+    /// while `deadline` lasts, by `HighlightCache::advance`. Returns what the
+    /// lines laid out again above the view grew (or shrank).
+    fn update(&mut self, fonts: &egui::text::Fonts, text: &str, st: &Styles, reveal: Reveal, width: f32, note: crate::align::TextAlign, tables: &[std::ops::Range<usize>], geo: u64, view: Option<(f32, f32)>, deadline: Option<std::time::Instant>) -> f32 {
+        let Layout { galley, lines: old_lines, verts, decos, geo: old_geo, incomplete, .. } = self;
+        *old_geo = geo;
         let galley = galley.get_or_insert_with(|| {
             Arc::new(egui::Galley {
                 job: Arc::new(LayoutJob::default()),
@@ -1021,10 +1132,15 @@ impl Layout {
         // what each line becomes, and where it now starts
         enum Fate {
             Keep(usize),
-            Fresh(Box<(LineLayout, Vec<egui::text::LayoutSection>, Placed)>),
+            Fresh(Box<(LineLayout, Placed)>),
         }
         let table_keys: Vec<u64> = tables.iter().map(|r| ahash_of(&text[r.clone()])).collect();
         let mut table_cells_cache = std::collections::HashMap::new();
+        // out of view: a line below it may wait, a line above it must not move what is in view
+        const MARGIN: f32 = 400.0;
+        let below = |top: f32| view.is_some_and(|(_, b)| top > b + MARGIN);
+        let above = |bottom: f32| view.is_some_and(|(t, _)| bottom <= t);
+        let mut shift = 0.0;
         let mut fates = Vec::with_capacity(srcs.len());
         let mut tops = Vec::with_capacity(srcs.len());
         // what the line above passes on: `carry`, or that of an old line kept
@@ -1053,7 +1169,39 @@ impl Layout {
                 ctx = ahash_of((&carry, k == 0, pseudo, table.map(|r| (table_keys[ti], at - r.start)), local));
             }
             let keep = src.filter(|&i| fast || old_lines[i].ctx == ctx);
-            if let Some(i) = keep {
+            // a line kept, but laid out for another width (or as a stand-in): again, now or later
+            let again = keep.filter(|&i| {
+                let o = &old_lines[i];
+                if o.laid == geo {
+                    return false;
+                }
+                // where it was: the view is known in the layout as it was
+                let in_view = !below(o.top) && !above(o.top + o.height);
+                view.is_none() || in_view || deadline.is_some_and(|d| std::time::Instant::now() < d)
+            });
+            if let Some(i) = again {
+                let o = &old_lines[i];
+                let table_src = table.map(|r| {
+                    let cells = table_cells_cache.entry(r.start).or_insert_with(|| table_cells(&text[r.clone()]));
+                    (&text[r.clone()], &*cells, at - r.start)
+                });
+                let laid = layout_line(fonts, &line[..end - at], &o.secs, &o.info, table_src, width, note, st);
+                y += o.gap;
+                if above(o.top + o.height) {
+                    shift += laid.height - o.height;
+                }
+                tops.push(y);
+                y += laid.height;
+                let mut placed = o.copy();
+                placed.rows = laid.rows.len();
+                placed.height = laid.height;
+                placed.first = laid.first;
+                placed.table = laid.table;
+                placed.cells = laid.cells.clone();
+                placed.laid = geo;
+                carry_of = Some(i);
+                fates.push(Fate::Fresh(Box::new((laid, placed))));
+            } else if let Some(i) = keep {
                 let o = &old_lines[i];
                 y += o.gap;
                 tops.push(y);
@@ -1070,7 +1218,9 @@ impl Layout {
                     let cells = table_cells_cache.entry(r.start).or_insert_with(|| table_cells(&text[r.clone()]));
                     (&text[r.clone()], &*cells, at - r.start)
                 });
-                let laid = layout_line(fonts, &line[..end - at], &sections, &info, table_src, width, note, st);
+                // below the view, a stand-in for now
+                let rough = below(y + info.gap);
+                let laid = if rough { stand_in(&line[..end - at], &sections, &info, width, st) } else { layout_line(fonts, &line[..end - at], &sections, &info, table_src, width, note, st) };
                 y += info.gap;
                 tops.push(y);
                 y += laid.height;
@@ -1080,7 +1230,7 @@ impl Layout {
                     carry: carry.clone(),
                     len,
                     newline: info.newline,
-                    sections: sections.len(),
+                    secs: sections,
                     rows: laid.rows.len(),
                     gap: info.gap,
                     top: 0.0,
@@ -1090,123 +1240,102 @@ impl Layout {
                     fence: matches!(line.trim_start().get(..3), Some("```") | Some("~~~")),
                     table: laid.table,
                     cells: laid.cells.clone(),
+                    laid: if rough { 0 } else { geo },
+                    info: info.clone(),
                 };
-                fates.push(Fate::Fresh(Box::new((laid, sections, placed))));
+                fates.push(Fate::Fresh(Box::new((laid, placed))));
             }
             prev_kept = keep;
             at += len;
         }
 
         // a fresh line's rows, moved to its place in the note
-        let place = |row: &mut egui::epaint::text::Row, top: f32, s0: usize| {
+        let place = |row: &mut egui::epaint::text::Row, top: f32| {
             let d = egui::vec2(0.0, top.round());
-            for gl in &mut row.glyphs {
-                gl.pos += d;
-                gl.section_index += s0 as u32;
+            // (a stand-in's glyphs keep their height, see `drawn`)
+            if drawn(row) {
+                for gl in &mut row.glyphs {
+                    gl.pos += d;
+                }
             }
-            row.section_index_at_start += s0 as u32;
             row.rect = row.rect.translate(d);
             row.visuals.mesh.translate(d);
             row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
         };
         // the rows of lines kept that move: gathered in runs, moved together at the end
         let mut runs = Runs::default();
-        let shift_secs = |secs: &mut [egui::text::LayoutSection], d: i64| {
-            for sec in secs {
-                sec.byte_range = (sec.byte_range.start as i64 + d) as usize..(sec.byte_range.end as i64 + d) as usize;
-            }
-        };
         let in_place = fates.len() == old_lines.len()
             && fates.iter().enumerate().all(|(k, f)| match f {
                 Fate::Keep(i) => *i == k,
-                Fate::Fresh(f) => old_lines[k].rows == f.2.rows && old_lines[k].sections == f.2.sections,
+                Fate::Fresh(f) => old_lines[k].rows == f.1.rows,
             });
         if in_place {
-            let (mut r, mut s, mut at, mut old_at) = (0, 0, 0, 0);
+            let mut r = 0;
             for (k, fate) in fates.into_iter().enumerate() {
                 let o = &mut old_lines[k];
-                let (rows_n, secs_n, old_line_len) = (o.rows, o.sections, o.len);
+                let rows_n = o.rows;
                 let top = tops[k];
                 match fate {
                     Fate::Keep(_) => {
-                        let dy = top.round() - o.top.round();
-                        runs.add(r..r + rows_n, dy, 0);
-                        if at != old_at {
-                            shift_secs(&mut job.sections[s..s + secs_n], at as i64 - old_at as i64);
-                        }
+                        runs.add(r..r + rows_n, top.round() - o.top.round());
                         o.top = top;
                     }
                     Fate::Fresh(f) => {
-                        let (laid, sections, mut placed) = *f;
+                        let (laid, mut placed) = *f;
                         for (j, mut row) in laid.rows.into_iter().enumerate() {
-                            place(&mut row, top, s);
+                            place(&mut row, top);
                             verts[r + j] = row.visuals.mesh.vertices.len() as u32;
                             g.rows[r + j] = row;
-                        }
-                        for (j, mut sec) in sections.into_iter().enumerate() {
-                            sec.byte_range = sec.byte_range.start + at..sec.byte_range.end + at;
-                            job.sections[s + j] = sec;
                         }
                         placed.top = top;
                         *o = placed;
                     }
                 }
-                at += o.len;
-                old_at += old_line_len;
                 r += rows_n;
-                s += secs_n;
             }
         } else {
             // the stretches of old lines replaced by fresh ones, and what moves for the lines kept
             struct Edit {
                 old: std::ops::Range<usize>,
                 rows: std::ops::Range<usize>,
-                secs: std::ops::Range<usize>,
-                fresh: Vec<(LineLayout, Vec<egui::text::LayoutSection>, Placed)>,
+                fresh: Vec<(LineLayout, Placed)>,
             }
             let mut edits: Vec<Edit> = Vec::new();
-            let mut moves = Vec::with_capacity(fates.len()); // per line kept: dy, dsec, dbyte
-            let (mut oi, mut o_row, mut o_sec, mut o_at) = (0, 0, 0, 0);
-            let (mut n_row, mut n_sec, mut at) = (0, 0, 0);
+            let mut moves = Vec::with_capacity(fates.len()); // per line kept: dy, its new top
+            let (mut oi, mut o_row) = (0, 0);
             let mut open: Option<Edit> = None;
             for (k, fate) in fates.into_iter().enumerate() {
                 let top = tops[k];
                 match fate {
                     Fate::Keep(i) => {
-                        let e = open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() });
+                        let e = open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, fresh: Vec::new() });
                         while oi < i {
-                            let o = &old_lines[oi];
-                            (o_row, o_sec, o_at) = (o_row + o.rows, o_sec + o.sections, o_at + o.len);
+                            o_row += old_lines[oi].rows;
                             oi += 1;
                         }
-                        (e.old.end, e.rows.end, e.secs.end) = (oi, o_row, o_sec);
+                        (e.old.end, e.rows.end) = (oi, o_row);
                         if let Some(e) = open.take().filter(|e| !e.old.is_empty() || !e.fresh.is_empty()) {
                             edits.push(e);
                         }
                         let o = &old_lines[i];
-                        moves.push(Some((top.round() - o.top.round(), n_sec as i64 - o_sec as i64, at as i64 - o_at as i64, top)));
-                        (n_row, n_sec, at) = (n_row + o.rows, n_sec + o.sections, at + o.len);
-                        (o_row, o_sec, o_at) = (o_row + o.rows, o_sec + o.sections, o_at + o.len);
+                        moves.push(Some((top.round() - o.top.round(), top)));
+                        o_row += o.rows;
                         oi = i + 1;
                     }
                     Fate::Fresh(f) => {
-                        let (mut laid, mut sections, mut placed) = *f;
+                        let (mut laid, mut placed) = *f;
                         for row in &mut laid.rows {
-                            place(row, top, n_sec);
-                        }
-                        for sec in &mut sections {
-                            sec.byte_range = sec.byte_range.start + at..sec.byte_range.end + at;
+                            place(row, top);
                         }
                         placed.top = top;
-                        (n_row, n_sec, at) = (n_row + placed.rows, n_sec + placed.sections, at + placed.len);
                         moves.push(None);
-                        open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() }).fresh.push((laid, sections, placed));
+                        open.get_or_insert_with(|| Edit { old: oi..oi, rows: o_row..o_row, fresh: Vec::new() }).fresh.push((laid, placed));
                     }
                 }
             }
             // the old lines after the last one kept go too
-            let mut e = open.take().unwrap_or(Edit { old: oi..oi, rows: o_row..o_row, secs: o_sec..o_sec, fresh: Vec::new() });
-            (e.old.end, e.rows.end, e.secs.end) = (old_lines.len(), g.rows.len(), job.sections.len());
+            let mut e = open.take().unwrap_or(Edit { old: oi..oi, rows: o_row..o_row, fresh: Vec::new() });
+            (e.old.end, e.rows.end) = (old_lines.len(), g.rows.len());
             if !e.old.is_empty() || !e.fresh.is_empty() {
                 edits.push(e);
             }
@@ -1214,36 +1343,48 @@ impl Layout {
             for e in edits.into_iter().rev() {
                 let mut new_rows = Vec::new();
                 let mut new_verts = Vec::new();
-                let mut new_secs = Vec::new();
                 let mut new_lines = Vec::new();
-                for (laid, sections, placed) in e.fresh {
+                for (laid, placed) in e.fresh {
                     new_verts.extend(laid.rows.iter().map(|r| r.visuals.mesh.vertices.len() as u32));
                     new_rows.extend(laid.rows);
-                    new_secs.extend(sections);
                     new_lines.push(placed);
                 }
                 verts.splice(e.rows.clone(), new_verts);
                 g.rows.splice(e.rows, new_rows);
-                job.sections.splice(e.secs, new_secs);
                 old_lines.splice(e.old, new_lines);
             }
-            // the lines kept move down or up, and their sections and bytes on
-            let (mut r, mut s) = (0, 0);
+            // the lines kept move down or up
+            let mut r = 0;
             for (line, mv) in old_lines.iter_mut().zip(moves) {
-                if let Some((dy, dsec, dbyte, top)) = mv {
-                    runs.add(r..r + line.rows, dy, dsec);
-                    if dbyte != 0 {
-                        shift_secs(&mut job.sections[s..s + line.sections], dbyte);
-                    }
+                if let Some((dy, top)) = mv {
+                    runs.add(r..r + line.rows, dy);
                     line.top = top;
                 }
                 r += line.rows;
-                s += line.sections;
             }
         }
-
         runs.apply(&mut g.rows);
+        // lines left for later lose their meshes: out of view, nothing of them is drawn,
+        // and rows without meshes are cheap to move when the lines above change
+        *incomplete = false;
+        let mut r = 0;
+        for line in old_lines.iter() {
+            if line.laid != geo {
+                *incomplete = true;
+                for (row, v) in g.rows[r..r + line.rows].iter_mut().zip(&mut verts[r..r + line.rows]) {
+                    if *v != 0 || !row.visuals.mesh.indices.is_empty() {
+                        row.visuals.mesh.clear();
+                        row.visuals.mesh_bounds = egui::Rect::NOTHING;
+                        row.visuals.glyph_vertex_range = 0..0;
+                        row.visuals.glyph_index_start = 0;
+                        *v = 0;
+                    }
+                }
+            }
+            r += line.rows;
+        }
         job.text = text.to_owned();
+        job.sections = vec![egui::text::LayoutSection { leading_space: 0.0, byte_range: 0..text.len(), format: st.fmt(st.size, st.p.text) }];
         let mut bounds = egui::Rect::NOTHING;
         let (mut nv, mut ni) = (0, 0);
         for row in &g.rows {
@@ -1258,22 +1399,79 @@ impl Layout {
         g.elided = false;
         g.pixels_per_point = fonts.pixels_per_point();
         *decos = Arc::new(if st.live { decos_of(old_lines, width, st) } else { Vec::new() });
+        shift
     }
 }
 
-/// Rows that move down or up (and whose sections are renumbered), gathered
-/// in runs of the same move.
+/// A line laid out roughly, to stand in out of view until it is laid out
+/// properly: one row with a glyph per character at an average advance, as
+/// tall as its wrapped rows would be, and no mesh (nothing of it is drawn).
+fn stand_in(body: &str, sections: &[egui::text::LayoutSection], line: &LineInfo, width: f32, st: &Styles) -> LineLayout {
+    let format = sections.first().map(|s| &s.format);
+    let size = format.map_or(st.size, |f| f.font_id.size).max(1.0);
+    let row_h = format.and_then(|f| f.line_height).unwrap_or(size * 1.3).max(1.0);
+    let advance = size * 0.5;
+    let x0 = line.content_x;
+    let mut glyphs = Vec::with_capacity(body.len());
+    let mut sec = 0;
+    let mut x = x0;
+    for (b, c) in body.char_indices() {
+        while sec + 1 < sections.len() && sections[sec].byte_range.end <= b {
+            sec += 1;
+        }
+        glyphs.push(egui::epaint::text::Glyph {
+            chr: c,
+            pos: egui::pos2(x, size * 0.8),
+            advance_width: advance,
+            line_height: row_h,
+            font_ascent: size * 0.8,
+            font_height: size,
+            font_impl_ascent: size * 0.8,
+            font_impl_height: size,
+            uv_rect: Default::default(),
+            section_index: sec as u32,
+        });
+        x += advance;
+    }
+    let wrap = (width - x0).max(40.0);
+    let height = ((x - x0) / wrap).ceil().max(1.0) * row_h;
+    let rect = egui::Rect::from_min_size(egui::pos2(x0, 0.0), egui::vec2(x - x0, height));
+    let row = egui::epaint::text::Row { section_index_at_start: 0, glyphs, rect, visuals: Default::default(), ends_with_newline: line.newline };
+    LineLayout { rows: vec![row], height, first: rect, table: None, cells: Vec::new() }
+}
+
+/// A copy of a galley, its rows copied on all cores: while a copy is made, the
+/// layout it copies cannot be reworked in place.
+fn copy_galley(g: &egui::Galley) -> egui::Galley {
+    const ALONE: usize = 4096;
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
+    if g.rows.len() <= ALONE || cores == 1 {
+        return g.clone();
+    }
+    let per = g.rows.len().div_ceil(cores);
+    let parts: Vec<Vec<egui::epaint::text::Row>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = g.rows.chunks(per).map(|chunk| scope.spawn(move || chunk.to_vec())).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut rows = Vec::with_capacity(g.rows.len());
+    for part in parts {
+        rows.extend(part);
+    }
+    egui::Galley { job: g.job.clone(), rows, elided: g.elided, rect: g.rect, mesh_bounds: g.mesh_bounds, num_vertices: g.num_vertices, num_indices: g.num_indices, pixels_per_point: g.pixels_per_point }
+}
+
+/// Rows that move down or up, gathered in runs of the same move.
 #[derive(Default)]
-struct Runs(Vec<(std::ops::Range<usize>, f32, i64)>);
+struct Runs(Vec<(std::ops::Range<usize>, f32)>);
 
 impl Runs {
-    fn add(&mut self, rows: std::ops::Range<usize>, dy: f32, dsec: i64) {
-        if (dy == 0.0 && dsec == 0) || rows.is_empty() {
+    fn add(&mut self, rows: std::ops::Range<usize>, dy: f32) {
+        if dy == 0.0 || rows.is_empty() {
             return;
         }
         match self.0.last_mut() {
-            Some((last, y, s)) if last.end == rows.start && *y == dy && *s == dsec => last.end = rows.end,
-            _ => self.0.push((rows, dy, dsec)),
+            Some((last, y)) if last.end == rows.start && *y == dy => last.end = rows.end,
+            _ => self.0.push((rows, dy)),
         }
     }
 
@@ -1281,36 +1479,42 @@ impl Runs {
     /// since a long note below an edit is millions of glyphs and vertices.
     fn apply(self, rows: &mut [egui::epaint::text::Row]) {
         const ALONE: usize = 2048;
-        for (range, dy, dsec) in self.0 {
+        for (range, dy) in self.0 {
             let part = &mut rows[range];
             if part.len() <= ALONE {
-                move_rows(part, dy, dsec);
+                move_rows(part, dy);
                 continue;
             }
             let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
             let per = part.len().div_ceil(cores).max(ALONE);
             std::thread::scope(|scope| {
                 for chunk in part.chunks_mut(per) {
-                    scope.spawn(move || move_rows(chunk, dy, dsec));
+                    scope.spawn(move || move_rows(chunk, dy));
                 }
             });
         }
     }
 }
 
-fn move_rows(rows: &mut [egui::epaint::text::Row], dy: f32, dsec: i64) {
+/// Whether a row is drawn: it has a mesh, or nothing to draw (spaces). A row
+/// of letters without a mesh stands in for a line left for later, out of
+/// view: the cursor and selection go by its rectangle, and its glyphs keep
+/// their height until it is laid out again, so it is cheap to move.
+pub(crate) fn drawn(row: &egui::epaint::text::Row) -> bool {
+    !row.visuals.mesh.vertices.is_empty() || row.glyphs.iter().all(|g| g.chr.is_whitespace())
+}
+
+fn move_rows(rows: &mut [egui::epaint::text::Row], dy: f32) {
     let d = egui::vec2(0.0, dy);
     for row in rows {
-        for gl in &mut row.glyphs {
-            gl.pos += d;
-            gl.section_index = (gl.section_index as i64 + dsec) as u32;
+        if drawn(row) {
+            for gl in &mut row.glyphs {
+                gl.pos += d;
+            }
         }
-        row.section_index_at_start = (row.section_index_at_start as i64 + dsec) as u32;
-        if dy != 0.0 {
-            row.rect = row.rect.translate(d);
-            row.visuals.mesh.translate(d);
-            row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
-        }
+        row.rect = row.rect.translate(d);
+        row.visuals.mesh.translate(d);
+        row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
     }
 }
 
@@ -1730,7 +1934,7 @@ pub fn auto_dash(ui: &egui::Ui, id: egui::Id, text: &mut String) -> bool {
 }
 
 /// The cursor or selection of an editor as a byte range of `text`.
-fn reveal_of(ctx: &egui::Context, id: egui::Id, text: &str) -> Reveal {
+pub(crate) fn reveal_of(ctx: &egui::Context, id: egui::Id, text: &str) -> Reveal {
     if !ctx.memory(|m| m.has_focus(id)) {
         return Reveal(None);
     }
@@ -1739,7 +1943,11 @@ fn reveal_of(ctx: &egui::Context, id: egui::Id, text: &str) -> Reveal {
 
 /// The galley an editor shows for `text` at `width`, as the layouter makes it.
 pub fn galley(ui: &egui::Ui, text: &str, cache: &mut HighlightCache, st: &Styles, reveal: Reveal, width: f32) -> std::sync::Arc<egui::Galley> {
-    ui.fonts(|f| cache.live(f, text, st, reveal, width).0)
+    // what of the note is in view, from where its text starts (the text edit puts it at the cursor)
+    let clip = ui.clip_rect();
+    let top = ui.cursor().min.y;
+    let view = (clip.top() - top, clip.bottom() - top);
+    ui.fonts(|f| cache.layout(f, text, st, reveal, width, Some(view)).0)
 }
 
 /// The cursor of an editor, as tall as the font of the letter beside it (the
@@ -1754,7 +1962,8 @@ fn paint_caret(ui: &egui::Ui, id: egui::Id, out: &egui::text_edit::TextEditOutpu
     let at = galley.pos_from_cursor(&range.primary);
     let (x, mid) = (at.center().x, at.center().y);
     let seen = |g: &&egui::epaint::text::Glyph| g.font_height >= 2.0;
-    let glyph = galley.rows.iter().find(|r| r.min_y() <= mid && mid < r.max_y()).and_then(|r| {
+    // (a row standing in for a line not laid out yet has no letter heights to go by)
+    let glyph = galley.rows.iter().find(|r| r.min_y() <= mid && mid < r.max_y()).filter(|r| drawn(r)).and_then(|r| {
         let before = r.glyphs.iter().rev().filter(|g| g.pos.x < x - 0.01).find(seen);
         before.or_else(|| r.glyphs.iter().filter(|g| g.pos.x >= x - 0.01).find(seen))
     });
@@ -1819,6 +2028,10 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
         cache.give_back(&out.galley, out.response.has_focus());
+        if cache.incomplete() {
+            // the lines left for later are laid out over the next frames
+            ui.ctx().request_repaint();
+        }
         cache.rendered = Some((out.galley.clone(), out.galley_pos));
         if let Some(slot) = deco_slot {
             let decos = &cache.decos();
@@ -2013,6 +2226,63 @@ mod tests {
     }
 
     #[test]
+    fn a_long_note_opens_laid_out_down_to_the_view_and_completes_later() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = styles();
+        let text = manuscript(60_000);
+        let mut cache = HighlightCache::default();
+        let (g, _) = cache.layout(&fonts, &text, &st, Reveal(None), 500.0, Some((0.0, 800.0)));
+        assert!(cache.incomplete(), "the lines far below the view wait");
+        let drawn = g.rows.iter().filter(|r| !r.visuals.mesh.vertices.is_empty()).count();
+        assert!(drawn < g.rows.len() / 4, "only the rows near the view are laid out: {drawn} of {}", g.rows.len());
+        drop(g);
+        let mut moved = 0.0;
+        for _ in 0..1000 {
+            if !cache.incomplete() {
+                break;
+            }
+            moved += cache.advance(&fonts, &text, &st, Reveal(None), false);
+        }
+        assert!(!cache.incomplete());
+        assert_eq!(moved, 0.0, "nothing above the view changed");
+        let (g, _) = cache.layout(&fonts, &text, &st, Reveal(None), 500.0, Some((0.0, 800.0)));
+        let (fresh, _) = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 500.0);
+        assert_same_layout(&g, &fresh, "completed");
+    }
+
+    #[test]
+    fn another_width_lays_out_the_view_at_once_and_the_rest_keeping_the_view_still() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = styles();
+        let text = manuscript(60_000);
+        let mut cache = HighlightCache::default();
+        let _ = cache.layout(&fonts, &text, &st, Reveal(None), 500.0, None);
+        // the view in the middle of the note, and a letter at its top
+        let (g, _) = cache.layout(&fonts, &text, &st, Reveal(None), 500.0, None);
+        let mid = g.rect.height() / 2.0;
+        let letter = g.cursor_from_pos(egui::vec2(10.0, mid + 5.0)).ccursor;
+        drop(g);
+        let view = |g: &egui::Galley| g.pos_from_cursor(&g.from_ccursor(letter)).top();
+        let (g, _) = cache.layout(&fonts, &text, &st, Reveal(None), 380.0, Some((mid, mid + 700.0)));
+        assert!(cache.incomplete());
+        let at = view(&g);
+        drop(g);
+        let mut moved = 0.0;
+        for _ in 0..1000 {
+            if !cache.incomplete() {
+                break;
+            }
+            moved += cache.advance(&fonts, &text, &st, Reveal(None), false);
+        }
+        assert!(!cache.incomplete());
+        assert!(moved != 0.0, "the lines above the view changed height");
+        let (g, _) = cache.layout(&fonts, &text, &st, Reveal(None), 380.0, Some((mid + moved, mid + moved + 700.0)));
+        assert!((view(&g) - (at + moved)).abs() < 0.5, "the letter at the top of the view moved with the view: {} vs {}", view(&g), at + moved);
+        let (fresh, _) = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 380.0);
+        assert_same_layout(&g, &fresh, "completed");
+    }
+
+    #[test]
     fn a_selection_painted_into_a_lent_layout_is_taken_out_again() {
         let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
         let st = styles();
@@ -2032,6 +2302,19 @@ mod tests {
         let (again, _) = cache.live(&fonts, &text, &st, Reveal(None), 320.0);
         let (fresh, _) = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 320.0);
         assert_same_layout(&again, &fresh, "after the selection");
+    }
+
+    #[test]
+    #[ignore = "profiling aid: completing a long note laid out down to its view"]
+    fn profile_advance() {
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = styles();
+        let text = manuscript(2_000_000);
+        let mut cache = HighlightCache::default();
+        let _ = cache.layout(&fonts, &text, &st, Reveal(None), 640.0, Some((0.0, 800.0)));
+        for _ in 0..6 {
+            let _ = cache.advance(&fonts, &text, &st, Reveal(None), false);
+        }
     }
 
     #[test]

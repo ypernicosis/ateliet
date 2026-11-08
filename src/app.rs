@@ -2361,8 +2361,18 @@ impl App {
             // a narrow pane (the centre divided) keeps its room for the text
             let pad = if centered && ui.available_width() > 420.0 { 32.0 } else { 14.0 };
             let salt = ("note", tab.path.clone(), tab.mode == Mode::Read, centered);
+            // the editor's lines left for later (a long note just opened, or another width)
+            let editing = tab.mode == Mode::Edit && (!self.live_preview || tab.live.active.is_some());
+            let grown = if editing && tab.highlight.incomplete() {
+                let st = if self.live_preview { editor::Styles::live(size, p) } else { editor::Styles::source(size, p) };
+                let reveal = editor::reveal_of(ui.ctx(), tab.editor_id(), &tab.text);
+                let busy = ui.input(|i| !i.events.is_empty() || i.pointer.any_down() || i.smooth_scroll_delta != egui::Vec2::ZERO);
+                ui.ctx().fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy))
+            } else {
+                0.0
+            };
             // what the rendered note measured out of view last frame moves the view with it
-            let area = crate::heights::keep_view(ui, egui::ScrollArea::vertical().id_salt(&salt), &salt, &mut tab.live.heights);
+            let area = crate::heights::keep_view(ui, egui::ScrollArea::vertical().id_salt(&salt), &salt, &mut tab.live.heights, grown);
             area.auto_shrink([false, false]).show(ui, |ui| {
                 let avail = ui.available_width();
                 let w = avail.min(max_w + 2.0 * pad);

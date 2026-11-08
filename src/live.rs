@@ -590,6 +590,7 @@ mod editing_tests {
     }
 
     fn frame(ctx: &egui::Context, tab: &mut Tab, events: Vec<Event>, modifiers: Modifiers) -> egui::FullOutput {
+        let busy = !events.is_empty();
         ctx.run(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(700.0, 1000.0))),
             events, modifiers, ..Default::default()
@@ -597,6 +598,11 @@ mod editing_tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 tab.live.spots.clear();
                 let st = editor::Styles::live(16.0, TestHost.palette());
+                // as the app does before the note's scroll area
+                if tab.highlight.incomplete() {
+                    let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                    ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy));
+                }
                 show(ui, tab, &mut TestHost, &st);
             });
         })
@@ -609,6 +615,8 @@ mod editing_tests {
     fn context() -> egui::Context {
         let ctx = egui::Context::default();
         ctx.set_fonts(crate::fonts::definitions());
+        // a blinking caret asks for frames by the clock, which a test cannot count on
+        ctx.style_mut(|s| s.visuals.text_cursor.blink = false);
         ctx
     }
 
@@ -693,16 +701,31 @@ mod editing_tests {
         let mut tab = note(&"Um parágrafo de planejamento.\n\n".repeat(400));
         tab.live.open_document(&tab.text, 0);
         for _ in 0..4 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
+        // the lines below the view are laid out over the first frames
+        for _ in 0..200 {
+            if !tab.highlight.incomplete() { break; }
+            let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
+        }
+        assert!(!tab.highlight.incomplete());
+        let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
         let first = tab.highlight.rendered.as_ref().unwrap().0.clone();
         for _ in 0..5 {
             let out = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
             assert!(Arc::ptr_eq(&first, &tab.highlight.rendered.as_ref().unwrap().0));
-            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20));
+            assert!(out.viewport_output[&egui::ViewportId::ROOT].repaint_delay > std::time::Duration::from_millis(20), "{:?}", ctx.repaint_causes());
         }
     }
 
     /// The layout the editor shows must be the one a fresh layout of its text makes.
-    fn assert_fresh(ctx: &egui::Context, tab: &Tab, what: &str) {
+    fn assert_fresh(ctx: &egui::Context, tab: &mut Tab, what: &str) {
+        // the lines left for later are laid out first
+        for _ in 0..2000 {
+            if !tab.highlight.incomplete() {
+                break;
+            }
+            let _ = frame(ctx, tab, vec![], Modifiers::NONE);
+        }
+        assert!(!tab.highlight.incomplete(), "{what}: the layout never completed");
         let (g, _) = tab.highlight.rendered.as_ref().unwrap();
         let reveal = editor::selection(ctx, tab.editor_id()).map(|(a, b)| (editor::char_to_byte(&tab.text, a), editor::char_to_byte(&tab.text, b)));
         let st = editor::Styles::live(16.0, TestHost.palette());
@@ -719,7 +742,7 @@ mod editing_tests {
         let start = original.find("ênfase").unwrap();
         tab.live.open_document(&tab.text, original[..start].chars().count());
         for _ in 0..2 { let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE); }
-        assert_fresh(&ctx, &tab, "opened");
+        assert_fresh(&ctx, &mut tab, "opened");
         for (what, events) in [
             ("a letter", vec![Event::Text("x".into())]),
             ("another", vec![Event::Text("y".into())]),
@@ -728,7 +751,7 @@ mod editing_tests {
             ("deleted", vec![key(Key::Backspace, Modifiers::NONE), key(Key::Backspace, Modifiers::NONE)]),
         ] {
             let _ = frame(&ctx, &mut tab, events, Modifiers::NONE);
-            assert_fresh(&ctx, &tab, what);
+            assert_fresh(&ctx, &mut tab, what);
         }
         // a selection grows over several rows: egui paints it into the layout it was lent
         let shift = Modifiers { shift: true, ..Modifiers::NONE };
@@ -745,7 +768,7 @@ mod editing_tests {
         let _ = frame(&ctx, &mut tab, vec![Event::Text("z".into())], Modifiers::NONE);
         assert!(tab.text.contains("ênz") || tab.text.contains('z'));
         let _ = frame(&ctx, &mut tab, vec![], Modifiers::NONE);
-        assert_fresh(&ctx, &tab, "after the selection was replaced");
+        assert_fresh(&ctx, &mut tab, "after the selection was replaced");
     }
 
     #[test]
@@ -768,14 +791,17 @@ mod editing_tests {
         };
         eprintln!("{} bytes, first frame: {:?}", tab.text.len(), time(&mut tab, vec![], Modifiers::NONE));
         let _ = time(&mut tab, vec![], Modifiers::NONE);
-        // as a person does, between opening the note and typing
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // as a person does, between opening the note and typing (the rest is laid out meanwhile)
+        let mut frames = 0;
+        let rest: std::time::Duration = std::iter::from_fn(|| (tab.highlight.incomplete() && frames < 500).then(|| { frames += 1; time(&mut tab, vec![], Modifiers::NONE) })).sum();
+        eprintln!("the rest laid out while idle: {frames} frames, {rest:?}");
         let idle: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], Modifiers::NONE)).sum();
         eprintln!("idle frame: {:?}", idle / 10);
-        let typing: std::time::Duration = "palavra".chars().map(|c| time(&mut tab, vec![Event::Text(c.into())], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
-        eprintln!("a letter typed (its frame and the next): {:?}", typing / 7);
+        let each: Vec<std::time::Duration> = "palavra".chars().map(|c| time(&mut tab, vec![Event::Text(c.into())], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).collect();
+        eprintln!("a letter typed (its frame and the next): {:?} on average; the first {:?}, the others at most {:?}", each.iter().sum::<std::time::Duration>() / 7, each[0], each[1..].iter().max().unwrap());
         let moves: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![key(Key::ArrowRight, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
         eprintln!("cursor moved (its frame and the next): {:?}", moves / 10);
+        if std::env::var("ATELIET_PROFILE").is_ok() { eprintln!("ENTER"); }
         let enter = time(&mut tab, vec![key(Key::Enter, Modifiers::NONE)], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE);
         eprintln!("a new line (its frame and the next): {enter:?}");
         let shift = Modifiers { shift: true, ..Modifiers::NONE };
@@ -789,6 +815,101 @@ mod editing_tests {
         let t = std::time::Instant::now();
         let _ = ateliet_core::scriptorium::count_words(&tab.text);
         eprintln!("counting its words (the status bar, on each change): {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn scrolling_far_into_lines_left_for_later_shows_them_laid_out() {
+        let ctx = context();
+        let text = "## Parte\n\nUm parágrafo com **ênfase** e texto corrido que quebra em mais de uma linha no editor de teste.\n\n".repeat(400);
+        let mut tab = note(&text);
+        tab.live.open_document(&tab.text, 0);
+        let run = |tab: &mut Tab, offset: Option<f32>| {
+            let mut clip = egui::Rect::NOTHING;
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(600.0, 800.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let st = editor::Styles::live(16.0, TestHost.palette());
+                    // busy: nothing is laid out for later in these frames
+                    if tab.highlight.incomplete() {
+                        let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                        ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, true));
+                    }
+                    let mut area = egui::ScrollArea::vertical();
+                    if let Some(y) = offset {
+                        area = area.vertical_scroll_offset(y);
+                    }
+                    area.show(ui, |ui| {
+                        clip = ui.clip_rect();
+                        show(ui, tab, &mut TestHost, &st);
+                    });
+                });
+            });
+            clip
+        };
+        let _ = run(&mut tab, None);
+        assert!(tab.highlight.incomplete(), "the lines below the view wait");
+        // a jump far down, as dragging the scroll bar does
+        let total = tab.highlight.rendered.as_ref().unwrap().0.rect.height();
+        let clip = run(&mut tab, Some(total * 0.6));
+        let (g, origin) = tab.highlight.rendered.as_ref().unwrap();
+        let in_view: Vec<_> = g.rows.iter().filter(|r| r.rect.translate(origin.to_vec2()).intersects(clip)).collect();
+        assert!(!in_view.is_empty());
+        assert!(in_view.iter().all(|r| editor::drawn(r)), "every row in view is laid out and drawn");
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_resized"]
+    fn long_note_resized() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let mid = text[text.len() / 2..].find("Uma nota").unwrap() + text.len() / 2 + 4;
+        tab.live.open_document(&tab.text, text[..mid].chars().count());
+        // `busy`: the window is being dragged (the app lays nothing out for later then)
+        let run = |tab: &mut Tab, width: f32, busy: bool| {
+            let t = std::time::Instant::now();
+            let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 1000.0))), ..Default::default() }, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    tab.live.spots.clear();
+                    let st = editor::Styles::live(16.0, TestHost.palette());
+                    if tab.highlight.incomplete() {
+                        let reveal = editor::reveal_of(ctx, tab.editor_id(), &tab.text);
+                        ctx.fonts(|f| tab.highlight.advance(f, &tab.text, &st, reveal, busy));
+                    }
+                    egui::ScrollArea::vertical().show(ui, |ui| { show(ui, tab, &mut TestHost, &st); });
+                });
+            });
+            t.elapsed()
+        };
+        eprintln!("{} bytes, opened at the start: first frame {:?}", tab.text.len(), run(&mut tab, 700.0, false));
+        let mut frames = 0;
+        let mut worst = std::time::Duration::ZERO;
+        while tab.highlight.incomplete() && frames < 2000 {
+            worst = worst.max(run(&mut tab, 700.0, false));
+            frames += 1;
+        }
+        eprintln!("completed in {frames} frames, the slowest {worst:?}");
+        let mut worst = std::time::Duration::ZERO;
+        let mut total = std::time::Duration::ZERO;
+        for k in 0..30 {
+            let d = run(&mut tab, 700.0 - 4.0 * k as f32, true);
+            worst = worst.max(d);
+            total += d;
+        }
+        eprintln!("window dragged narrower over 30 frames: {:?} a frame, the slowest {worst:?}", total / 30);
+        // the pause after the drag, then what is left
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let mut frames = 0;
+        let mut worst = std::time::Duration::ZERO;
+        while tab.highlight.incomplete() && frames < 4000 {
+            worst = worst.max(run(&mut tab, 584.0, false));
+            frames += 1;
+        }
+        eprintln!("then completed in {frames} frames, the slowest {worst:?}");
     }
 
     #[test]
