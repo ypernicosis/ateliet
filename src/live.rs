@@ -17,6 +17,11 @@ pub struct Segment {
     pub text: String,
     pub doc: Arc<Doc>,
     pub frontmatter: bool,
+    /// A hash of its text, naming its drawn height.
+    pub hash: u64,
+    /// It has controls of its own (links, tasks, callouts, queries): a
+    /// simple click on it does not open the editor.
+    pub interactive: bool,
 }
 
 /// Top-level blocks of a note with their source lines.
@@ -68,7 +73,9 @@ pub fn segments(text: &str) -> Vec<Segment> {
             let e = e.min(lines.len().saturating_sub(1));
             let t = lines[s..=e].join("\n");
             let doc = Arc::new(if fm { markdown::Doc { blocks: Vec::new(), headings: Vec::new() } } else { markdown::parse(&t) });
-            Segment { start: s, end: e, text: t, doc, frontmatter: fm }
+            let hash = editor::text_hash(&t) ^ fm as u64;
+            let interactive = ["[[", "](", "[ ]", "[x]", "[X]", "[!", "```dataview"].iter().any(|m| t.contains(m));
+            Segment { start: s, end: e, text: t, doc, frontmatter: fm, hash, interactive }
         })
         .collect()
 }
@@ -95,6 +102,8 @@ pub struct LiveState {
     edit_targets: Vec<(egui::Rect, usize)>,
     /// A press begun on rendered text must keep its anchor through editor activation.
     drag_anchor: Option<usize>,
+    /// The drawn heights of the segments, to draw only those in view.
+    pub heights: crate::heights::Heights,
 }
 
 impl LiveState {
@@ -412,9 +421,16 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
     let mut actions = Vec::new();
     let mut prop_edit = None;
     tab.live.refresh(&tab.text);
-    let segs = tab.live.segs.clone();
+    // out of the tab while drawing (not copied: a long note has thousands)
+    let segs = std::mem::take(&mut tab.live.segs);
+    let mut heights = std::mem::take(&mut tab.live.heights);
+    let mut pass = heights.pass(ui);
     tab.live.edit_targets.clear();
     let size = host.size();
+    let width = ui.available_width();
+    // the pointer, asked once: thousands of segments are laid out each frame
+    let click = ui.input(|i| i.pointer.primary_clicked().then(|| i.pointer.interact_pos()).flatten());
+    let hover = ui.input(|i| i.pointer.hover_pos());
     for (i, seg) in segs.iter().enumerate() {
         if i > 0 {
             let gap = match seg.doc.blocks.first() {
@@ -423,42 +439,45 @@ pub fn show(ui: &mut egui::Ui, tab: &mut Tab, host: &mut dyn Host, st: &editor::
             };
             ui.add_space(gap);
         }
-        let top = ui.cursor().min;
         let before = actions.len();
-        if seg.frontmatter {
-            if !crate::sc::focus::ON.with(|f| f.get()) {
-                prop_edit = properties(ui, &seg.text, host);
+        let rect = pass.piece(ui, seg.hash, || crate::heights::estimate(&seg.text, size, width), false, |ui| {
+            if seg.frontmatter {
+                if !crate::sc::focus::ON.with(|f| f.get()) {
+                    if let Some(edit) = properties(ui, &seg.text, host) {
+                        prop_edit = Some(edit);
+                    }
+                }
+            } else {
+                let mut renderer = Renderer::new(host);
+                renderer.blocks(ui, &seg.doc.blocks);
+                for action in renderer.actions.drain(..) {
+                    actions.push(match action {
+                        Action::ToggleTask(line, checked) => Action::ToggleTask(line + seg.start, checked),
+                        other => other,
+                    });
+                }
             }
-        } else {
-            let mut renderer = Renderer::new(host);
-            renderer.blocks(ui, &seg.doc.blocks);
-            for action in renderer.actions.drain(..) {
-                actions.push(match action {
-                    Action::ToggleTask(line, checked) => Action::ToggleTask(line + seg.start, checked),
-                    other => other,
-                });
-            }
-        }
-        let rect = egui::Rect::from_min_max(top, egui::pos2(top.x + ui.available_width(), ui.cursor().min.y));
+        });
         tab.live.spots.push((rect.top(), rect.bottom(), seg.start, seg.end));
         if !seg.frontmatter {
-            if !tab.live.edit_targets.iter().any(|(r, _)| *r == rect)
-                && ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)))
+            if click.is_some_and(|p| rect.contains(p))
+                && !tab.live.edit_targets.iter().any(|(r, _)| *r == rect)
                 && actions.len() == before {
                 let offset = tab.text.split_inclusive('\n').take(seg.start).map(|l| l.chars().count()).sum();
                 tab.live.open_document(&tab.text, offset);
                 ui.ctx().request_repaint();
             }
             // Interactive blocks keep their own controls on a simple click.
-            let interactive = seg.text.contains("[[") || seg.text.contains("](")
-                || seg.text.contains("[ ]") || seg.text.contains("[x]") || seg.text.contains("[X]")
-                || seg.text.contains("[!") || seg.text.contains("```dataview");
+            let interactive = seg.interactive;
             if !interactive { tab.live.edit_targets.push((rect, seg.start)); }
-            if !interactive && ui.rect_contains_pointer(rect) && actions.len() == before {
+            if !interactive && hover.is_some_and(|p| rect.contains(p)) && ui.rect_contains_pointer(rect) && actions.len() == before {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
             }
         }
     }
+    pass.finish(ui);
+    tab.live.segs = segs;
+    tab.live.heights = heights;
     let below = (ui.clip_rect().bottom() - ui.cursor().top()).clamp(160.0, 4000.0);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), below), egui::Sense::click());
     tab.live.edit_targets.push((rect, usize::MAX));
@@ -749,6 +768,8 @@ mod editing_tests {
         };
         eprintln!("{} bytes, first frame: {:?}", tab.text.len(), time(&mut tab, vec![], Modifiers::NONE));
         let _ = time(&mut tab, vec![], Modifiers::NONE);
+        // as a person does, between opening the note and typing
+        std::thread::sleep(std::time::Duration::from_millis(500));
         let idle: std::time::Duration = (0..10).map(|_| time(&mut tab, vec![], Modifiers::NONE)).sum();
         eprintln!("idle frame: {:?}", idle / 10);
         let typing: std::time::Duration = "palavra".chars().map(|c| time(&mut tab, vec![Event::Text(c.into())], Modifiers::NONE) + time(&mut tab, vec![], Modifiers::NONE)).sum();
@@ -768,6 +789,38 @@ mod editing_tests {
         let t = std::time::Instant::now();
         let _ = ateliet_core::scriptorium::count_words(&tab.text);
         eprintln!("counting its words (the status bar, on each change): {:?}", t.elapsed());
+    }
+
+    #[test]
+    #[ignore = "benchmark: cargo test --release -- --ignored --nocapture long_note_at_rest"]
+    fn long_note_at_rest() {
+        let ctx = context();
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < 2_000_000 {
+            n += 1;
+            text += &format!("## Capítulo {n}\n\nUma nota longa ({n}) com **ênfase**, [[referência {n}]] e texto corrido que planeja a história, com frases que quebram em várias linhas na largura do editor.\n\n- um item {n} com *itálico*\n- outro item {n}\n\n> uma citação curta {n}\n\nMais um parágrafo {n} com `código` e ==marca==.\n\n");
+        }
+        let mut tab = note(&text);
+        let time = |tab: &mut Tab| {
+            let t = std::time::Instant::now();
+            let _ = frame(&ctx, tab, vec![], Modifiers::NONE);
+            t.elapsed()
+        };
+        eprintln!("rendered, not edited: first frame {:?}", time(&mut tab));
+        let idle: std::time::Duration = (0..5).map(|_| time(&mut tab)).sum();
+        eprintln!("rendered, not edited: next frames {:?}", idle / 5);
+        let t = std::time::Instant::now();
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        let st = editor::Styles::live(16.0, TestHost.palette());
+        let _ = editor::highlight_lines(&text, &st, editor::Reveal(None));
+        eprintln!("styling every line, no layout: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = editor::HighlightCache::default().live(&fonts, &text, &st, editor::Reveal(None), 640.0);
+        eprintln!("styling and laying out every line: {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let _ = query_blocks(&text);
+        eprintln!("query blocks: {:?}", t.elapsed());
     }
 
     #[test]

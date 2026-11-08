@@ -9,23 +9,77 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-static INLINE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(concat!(
-        r"(?P<escape>\\[[:punct:]])",
-        r"|(?P<code>`[^`\n]+`)",
-        r"|(?P<wiki>!?\[\[[^\]\n]+\]\])",
-        r"|(?P<mdlink>!?\[[^\]\n]*\]\([^)\n]*\))",
-        r"|(?P<url>https?://[^\s)>\]]+)",
-        r"|(?P<bold>\*\*[^*\n]+\*\*|__[^_\n]+__)",
-        r"|(?P<italic>\*[^*\s][^*\n]*\*|\b_[^_\s][^_\n]*_\b)",
-        r"|(?P<strike>~~[^~\n]+~~)",
-        r"|(?P<mark>==[^=\n]+==)",
-        r"|(?P<field>\[[^\[\]\n]+?::[^\]\n]*\])",
-        r"|(?P<tag>(?:^|\s)#[^\s#!-,.:-@\[-^`{-~]+)",
-        r"|(?P<comment>%%[^%]*%%)",
-    ))
-    .unwrap()
-});
+/// The inline spans, in the order they are tried at a position.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Span {
+    Escape,
+    Code,
+    Wiki,
+    MdLink,
+    Url,
+    Bold,
+    Italic,
+    Strike,
+    Mark,
+    Field,
+    Tag,
+    Comment,
+}
+
+const SPANS: [(Span, &str); 12] = [
+    (Span::Escape, r"\\[[:punct:]]"),
+    (Span::Code, r"`[^`\n]+`"),
+    (Span::Wiki, r"!?\[\[[^\]\n]+\]\]"),
+    (Span::MdLink, r"!?\[[^\]\n]*\]\([^)\n]*\)"),
+    (Span::Url, r"https?://[^\s)>\]]+"),
+    (Span::Bold, r"\*\*[^*\n]+\*\*|__[^_\n]+__"),
+    // `_italic_` also needs no letter right before or after it (see `word_bounded`)
+    (Span::Italic, r"\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_"),
+    (Span::Strike, r"~~[^~\n]+~~"),
+    (Span::Mark, r"==[^=\n]+=="),
+    (Span::Field, r"\[[^\[\]\n]+?::[^\]\n]*\]"),
+    (Span::Tag, r"(?:^|\s)#[^\s#!-,.:-@\[-^`{-~]+"),
+    (Span::Comment, r"%%[^%]*%%"),
+];
+
+/// All the spans, without capture groups: finding them takes the regex
+/// engine's fast path, where telling the groups apart would not.
+static INLINE: Lazy<Regex> = Lazy::new(|| Regex::new(&SPANS.iter().map(|(_, p)| format!("(?:{p})")).collect::<Vec<_>>().join("|")).unwrap());
+
+/// Each span alone, matching a whole text.
+static WHOLE: Lazy<Vec<(Span, Regex)>> = Lazy::new(|| SPANS.iter().map(|(k, p)| (*k, Regex::new(&format!("^(?:{p})$")).unwrap())).collect());
+
+/// `_italic_` stands apart from the words around it, as a regex `\b` would
+/// say. The `\b` is checked here rather than in the regex: with it, the
+/// regex leaves its fast automaton for a backtracking search on any text
+/// with accents.
+fn word_bounded(text: &str, start: usize, end: usize) -> bool {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    !text[..start].chars().next_back().is_some_and(word) && !text[end..].chars().next().is_some_and(word)
+}
+
+/// The inline spans of `text`, as the alternation finds them from left to right.
+fn spans(text: &str) -> impl Iterator<Item = (Span, usize, usize)> + '_ {
+    let mut at = 0;
+    std::iter::from_fn(move || loop {
+        let m = INLINE.find_at(text, at)?;
+        let kind = span_of(m.as_str());
+        if kind == Span::Italic && m.as_str().starts_with('_') && !word_bounded(text, m.start(), m.end()) {
+            // no `_italic_` here: the search goes on after its first underscore
+            at = m.start() + 1;
+            continue;
+        }
+        at = if m.end() > m.start() { m.end() } else { m.end() + 1 };
+        return Some((kind, m.start(), m.end()));
+    })
+}
+
+/// Which span a match of `INLINE` is: the first that matches all of it,
+/// as the alternation tried them.
+fn span_of(s: &str) -> Span {
+    WHOLE.iter().find(|(_, r)| r.is_match(s)).map(|(k, _)| *k).unwrap_or(Span::Comment)
+}
+
 static HEADING: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(#{1,6})\s").unwrap());
 static LIST: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\s*)([-*+]|\d+[.)])(\s+)(\[.\]\s)?").unwrap());
 
@@ -510,10 +564,9 @@ fn hidden_keep(f: &TextFormat) -> TextFormat {
 fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: &Styles, reveal: Reveal) {
     let p = &st.p;
     let mut at = 0;
-    for c in INLINE.captures_iter(text) {
-        let m = c.get(0).unwrap();
-        let (mut start, end) = (m.start(), m.end());
-        if c.name("tag").is_some() && text[start..].starts_with(char::is_whitespace) {
+    for (kind, start, end) in spans(text) {
+        let mut start = start;
+        if kind == Span::Tag && text[start..].starts_with(char::is_whitespace) {
             start += text[start..].chars().next().unwrap().len_utf8();
         }
         if start > at {
@@ -522,15 +575,15 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
         let s = &text[start..end];
         let marks = Marks { p: *p, hide: st.live && !reveal.touches(offset + start, offset + end) };
         let mut f = base.clone();
-        if c.name("escape").is_some() {
+        if kind == Span::Escape {
             let m = marks.mark(&f);
             job.append(&s[..1], 0.0, m);
             job.append(&s[1..], 0.0, f);
-        } else if c.name("code").is_some() {
+        } else if kind == Span::Code {
             f = st.mono(p.text);
             f.background = p.code_bg;
             wrapped(job, s, 1, 1, f, &marks);
-        } else if c.name("wiki").is_some() {
+        } else if kind == Span::Wiki {
             f.color = p.link();
             if st.live {
                 f.underline = Stroke::new(1.0_f32, p.link().gamma_multiply(0.5));
@@ -546,7 +599,7 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
                 }
                 _ => wrapped(job, s, open, 2, f, &marks),
             }
-        } else if c.name("mdlink").is_some() {
+        } else if kind == Span::MdLink {
             f.color = p.link();
             if st.live {
                 f.underline = Stroke::new(1.0_f32, p.link().gamma_multiply(0.5));
@@ -557,26 +610,26 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
             job.append(&s[..open], 0.0, m.clone());
             job.append(&s[open..mid], 0.0, f);
             job.append(&s[mid..], 0.0, m);
-        } else if c.name("url").is_some() {
+        } else if kind == Span::Url {
             f.color = p.link();
             f.underline = Stroke::new(1.0_f32, p.link().gamma_multiply(0.4));
             job.append(s, 0.0, f);
-        } else if c.name("bold").is_some() {
+        } else if kind == Span::Bold {
             f.font_id = FontId::new(f.font_id.size, bold_family());
             if let Some(c) = st.typo.bold.filter(|_| st.live) {
                 f.color = c;
             }
             wrapped(job, s, 2, 2, f, &marks);
-        } else if c.name("italic").is_some() {
+        } else if kind == Span::Italic {
             st.italic(&mut f);
             wrapped(job, s, 1, 1, f, &marks);
-        } else if c.name("strike").is_some() {
+        } else if kind == Span::Strike {
             f.strikethrough = Stroke::new(1.0_f32, f.color);
             wrapped(job, s, 2, 2, f, &marks);
-        } else if c.name("mark").is_some() {
+        } else if kind == Span::Mark {
             f.background = p.highlight;
             wrapped(job, s, 2, 2, f, &marks);
-        } else if c.name("field").is_some() {
+        } else if kind == Span::Field {
             f.color = p.muted;
             match s.find("::") {
                 Some(k) => {
@@ -591,13 +644,13 @@ fn inline(job: &mut LayoutJob, text: &str, offset: usize, base: TextFormat, st: 
                 }
                 None => job.append(s, 0.0, f),
             }
-        } else if c.name("tag").is_some() {
+        } else if kind == Span::Tag {
             f.color = p.accent_strong;
             if st.live {
                 f.background = p.accent_soft;
             }
             job.append(s, 0.0, f);
-        } else if c.name("comment").is_some() {
+        } else if kind == Span::Comment {
             f.color = p.faint;
             st.italic(&mut f);
             job.append(s, 0.0, f);
@@ -630,7 +683,12 @@ pub struct HighlightCache {
     pub(crate) rendered: Option<(Arc<egui::Galley>, egui::Pos2)>,
     cur: Option<Layout>,
     spare: Option<Layout>,
+    /// The spare being copied from the current layout, out of the frame.
+    copying: Option<std::thread::JoinHandle<Layout>>,
     lend: bool,
+    /// When the editor last had the keyboard: the spare is let go after a while
+    /// without it (it doubles the memory of a long note).
+    focused_at: Option<std::time::Instant>,
     /// The tables of the last text, by its hash.
     tables: (u64, Vec<std::ops::Range<usize>>),
 }
@@ -781,6 +839,8 @@ impl HighlightCache {
             return self.hand_out();
         }
         // a layout to rework: the spare, else the current one if nothing else holds it
+        // the spare copied out of the frame, if it is still on its way
+        self.settle_copy(true);
         let old = self.cur.take().filter(|o| o.params == params && o.galley.is_some());
         let mut spare = self.spare.take().filter(|s| s.params == params);
         let mut work = if spare.as_ref().is_some_and(|s| s.unique()) {
@@ -806,13 +866,48 @@ impl HighlightCache {
         self.update_tables(text, hash, st);
         work.update(fonts, text, st, reveal, width, note, &self.tables.1);
         work.key = key;
-        if whole && self.lend && self.spare.is_none() {
-            // the text edit will hold this one when the first key is typed: the spare is
-            // made now, with the whole layout, rather than then
-            self.spare = Some(work.duplicate());
-        }
         self.cur = Some(work);
+        if whole && self.lend {
+            // the text edit will hold this one when the first key is typed
+            self.copy_spare();
+        }
         self.hand_out()
+    }
+
+    /// Starts copying the current layout into a spare, on another thread:
+    /// a long note's layout takes a moment to copy.
+    fn copy_spare(&mut self) {
+        if self.spare.is_some() || self.copying.is_some() {
+            return;
+        }
+        let Some(cur) = self.cur.as_ref() else { return };
+        let Some(galley) = cur.galley.clone().or_else(|| cur.lent.upgrade()) else { return };
+        let mut copy = Layout { galley: None, lent: std::sync::Weak::new(), lines: cur.lines.iter().map(Placed::copy).collect(), verts: cur.verts.clone(), params: cur.params, key: cur.key, decos: cur.decos.clone() };
+        self.copying = Some(std::thread::spawn(move || {
+            copy.galley = Some(Arc::new((*galley).clone()));
+            copy
+        }));
+    }
+
+    /// Takes the spare copied on another thread once it is done (or, with
+    /// `wait`, waits for it).
+    fn settle_copy(&mut self, wait: bool) {
+        if self.copying.as_ref().is_some_and(|h| wait || h.is_finished()) {
+            let copy = self.copying.take().unwrap().join().ok();
+            if self.spare.is_none() {
+                self.spare = copy;
+            }
+        }
+    }
+
+    /// Lets the spare go when the editor has not had the keyboard for a
+    /// while; it is copied again when it gets it back.
+    pub fn trim(&mut self) {
+        const IDLE: std::time::Duration = std::time::Duration::from_secs(20);
+        if self.focused_at.is_none_or(|t| t.elapsed() > IDLE) && (self.spare.is_some() || self.copying.is_some()) {
+            self.spare = None;
+            self.copying = None;
+        }
     }
 
     fn hand_out(&mut self) -> (Arc<egui::Galley>, Arc<Vec<DecoShape>>) {
@@ -838,11 +933,17 @@ impl HighlightCache {
     }
 
     /// The galley a text edit used this frame, given back to the cache.
-    pub(crate) fn give_back(&mut self, galley: &Arc<egui::Galley>) {
+    pub(crate) fn give_back(&mut self, galley: &Arc<egui::Galley>, focused: bool) {
         self.lend = false;
         if let Some(cur) = self.cur.as_mut().filter(|c| c.galley.is_none()) {
             cur.galley = Some(galley.clone());
             cur.lent = std::sync::Weak::new();
+        }
+        self.settle_copy(false);
+        if focused {
+            self.focused_at = Some(std::time::Instant::now());
+            // typing is near: the spare is made ready
+            self.copy_spare();
         }
     }
 
@@ -1008,17 +1109,8 @@ impl Layout {
             row.visuals.mesh.translate(d);
             row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
         };
-        let shift_rows = |rows: &mut [egui::epaint::text::Row], dy: f32| {
-            let d = egui::vec2(0.0, dy);
-            for row in rows {
-                for gl in &mut row.glyphs {
-                    gl.pos += d;
-                }
-                row.rect = row.rect.translate(d);
-                row.visuals.mesh.translate(d);
-                row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
-            }
-        };
+        // the rows of lines kept that move: gathered in runs, moved together at the end
+        let mut runs = Runs::default();
         let shift_secs = |secs: &mut [egui::text::LayoutSection], d: i64| {
             for sec in secs {
                 sec.byte_range = (sec.byte_range.start as i64 + d) as usize..(sec.byte_range.end as i64 + d) as usize;
@@ -1038,9 +1130,7 @@ impl Layout {
                 match fate {
                     Fate::Keep(_) => {
                         let dy = top.round() - o.top.round();
-                        if dy != 0.0 {
-                            shift_rows(&mut g.rows[r..r + rows_n], dy);
-                        }
+                        runs.add(r..r + rows_n, dy, 0);
                         if at != old_at {
                             shift_secs(&mut job.sections[s..s + secs_n], at as i64 - old_at as i64);
                         }
@@ -1141,21 +1231,7 @@ impl Layout {
             let (mut r, mut s) = (0, 0);
             for (line, mv) in old_lines.iter_mut().zip(moves) {
                 if let Some((dy, dsec, dbyte, top)) = mv {
-                    if dy != 0.0 || dsec != 0 {
-                        let d = egui::vec2(0.0, dy);
-                        for row in &mut g.rows[r..r + line.rows] {
-                            for gl in &mut row.glyphs {
-                                gl.pos += d;
-                                gl.section_index = (gl.section_index as i64 + dsec) as u32;
-                            }
-                            row.section_index_at_start = (row.section_index_at_start as i64 + dsec) as u32;
-                            if dy != 0.0 {
-                                row.rect = row.rect.translate(d);
-                                row.visuals.mesh.translate(d);
-                                row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
-                            }
-                        }
-                    }
+                    runs.add(r..r + line.rows, dy, dsec);
                     if dbyte != 0 {
                         shift_secs(&mut job.sections[s..s + line.sections], dbyte);
                     }
@@ -1166,6 +1242,7 @@ impl Layout {
             }
         }
 
+        runs.apply(&mut g.rows);
         job.text = text.to_owned();
         let mut bounds = egui::Rect::NOTHING;
         let (mut nv, mut ni) = (0, 0);
@@ -1181,6 +1258,59 @@ impl Layout {
         g.elided = false;
         g.pixels_per_point = fonts.pixels_per_point();
         *decos = Arc::new(if st.live { decos_of(old_lines, width, st) } else { Vec::new() });
+    }
+}
+
+/// Rows that move down or up (and whose sections are renumbered), gathered
+/// in runs of the same move.
+#[derive(Default)]
+struct Runs(Vec<(std::ops::Range<usize>, f32, i64)>);
+
+impl Runs {
+    fn add(&mut self, rows: std::ops::Range<usize>, dy: f32, dsec: i64) {
+        if (dy == 0.0 && dsec == 0) || rows.is_empty() {
+            return;
+        }
+        match self.0.last_mut() {
+            Some((last, y, s)) if last.end == rows.start && *y == dy && *s == dsec => last.end = rows.end,
+            _ => self.0.push((rows, dy, dsec)),
+        }
+    }
+
+    /// Moves the rows; a long run is split between the processor's cores,
+    /// since a long note below an edit is millions of glyphs and vertices.
+    fn apply(self, rows: &mut [egui::epaint::text::Row]) {
+        const ALONE: usize = 2048;
+        for (range, dy, dsec) in self.0 {
+            let part = &mut rows[range];
+            if part.len() <= ALONE {
+                move_rows(part, dy, dsec);
+                continue;
+            }
+            let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 8);
+            let per = part.len().div_ceil(cores).max(ALONE);
+            std::thread::scope(|scope| {
+                for chunk in part.chunks_mut(per) {
+                    scope.spawn(move || move_rows(chunk, dy, dsec));
+                }
+            });
+        }
+    }
+}
+
+fn move_rows(rows: &mut [egui::epaint::text::Row], dy: f32, dsec: i64) {
+    let d = egui::vec2(0.0, dy);
+    for row in rows {
+        for gl in &mut row.glyphs {
+            gl.pos += d;
+            gl.section_index = (gl.section_index as i64 + dsec) as u32;
+        }
+        row.section_index_at_start = (row.section_index_at_start as i64 + dsec) as u32;
+        if dy != 0.0 {
+            row.rect = row.rect.translate(d);
+            row.visuals.mesh.translate(d);
+            row.visuals.mesh_bounds = row.visuals.mesh_bounds.translate(d);
+        }
     }
 }
 
@@ -1688,7 +1818,7 @@ pub fn editor_widget<'a>(text: &'a mut String, id: egui::Id, cache: &'a mut High
         let cursor_stroke = ui.visuals().text_cursor.stroke;
         ui.visuals_mut().text_cursor.stroke = Stroke::NONE;
         let out = edit.show(ui);
-        cache.give_back(&out.galley);
+        cache.give_back(&out.galley, out.response.has_focus());
         cache.rendered = Some((out.galley.clone(), out.galley_pos));
         if let Some(slot) = deco_slot {
             let decos = &cache.decos();
@@ -1890,16 +2020,29 @@ mod tests {
         let mut cache = HighlightCache::default();
         cache.lend = true;
         let (mut g, _) = cache.live(&fonts, &text, &st, Reveal(None), 320.0);
+        // the spare is copied from it on another thread first
+        cache.settle_copy(true);
         let glyphs = g.rows[0].glyphs.as_ptr();
         // as the text edit paints a selection of its rows 2 to 9
         let range = egui::text::CursorRange::two(g.from_ccursor(egui::text::CCursor::new(30)), g.from_ccursor(egui::text::CCursor::new(200)));
         egui::text_selection::visuals::paint_text_selection(&mut g, &egui::Visuals::default(), &range, None);
         assert_eq!(g.rows[0].glyphs.as_ptr(), glyphs, "the layout was lent, not copied");
-        cache.give_back(&g);
+        cache.give_back(&g, false);
         drop(g);
         let (again, _) = cache.live(&fonts, &text, &st, Reveal(None), 320.0);
         let (fresh, _) = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 320.0);
         assert_same_layout(&again, &fresh, "after the selection");
+    }
+
+    #[test]
+    #[ignore = "profiling aid: laying out a long note (for valgrind --tool=callgrind)"]
+    fn profile_layout() {
+        let text = manuscript(200_000);
+        let st = styles();
+        let fonts = egui::text::Fonts::new(1.0, 2048, crate::fonts::definitions());
+        for _ in 0..2 {
+            let _ = HighlightCache::default().live(&fonts, &text, &st, Reveal(None), 640.0);
+        }
     }
 
     #[test]
@@ -1971,6 +2114,41 @@ mod tests {
             assert!(std::sync::Arc::ptr_eq(&decos, &next_decos));
         }
         eprintln!("8 idle cache hits, {} bytes: {:?}", text.len(), start.elapsed());
+    }
+
+    #[test]
+    fn spans_are_found_as_the_regex_with_groups_found_them() {
+        let old = Regex::new(concat!(
+            r"(?P<escape>\\[[:punct:]])",
+            r"|(?P<code>`[^`\n]+`)",
+            r"|(?P<wiki>!?\[\[[^\]\n]+\]\])",
+            r"|(?P<mdlink>!?\[[^\]\n]*\]\([^)\n]*\))",
+            r"|(?P<url>https?://[^\s)>\]]+)",
+            r"|(?P<bold>\*\*[^*\n]+\*\*|__[^_\n]+__)",
+            r"|(?P<italic>\*[^*\s][^*\n]*\*|\b_[^_\s][^_\n]*_\b)",
+            r"|(?P<strike>~~[^~\n]+~~)",
+            r"|(?P<mark>==[^=\n]+==)",
+            r"|(?P<field>\[[^\[\]\n]+?::[^\]\n]*\])",
+            r"|(?P<tag>(?:^|\s)#[^\s#!-,.:-@\[-^`{-~]+)",
+            r"|(?P<comment>%%[^%]*%%)",
+        )).unwrap();
+        let names = ["escape", "code", "wiki", "mdlink", "url", "bold", "italic", "strike", "mark", "field", "tag", "comment"];
+        let lines = [
+            "Uma frase com **negrito**, *itálico*, _sublinhado_ e __forte__.",
+            "snake_case_nome e é_x_ e _ação_ e x_y_ e _a_b e (_entre_) e _fim_",
+            "ação_ _é_ __ _ _ çã_o_ _ü_ 日本_語_ _日本_",
+            "[[link|apelido]] ![[img.png]] [texto](url) ![alt](a.png) [campo:: valor]",
+            "https://exemplo.com/a_b_c e #tag #ação #12 x#y \\* `código _x_` ==marca== ~~risco~~ %%nota%%",
+            "#começo e fim_",
+        ];
+        for line in lines {
+            let want: Vec<(&str, usize, usize)> = old.captures_iter(line).map(|c| {
+                let m = c.get(0).unwrap();
+                (*names.iter().find(|n| c.name(n).is_some()).unwrap(), m.start(), m.end())
+            }).collect();
+            let got: Vec<(&str, usize, usize)> = spans(line).map(|(k, a, b)| (names[SPANS.iter().position(|(s, _)| *s == k).unwrap()], a, b)).collect();
+            assert_eq!(got, want, "{line}");
+        }
     }
 
     #[test]
