@@ -179,6 +179,16 @@ Enquanto o Journal não existir, o Leitor funciona sozinho: os trechos e os reco
 - **Dataview**: `leitor: livro`, `autor` e os campos dos trechos permitem consultas como "livros com grifos este mês" e "trechos ainda sem página no Journal".
 - **Templater**: a nota de livro é criada a partir de um modelo, se houver um em Configurações › Leitor, com os metadados do livro disponíveis no modelo.
 - **Scriptorium**: o EPUB que o Scriptorium exporta abre no Leitor, para revisar o próprio livro como leitor.
+- **Kindle (KOReader)**: os grifos e as notas feitos no KOReader de um Kindle com jailbreak chegam à nota do livro pelo [kindle-mac](https://github.com/ypernicosis/kindle-mac). O `kindle-trechos` no Mac, ou o botão "Exportar trechos para o Ateliet" no próprio KOReader, faz isso (veja 7.1).
+
+### 7.1 Grifos vindos do Kindle
+
+O [kindle-mac](https://github.com/ypernicosis/kindle-mac) lê os metadados do KOReader (`metadata.*.lua` nas pastas `.sdr`). Para cada livro grifado, ele escreve no vault do último uso do Ateliet (`ateliet.json`, chave `last`) no mesmo formato da seção 6.3. O Ateliet não precisa de nenhuma mudança para ler o resultado:
+
+- **A nota do livro**: a mesma busca do Leitor (`Livros/`, `leitor: livro`, `arquivo` apontando para o livro). Se não houver nota, ela é criada como `marks::new_note` a criaria. O arquivo do livro é procurado no vault pelo nome. Se não estiver lá, e for de um formato que o Leitor abre, é copiado para `Livros/Arquivos/`.
+- **Os grifos**: cada um vira um callout `> [!grifo|cor] capítulo · p. N`, com `> Nota:` quando há nota, seguido do `^id` numa linha própria. O id tem a forma `g-k` mais seis caracteres, para não colidir com os do Leitor. As cores do KOReader viram as quatro do Leitor: amarelo e laranja ficam amarelo, azul e ciano azul, verde e oliva verde, vermelho e roxo rosa.
+- **O bloco `%% ateliet:leitor`**: cada grifo entra em `marks` com `local.arquivo`, `local.citacao.exato` (o texto grifado) e, no EPUB, `local.capitulo` (o item da espinha, tirado do `DocFragment[N]` do xpointer do KOReader); no PDF, `local.pagina`. `posicao` fica de fora e `fim` vale 0, porque o KOReader e o Leitor contam posições de jeitos diferentes. Por isso o grifo aparece na nota e o Leitor chega até ele pela citação (`locate`), mas não o pinta na página.
+- **Uma vez só**: os ids exportados ficam em `.obsidian/ateliet/kindle-trechos.json`. Um grifo apagado no Obsidian não volta na próxima exportação, e o que foi escrito na nota fica como estava.
 
 ## 8. Ordem de implementação
 
